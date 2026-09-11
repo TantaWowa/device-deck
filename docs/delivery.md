@@ -1,4 +1,4 @@
-# Website-first delivery
+# Website and interactive preview delivery
 
 Delivered 11 September 2026. The product name and repository name were available as requested.
 
@@ -23,31 +23,27 @@ The source repository is private. Firebase Hosting previews are accessible to an
 
 ## What works
 
-The responsive website links to a rendered React dashboard. The browser prototype has four sample devices, platform/type/search filtering, a device session, remote input that changes the fictional screen, simulated capture entries, renew/release/reserve, ownership blocking, expiry, source pairing and agent examples. Navigation works on desktop and mobile.
+The responsive website links to a light React workspace with eight sample devices. The primary devices table includes combined filtering, saved views, multi-row selection, validated add/edit forms, source binding conflicts, and simulated bulk lock/unlock/restart results. Focused and multi-device viewers keep remote control scoped to one selected device.
+
+Capture metadata, tags, editing, removal/undo, input timelines, session history, seeded reports and local settings are interactive. Browser clipboard and download actions create a labelled sample PNG. No login is required. See [the readable workspace revision](redesign.md) for complete behavior and validation scope.
 
 The local service has health and inventory endpoints. The CLI supports help, human output, JSON and exit codes. MCP has two working tools. All three read the same empty inventory from the service. No sample data is injected into the service.
 
 ## What remains simulated or unimplemented
 
-The dashboard keeps demo state in memory. Closing or reloading it loses that state. All sample devices and owners are fictional. Its screenshots and recordings are metadata entries; there are no real captured files or playable clips. The optional sample-artwork download is labelled as artwork.
+The dashboard persists demo configuration and metadata in browser localStorage. This does not write to the configured Mac folder or synchronize tabs and hosts. All devices, owners and USB discovery entries are samples. Captures are metadata; there are no actual device frames or playable recordings. Reloading records a simulated recording interruption. Report metrics are explicitly seeded.
 
 Hardware discovery, actual remote input, live preview, screenshots, video capture, durable credentials and leases, config loading/writes, shared-source arbitration, background capture persistence, service installation, and packaging remain unimplemented. These are described in the build brief and architecture docs. No physical hardware was touched or validated in this milestone.
 
 ## Validation
 
-- `npm run check`: passed.
-- `npm test`: three focused tests passed, covering occupied-device control, demo expiry/cleanup, and the service's read-only/origin/Host restrictions.
-- `npm run build`: both static apps passed. Combined static output is approximately 976 KiB.
-- Browser QA: fourteen checks passed both locally and against the deployed Firebase preview, including assets, internal links, example tabs, filtering/search, input, captures, another owner's restrictions, release/reserve/renew, recording state across views, source-pairing rules, simulated file labels, mobile menu and width checks at 390, 768 and 1440 pixels. No browser runtime errors or horizontal overflow.
-- MCP: a real client completed initialize/list-tools and called both tools. CLI JSON matched the same service inventory.
-- Public asset scan: no personal filesystem paths, account email, private network addresses, common API-token prefixes or private-key markers found in the static build.
-- GitHub visibility, Firebase app existence, active project organization and disabled billing verified from CLI output.
+The readable workspace revision passes 13 model/service tests and 16 browser acceptance checks locally. The revision's commands and coverage are documented in [redesign.md](redesign.md). Evidence includes actual rendered table, focused viewer, multi-device, mobile and marketing screenshots. Browser QA runs against both a combined local production build and the existing Firebase preview. The local service tests continue to prove that no seeded hardware leaks into the real service.
 
-`scripts/qa.mjs` repeats browser checks against `QA_URL`, defaulting to port 5175. Use `PLAYWRIGHT_CHANNEL=chrome` to use an installed Google Chrome, or install Playwright's Chromium. The script saves screenshots to the ignored `outputs/` directory.
+`scripts/qa.mjs` repeats browser checks against `QA_URL`, defaulting to port 5175. Set `PLAYWRIGHT_CHANNEL=chrome` for installed Google Chrome, or install Playwright Chromium. `QA_OUTPUT` chooses the ignored evidence output directory.
 
 ## Images
 
-The website's `dashboard-preview.webp` and `session-preview.webp` were captured from the actual prototype. The sample landscape is original generated artwork. The site explicitly labels these images as product previews and the embedded TV app as fictional. There are no customer logos, testimonials, private device locators, or copied app screens.
+The website's `dashboard-preview.webp`, `session-preview.webp` and `multi-preview.webp` were captured from the actual prototype. The sample landscape is original generated artwork. The site explicitly labels these images as product previews and the embedded TV app as fictional. There are no customer logos, testimonials, private device locators, or copied app screens.
 
 ## Refresh the preview
 

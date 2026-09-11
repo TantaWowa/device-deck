@@ -14,7 +14,7 @@ The initial host is one Mac with multiple independent sources. Office-wide host 
 
 ## Current implementation
 
-`apps/app/src/demo/model.ts` owns browser-only sample state. It intentionally imports domain types only. The service imports no demo data and registers no adapters. It exposes only GET health and inventory. CLI and MCP both call the shared core HTTP client. The service does not yet serve the local dashboard.
+`apps/app/src/demo/model.ts` owns browser-only sample state. It defines isolated simulation types and imports no service or hardware adapter. The service imports no demo data and registers no adapters. It exposes only GET health and inventory. CLI and MCP both call the shared core HTTP client. The service does not yet serve the local dashboard.
 
 The `DeviceAdapter` and `SessionOperations` interfaces mark the intended extraction boundaries. They are preliminary, not implemented adapters. Before implementation, split optional adapter capabilities so discovery-only targets cannot accidentally advertise unsupported operations. Add capture-source coordination separate from platform input drivers.
 

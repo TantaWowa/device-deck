@@ -51,9 +51,11 @@ The service exposes health and empty inventory on loopback port 47831. CLI and M
 
 ## Delivery scope
 
-The preview supports inventory filtering, selecting physical and virtual devices, simulated exclusive sessions, renewal and expiry, remote arrow input, screenshot entries, recording start/stop, and sample source pairing. Its state lasts only for the current browser tab. Reset or reload restores sample data. An expired or released sample session finalizes its simulated recording entry.
+The preview now uses a light devices table with combined filters, saved views, validated add/edit and source bindings, and simulated bulk maintenance actions. Focused and multi-device viewers provide explicit single-device remote targeting, session ownership, capture controls, key overlays and recording-aligned input logs.
 
-Captures are metadata entries. A downloadable image is explicitly labelled original sample artwork. There are no playable recording files. The fictional TV app and its landscape image contain no customer data.
+The capture library supports metadata editing, tags, filters, selection, removal and undo. Settings, device edits and sample history persist in browser localStorage. Reset demo restores the samples. Reloading interrupts simulated recordings. History and seeded reports complete the review workflow.
+
+Captures remain metadata entries. Clipboard copying and download create an actual labelled sample PNG; recordings have no playable file. The configured Mac folder is a remembered preference, not a directory this website can write. See [revision coverage](docs/redesign.md) for functional and simulated boundaries.
 
 Hardware discovery, durable transactional leases and credentials, real remote input, live preview, source sharing, background recording, config loading/editing, and installers remain future work. The present tests are not evidence of hardware reliability.
 

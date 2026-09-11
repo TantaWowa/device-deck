@@ -1,70 +1,58 @@
 import React, { useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
-  ArrowUpRight,
   ArrowRight,
   Check,
   ChevronRight,
-  Terminal,
-  LockKeyhole,
-  Monitor,
-  Camera,
-  Command,
-  Code2,
-  Braces,
-  Cable,
-  Layers,
-  Play,
-  Menu,
-  X,
   Copy,
+  Folder,
+  Menu,
+  Monitor,
+  Terminal,
+  Usb,
+  X,
+  LockKeyhole,
+  Camera,
+  LayoutGrid,
+  Keyboard,
+  Code2,
 } from "lucide-react";
-import { Brand } from "../../../packages/ui/src/index";
+import { Brand } from "../../../packages/ui/src";
 import "./style.css";
-const code: Record<string, { caption: string; code: string }> = {
-  CLI: {
-    caption: "A planned session, from the command line.",
-    code: '$ devdeck devices\n  desk-roku     Roku Ultra      available\n  android-tv    Android TV     agent: regression\n  pixel-emu     Emulator       available\n\n$ devdeck reserve desk-roku --ttl 900 \\\n    --reason "Check the browse screen"\n  Reserved for you · 15 minutes\n\n$ devdeck screenshot --session "$SESSION"\n  → captures/desk-roku-01.png',
-  },
-  MCP: {
-    caption: "The same workflow, in your agent’s toolset.",
-    code: '// Proposed MCP session tools\n\nconst session = await session_reserve({\n  deviceId: "desk-roku",\n  reason: "Check the browse screen",\n  ttlSeconds: 900\n});\n\nawait device_input({ session, key: "Home" });\nawait capture_screenshot({ session });\nawait session_release({ session });',
-  },
-  API: {
-    caption: "Explicit sessions. Predictable responses.",
-    code: '// Proposed authenticated session API\nPOST /v1/sessions\n{\n  "deviceId": "desk-roku",\n  "reason": "Check the browse screen",\n  "ttlSeconds": 900\n}\n\n// Current scaffold endpoints\nGET /v1/health\nGET /v1/inventory',
-  },
-  JSON: {
-    caption: "Your names and pairings, in a file you can edit.",
-    code: '{\n  "schemaVersion": 1,\n  "devices": [{\n    "id": "desk-roku",\n    "name": "Desk Roku",\n    "platform": "roku",\n    "captureSourceId": "hdmi-a"\n  }],\n  "reservations": { "defaultTtlSeconds": 900 }\n}',
-  },
-};
-function Website() {
-  const [tab, setTab] = useState("CLI");
+const demo = "/demo/";
+function App() {
   const [menu, setMenu] = useState(false);
+  const [tab, setTab] = useState("CLI");
   const [copied, setCopied] = useState(false);
+  const examples: Record<string, string> = {
+    CLI: '# Illustrative remote workflow\ndevdeck remote --device "Desk Roku"\n\n# No target? An interactive picker.\ndevdeck remote --platform Roku --state free\n\n# Scriptable selectors, no prompts\ndevdeck remote --platform Android --name "Pixel*" \\\n  --state free --key Home --json\n\n# Proposed Mac clipboard capture\ndevdeck screenshot --device "Desk Roku" --clipboard',
+    MCP: '// Illustrative agent workflow\ndevices.list({ platform: "Roku", state: "free" })\nsessions.reserve({\n  deviceId: "roku-desk",\n  owner: "Agent",\n  reason: "Navigation regression"\n})\nremote.key({ sessionId: "…", key: "Home" })\ncaptures.screenshot({ sessionId: "…" })\nsessions.release({ sessionId: "…" })',
+    API: '# Illustrative local API\nPOST /v1/sessions\n{\n  "deviceId": "roku-desk",\n  "owner": "You",\n  "reason": "Browse screen review"\n}\n\nPOST /v1/sessions/:id/input\n{ "key": "Home" }\n\nPOST /v1/sessions/:id/captures',
+    JSON: '{\n  "schemaVersion": 1,\n  "devices": [{\n    "id": "roku-desk",\n    "name": "Desk Roku",\n    "captureSourceId": "cam-link",\n    "visibility": "local"\n  }],\n  "capture": {\n    "outputDirectory": "~/Movies/Device Deck"\n  }\n}',
+  };
   return (
     <>
-      <header className="site-header wrap">
-        <a href="#" aria-label="Device Deck home">
+      <header className="site-header">
+        <a href="#top" aria-label="Device Deck home">
           <Brand />
         </a>
-        <nav className={menu ? "open" : ""} aria-label="Main navigation">
-          <a onClick={() => setMenu(false)} href="#workflow">
-            The workflow
-          </a>
-          <a onClick={() => setMenu(false)} href="#agents">
-            For agents, too
-          </a>
-          <a onClick={() => setMenu(false)} href="#status">
-            Development status
-          </a>
+        <nav className={menu ? "open" : ""}>
+          {[
+            ["#workspace", "Workspace"],
+            ["#capture", "Capture & evidence"],
+            ["#cli", "CLI & agents"],
+            ["#status", "Development status"],
+          ].map(([href, label]) => (
+            <a href={href} key={href} onClick={() => setMenu(false)}>
+              {label}
+            </a>
+          ))}
         </nav>
-        <a className="nav-cta" href="/demo/">
-          Open product preview <ArrowUpRight size={15} />
+        <a className="button small primary header-demo" href={demo}>
+          Open interactive demo <ArrowRight size={14} />
         </a>
         <button
-          className="menu-toggle"
+          className="menu-button"
           aria-label={menu ? "Close menu" : "Open menu"}
           aria-expanded={menu}
           onClick={() => setMenu(!menu)}
@@ -72,414 +60,425 @@ function Website() {
           {menu ? <X /> : <Menu />}
         </button>
       </header>
-      <main>
+      <main id="top">
         <section className="hero wrap">
-          <div className="hero-copy">
-            <a className="preview-tag" href="#status">
-              <span className="tiny-square" /> IN DEVELOPMENT{" "}
-              <span>Explore the product preview</span>
-              <ChevronRight size={13} />
-            </a>
-            <h1>
-              Your devices. One place.
-              <br />
-              <span>Room to focus.</span>
-            </h1>
-            <p>
-              A local home for the hardware you already own.
-              <br className="desktop-break" /> Find a device, claim a session,
-              and get to work.
-              <br className="desktop-break" /> Built for you and the agents
-              working alongside you.
-            </p>
-            <div className="hero-actions">
-              <a className="btn primary" href="/demo/">
-                Explore the interactive preview <ArrowUpRight size={18} />
-              </a>
-              <a className="text-link" href="#workflow">
-                See the workflow <ArrowRight size={16} />
-              </a>
-            </div>
-            <div className="hero-footnote">
-              <Monitor size={14} />
-              <span>Designed for one Mac and your devices</span>
-              <span className="separator">/</span>
-              <span>No cloud lab required</span>
-            </div>
+          <div className="release-label">
+            <span /> A local Mac workspace for TV app development
           </div>
-          <div className="hero-product">
-            <div className="product-caption">
-              <span>
-                <span className="caption-mark" /> A CLEAR VIEW OF YOUR DEVICE
-                BENCH
+          <h1>
+            Every device.
+            <br />
+            One clear view.
+          </h1>
+          <p className="hero-copy">
+            Find your Roku, Android and Apple devices. See who’s using them,
+            open a remote, and keep your captures together on your Mac.
+          </p>
+          <div className="hero-actions">
+            <a className="button primary" href={demo}>
+              Explore the interactive demo <ArrowRight size={17} />
+            </a>
+            <a className="button" href="#workspace">
+              See the workspace
+            </a>
+          </div>
+          <p className="preview-note">
+            Product preview · simulated hardware · no login
+          </p>
+          <div className="hero-screenshot">
+            <div className="window-bar">
+              <span className="window-dots">
+                <i />
+                <i />
+                <i />
               </span>
-              <span>01 / INVENTORY + SESSION</span>
+              <span>
+                <Monitor size={12} /> Device Deck / My Mac workspace
+              </span>
+              <span className="window-tag">INTERACTIVE PROTOTYPE</span>
             </div>
             <a
-              href="/demo/"
-              className="dashboard-shot"
-              aria-label="Open the interactive device dashboard preview"
+              href={demo}
+              aria-label="Open the devices table in the interactive demo"
             >
               <img
                 src="/assets/dashboard-preview.webp"
-                width="1440"
-                height="1236"
-                alt="Device Deck prototype showing Roku, Android TV, Android emulator and Apple simulator inventory, with a reserved Roku session and remote controls"
+                alt="Actual rendered Device Deck preview: a readable light devices table with friendly names, platform, health, reservation, owner, capture input and visibility"
                 fetchPriority="high"
               />
-              <span className="shot-open">
-                <Play size={14} fill="currentColor" /> Try this screen{" "}
-                <ArrowUpRight size={15} />
-              </span>
             </a>
-            <div className="image-footnote">
-              <span>
-                Actual rendered prototype · sample data and simulated controls
-              </span>
-              <span>YOUR BENCH. UNDER CONTROL.</span>
-            </div>
+          </div>
+          <div className="screenshot-caption">
+            <span>
+              Actual prototype screen. All devices, owners and USB sources are
+              samples.
+            </span>
+            <a href={demo}>
+              Try the table <ArrowRight size={13} />
+            </a>
           </div>
         </section>
-        <section className="platforms wrap">
-          <span>ONE INVENTORY, PHYSICAL + VIRTUAL</span>
-          <div>
-            <span>Roku</span>
-            <span>Android TV</span>
-            <span>Android emulators</span>
-            <span>Apple simulators</span>
-          </div>
-          <p>
-            Planned targets. Hardware integrations are still in development.
-          </p>
-        </section>
-        <section id="workflow" className="workflow wrap">
-          <div className="section-heading">
-            <div className="kicker">
-              <span>01</span> LESS DEVICE ADMIN. MORE BUILDING.
-            </div>
+        <div className="platform-strip wrap">
+          <span>YOUR HARDWARE, TOGETHER</span>
+          <strong>Roku</strong>
+          <strong>Android & Android TV</strong>
+          <strong>Apple simulators</strong>
+          <strong>USB / HDMI inputs</strong>
+          <span>Capabilities vary by device.</span>
+        </div>
+        <section id="workspace" className="wrap section">
+          <div className="section-intro">
+            <div className="eyebrow">THE DEVICE TABLE</div>
             <h2>
-              Pick a device.
+              Know what’s ready.
               <br />
-              Keep your train of thought.
+              Know who’s using it.
             </h2>
             <p>
-              Stop piecing together addresses, remote scripts, and capture
-              windows. A session puts the next thing you need within reach.
+              A friendly name is the starting point. Connection health,
+              maintenance locks and reservations each have their own state, so a
+              disconnected device never looks like a busy one.
             </p>
           </div>
-          <div className="steps">
-            <div>
-              <span className="step-number">01</span>
-              <h3>Find your device</h3>
+          <div className="feature-grid">
+            <article>
+              <Monitor />
+              <h3>Find the right device</h3>
               <p>
-                Physical hardware and virtual devices in one named inventory.
+                Combine search, platform, health, reserved or free, maintenance,
+                physical or virtual, and local or shared filters. Save views you
+                use often.
+              </p>
+            </article>
+            <article>
+              <Usb />
+              <h3>Pair the right input</h3>
+              <p>
+                Choose a capture card from a simulated host discovery list.
+                Native emulator screens need no USB card. Conflicting bindings
+                are called out.
+              </p>
+            </article>
+            <article>
+              <LockKeyhole />
+              <h3>Keep ownership visible</h3>
+              <p>
+                See owner and reason in the table. Select rows for eligible bulk
+                lock, unlock or restart. Releasing a session and unlocking
+                maintenance are distinct actions.
+              </p>
+            </article>
+          </div>
+          <div className="workflow">
+            <span>
+              <b>01</b> Find
+            </span>
+            <ChevronRight />
+            <span>
+              <b>02</b> Reserve
+            </span>
+            <ChevronRight />
+            <span>
+              <b>03</b> View & control
+            </span>
+            <ChevronRight />
+            <span>
+              <b>04</b> Capture
+            </span>
+            <ChevronRight />
+            <span>
+              <b>05</b> Release
+            </span>
+          </div>
+        </section>
+        <section id="capture" className="viewer-section">
+          <div className="wrap">
+            <div className="split-heading">
+              <div>
+                <div className="eyebrow">A FOCUSED DEVICE VIEWER</div>
+                <h2>
+                  The screen, the remote,
+                  <br />
+                  and the evidence.
+                </h2>
+              </div>
+              <p>
+                Open a device from the table and see its input source, ownership
+                and capture controls together. Hover, focus or tap Preview for a
+                quick look before opening a session.
               </p>
             </div>
-            <div>
-              <span className="step-number">02</span>
-              <h3>Make it yours</h3>
-              <p>
-                Reserve a session. See who is using a device, why, and for how
-                long.
-              </p>
+            <div className="viewer-showcase">
+              <a href="/demo/#viewer/roku-desk">
+                <img
+                  src="/assets/session-preview.webp"
+                  alt="Actual Device Deck focused viewer with fictional TV image, remote control, session ownership and input timeline"
+                  loading="lazy"
+                />
+              </a>
             </div>
-            <div>
-              <span className="step-number">03</span>
-              <h3>Control. Capture.</h3>
-              <p>
-                View the screen, drive input, and collect evidence in the same
-                place.
-              </p>
+            <div className="feature-grid compact-features">
+              <article>
+                <Keyboard />
+                <h3>Make every press visible</h3>
+                <p>
+                  Optional keypress overlay and input logging tie commands to
+                  device, session and recording elapsed time. Export the
+                  simulated log as JSON.
+                </p>
+              </article>
+              <article>
+                <Camera />
+                <h3>Choose clean or annotated</h3>
+                <p>
+                  Review screenshot and recording flows with an optional key
+                  overlay. Copy a labelled sample PNG to your browser clipboard,
+                  or download it if copying is unavailable.
+                </p>
+              </article>
+              <article>
+                <LayoutGrid />
+                <h3>Control the selected tile</h3>
+                <p>
+                  Open selected devices as a grid. One highlighted tile receives
+                  remote commands. Its session, capture controls and input
+                  timeline follow your selection.
+                </p>
+              </article>
             </div>
-            <div>
-              <span className="step-number">04</span>
-              <h3>Leave it ready</h3>
-              <p>
-                Release your session so the next person or agent can take over.
-              </p>
+            <div className="multi-showcase">
+              <div>
+                <div className="eyebrow">MULTI-DEVICE VIEW</div>
+                <h3>
+                  Several screens.
+                  <br />
+                  One explicit target.
+                </h3>
+                <p>
+                  Compare physical devices and simulators side by side. Switch
+                  the active device with a click, tap or keyboard focus.
+                </p>
+                <a
+                  className="text-link"
+                  href="/demo/#multi/roku-desk,apple-sim,pixel-emulator,android-tv"
+                >
+                  Explore the grid <ArrowRight size={16} />
+                </a>
+              </div>
+              <a href="/demo/#multi/roku-desk,apple-sim,pixel-emulator,android-tv">
+                <img
+                  src="/assets/multi-preview.webp"
+                  alt="Actual multi-device prototype showing four separate device tiles and a single control target"
+                  loading="lazy"
+                />
+              </a>
             </div>
           </div>
-          <div className="session-feature">
-            <div className="session-story">
-              <span className="mini-label">A SESSION THAT STAYS TOGETHER</span>
-              <h3>
-                The screen.{" "}
-                <br />
-                The remote.{" "}
-                <br />
-                The proof.
-              </h3>
+        </section>
+        <section className="section wrap local-section">
+          <div className="section-intro">
+            <div className="eyebrow">CAPTURES STAY LOCAL</div>
+            <h2>One folder for the whole session.</h2>
+            <p>
+              Web, CLI and agent outputs belong in the same configurable Mac
+              folder. Name, tag and find evidence by device, type, time or
+              origin. Shared output does not mean cloud storage.
+            </p>
+          </div>
+          <div className="local-layout">
+            <div className="folder-card">
+              <Folder size={32} />
+              <code>~/Movies/Device Deck</code>
+              <span>Screenshot & video output folder</span>
+              <div>
+                <b>Web</b>
+                <b>CLI</b>
+                <b>Agents</b>
+              </div>
               <p>
-                A focused workspace for checking a layout, reproducing a bug, or
-                letting an agent run its next check.
+                Proposed local output. This website remembers the setting but
+                cannot write to that Mac folder.
+              </p>
+            </div>
+            <div className="local-copy">
+              <h3>Enough context to find it again.</h3>
+              <p>
+                The library shows names, tags, devices, origins and video
+                durations. Rename and tag entries, remove a selection, and undo
+                a removal. Jump from a session to its captures.
+              </p>
+              <h3>Set it once on this Mac.</h3>
+              <p>
+                Choose the folder, naming pattern, clipboard behavior and
+                evidence defaults. Browser demo settings persist locally, with
+                Reset demo always available.
+              </p>
+              <h3>See how devices were used.</h3>
+              <p>
+                Usage history tracks owners, reasons, locks, restarts and
+                captures. The reporting screen explores seeded reserved time,
+                contention and capture failures.
+              </p>
+              <a className="text-link" href="/demo/#captures">
+                Open the capture library <ArrowRight size={16} />
+              </a>
+            </div>
+          </div>
+        </section>
+        <section id="cli" className="cli-section">
+          <div className="wrap cli-layout">
+            <div>
+              <div className="eyebrow">CLI, BROWSER, API, JSON & MCP</div>
+              <h2>
+                Call it by name.
+                <br />
+                Use your own workflow.
+              </h2>
+              <p>
+                The intended local service gives humans and agents the same
+                inventory, reservations, input controls and capture library. It
+                works independently of a specific app framework or job runner.
               </p>
               <ul>
                 <li>
-                  <Check size={15} /> A visible owner and session expiry
+                  <Check /> Friendly-name remote targeting for configured
+                  devices with supported input.
                 </li>
                 <li>
-                  <Check size={15} /> Remote input beside the screen
+                  <Check /> Interactive device picker when no target is
+                  supplied, with platform, name and state filters.
                 </li>
                 <li>
-                  <Check size={15} /> Screenshots and clips with their session
+                  <Check /> Scriptable selectors and JSON. No match and
+                  ambiguous match are explicit errors.
+                </li>
+                <li>
+                  <Check /> No accounts. Human, agent and job names are owner
+                  labels.
                 </li>
               </ul>
-              <a className="text-link" href="/demo/">
-                Take the controls <ArrowRight size={16} />
-              </a>
-            </div>
-            <figure className="session-shot">
-              <img
-                src="/assets/session-preview.webp"
-                alt="Focused product prototype with a fictional TV screen, remote pad, session ownership, and capture buttons"
-                width="1154"
-                height="699"
-                loading="lazy"
-              />
-              <figcaption>Session view · simulated product preview</figcaption>
-            </figure>
-          </div>
-        </section>
-        <section id="agents" className="agents-section">
-          <div className="agents wrap">
-            <div className="agent-copy">
-              <div className="kicker">
-                <span>02</span> HUMANS AND AGENTS, IN SYNC
-              </div>
-              <h2>
-                Two ways to work.
-                <br />
-                <span>One set of rules.</span>
-              </h2>
-              <p>
-                You reach for a remote. Your agent reaches for a tool. Device
-                Deck is being built around one background service, so everyone
-                sees the same devices and respects the same session.
+              <p className="cli-note">
+                Examples are illustrative. The present CLI and MCP implement
+                health and empty inventory only. The browser does not execute
+                the proposed macOS clipboard command.
               </p>
-              <div className="ownership-note">
-                <LockKeyhole size={21} />
-                <div>
-                  <strong>“Who’s using the Roku?”</strong>
-                  <p>
-                    That should be a status, not an interruption. Exclusive,
-                    renewable sessions are at the heart of the design.
-                  </p>
-                </div>
-              </div>
-              <a className="text-link" href="/demo/">
-                Explore the agent view <ArrowRight size={16} />
-              </a>
             </div>
-            <div className="terminal-card">
-              <div className="terminal-title">
-                <Terminal size={16} />
-                <span>device deck / your workflow</span>
-                <span className="terminal-dots">•••</span>
+            <div className="code-window">
+              <div className="code-header">
+                <Terminal size={15} />
+                <span>Client workflow</span>
+                <b>ILLUSTRATIVE</b>
               </div>
               <div
-                className="tabs"
+                className="code-tabs"
                 role="tablist"
                 aria-label="Integration examples"
               >
-                {Object.keys(code).map((k) => (
+                {["CLI", "MCP", "API", "JSON"].map((t) => (
                   <button
-                    key={k}
                     role="tab"
-                    aria-selected={tab === k}
-                    aria-controls="example-panel"
-                    id={`tab-${k}`}
+                    aria-selected={tab === t}
+                    key={t}
                     onClick={() => {
-                      setTab(k);
+                      setTab(t);
                       setCopied(false);
                     }}
-                    className={tab === k ? "active" : ""}
                   >
-                    {k === "CLI" ? (
-                      <Terminal size={14} />
-                    ) : k === "MCP" ? (
-                      <Command size={14} />
-                    ) : k === "API" ? (
-                      <Code2 size={14} />
-                    ) : (
-                      <Braces size={14} />
-                    )}{" "}
-                    {k}
+                    {t}
                   </button>
                 ))}
               </div>
-              <div
-                id="example-panel"
-                role="tabpanel"
-                aria-labelledby={`tab-${tab}`}
+              <pre>{examples[tab]}</pre>
+              <button
+                className="copy-button"
+                onClick={async () => {
+                  try {
+                    await navigator.clipboard.writeText(examples[tab]);
+                    setCopied(true);
+                  } catch {
+                    setCopied(false);
+                  }
+                }}
               >
-                <p className="code-caption">{code[tab].caption}</p>
-                <pre>{code[tab].code}</pre>
-              </div>
-              <div className="terminal-bottom">
-                <span>Proposed session contracts · not a shipping CLI</span>
-                <button
-                  aria-label="Copy code example"
-                  onClick={async () => {
-                    try {
-                      await navigator.clipboard.writeText(code[tab].code);
-                      setCopied(true);
-                    } catch {
-                      setCopied(false);
-                    }
-                  }}
-                >
-                  {copied ? <Check size={14} /> : <Copy size={14} />}
-                </button>
-              </div>
+                {copied ? <Check size={14} /> : <Copy size={14} />}{" "}
+                {copied ? "Copied" : "Copy example"}
+              </button>
             </div>
           </div>
         </section>
-        <section className="local-section wrap">
-          <div className="local-heading">
-            <div className="kicker">
-              <span>03</span> YOUR HARDWARE, REMEMBERED
-            </div>
+        <section id="status" className="section wrap status-section">
+          <div className="section-intro">
+            <div className="eyebrow">DEVELOPMENT STATUS</div>
             <h2>
-              The bench you have.
+              A working product preview.
               <br />
-              With less to remember.
+              Hardware comes next.
             </h2>
             <p>
-              Start with one Mac. Give devices names. Pair the capture sources
-              you already use. Keep the configuration in an editable JSON file.
+              You can explore the complete interaction design today. The screens
+              use clearly labelled samples and never connect to your local
+              devices.
             </p>
           </div>
-          <div className="local-details">
-            <div className="pairing-card">
-              <div className="pairing-title">
-                <Cable size={18} />
-                <span>REMEMBERED SOURCE PAIRING</span>
-              </div>
-              <div className="pairing-flow">
-                <div>
-                  <Monitor size={27} />
-                  <strong>Desk Roku</strong>
-                  <span>Logical device</span>
-                </div>
-                <div className="pair-wire">
-                  <span>HDMI</span>
-                  <ArrowRight size={22} />
-                </div>
-                <div>
-                  <Layers size={27} />
-                  <strong>Capture A</strong>
-                  <span>Video source</span>
-                </div>
-              </div>
-              <p>
-                A capture card knows it has a picture. You tell Device Deck
-                which device that picture belongs to.
-              </p>
-              <span className="mini-label">
-                EXPLICIT PAIRING. STABLE NAMES.
-              </span>
-            </div>
-            <div className="local-promises">
-              <article>
-                <Camera size={23} />
-                <div>
-                  <h3>Recording belongs to the service</h3>
-                  <p>
-                    The intended background service keeps recording when you
-                    close the dashboard. Real capture and cleanup remain
-                    implementation work.
-                  </p>
-                </div>
-              </article>
-              <article>
-                <Braces size={23} />
-                <div>
-                  <h3>A setup you can read and edit</h3>
-                  <p>
-                    Device names, defaults, and source mappings live in JSON.
-                    Runtime ownership belongs in transactional storage.
-                  </p>
-                </div>
-              </article>
-            </div>
+          <div className="status-grid">
+            <article>
+              <span className="status-label">WORKING IN THE BROWSER</span>
+              <h3>Try the workspace</h3>
+              <ul>
+                <li>Device table, combined filters and saved views</li>
+                <li>Add/edit, source validation and bulk action simulation</li>
+                <li>Focused viewer, multi-view and single-target input</li>
+                <li>Capture metadata, tags, removal and undo</li>
+                <li>Sample-image clipboard and download</li>
+                <li>Local settings, session history and seeded reports</li>
+              </ul>
+            </article>
+            <article>
+              <span className="status-label planned">FUTURE LOCAL APP</span>
+              <h3>Connect real hardware</h3>
+              <ul>
+                <li>Real device and capture-card discovery</li>
+                <li>Capability-specific remote input adapters</li>
+                <li>Live preview and playable recordings</li>
+                <li>Durable exclusive reservations across clients</li>
+                <li>Shared Mac folder and native clipboard helper</li>
+                <li>Local service installation and packaging</li>
+              </ul>
+            </article>
           </div>
+          <p className="status-footnote">
+            Initial scope is one Mac with your own devices and emulators.
+            Local/shared visibility is represented in the design; multi-host
+            coordination is future work. Discovering physical Apple hardware
+            does not establish remote-control support.
+          </p>
         </section>
-        <section id="status" className="status-section wrap">
-          <div className="status-box">
+        <section className="closing">
+          <div className="wrap">
             <div>
-              <span className="status-tag">
-                <span className="tiny-square" /> EARLY PRODUCT PREVIEW
-              </span>
               <h2>
-                Built around a real bench.
+                Find a device.
                 <br />
-                Still on the workbench.
+                Start a session.
               </h2>
-              <p>
-                Device Deck starts with a familiar problem: too much attention
-                spent coordinating test devices. This preview makes the proposed
-                workflow tangible.
-              </p>
-              <div className="status-grid">
-                <div>
-                  <span className="status-column-label">YOU CAN TRY NOW</span>
-                  <span>
-                    <Check size={14} /> Interactive device dashboard
-                  </span>
-                  <span>
-                    <Check size={14} /> Simulated sessions and capture
-                  </span>
-                  <span>
-                    <Check size={14} /> Source pairing and agent examples
-                  </span>
-                </div>
-                <div>
-                  <span className="status-column-label">STILL TO BUILD</span>
-                  <span>Hardware adapters and live capture</span>
-                  <span>Durable leases and background recording</span>
-                  <span>Installable app and full client workflow</span>
-                </div>
-              </div>
+              <p>Explore the revised workspace on desktop or mobile.</p>
             </div>
-            <aside>
-              <span className="status-stamp">dd / 0.1</span>
-              <h3>
-                See how it
-                <br />
-                would fit your day.
-              </h3>
-              <a className="btn primary" href="/demo/">
-                Open the product preview <ArrowUpRight size={17} />
-              </a>
-              <p>
-                No account. No install.
-                <br />
-                Just a sample workspace to explore.
-              </p>
-              <span className="pricing-note">
-                No shipping download yet.
-                <br />
-                Pricing and release date are undecided.
-              </span>
-            </aside>
+            <a className="button primary" href={demo}>
+              Open interactive demo <ArrowRight size={17} />
+            </a>
           </div>
         </section>
       </main>
-      <footer className="site-footer wrap">
-        <a href="#">
-          <Brand />
-        </a>
-        <p>A local device workspace by TantaWowa.</p>
-        <a href="/demo/">
-          Explore Device Deck <ArrowUpRight size={14} />
-        </a>
-        <span>© {new Date().getFullYear()} TantaWowa</span>
+      <footer className="wrap">
+        <Brand />
+        <p>Device Deck is a TantaWowa product preview.</p>
+        <span>Local by design · no login · no cloud file storage</span>
       </footer>
     </>
   );
 }
 createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <Website />
+    <App />
   </React.StrictMode>,
 );
