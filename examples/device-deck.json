@@ -1,0 +1,23 @@
+{
+  "$schema": "../docs/device-deck.schema.json",
+  "schemaVersion": 1,
+  "server": { "host": "127.0.0.1", "port": 47831 },
+  "captureSources": [
+    {
+      "id": "hdmi-a",
+      "kind": "usb-video",
+      "selector": { "deviceId": "REPLACE_WITH_DISCOVERED_SOURCE_ID" }
+    }
+  ],
+  "devices": [
+    {
+      "id": "desk-roku",
+      "name": "Desk Roku",
+      "platform": "roku",
+      "connection": { "kind": "roku-ecp", "host": "192.0.2.10" },
+      "captureSourceId": "hdmi-a"
+    }
+  ],
+  "reservations": { "defaultTtlSeconds": 900 },
+  "capture": { "outputDirectory": "./captures" }
+}

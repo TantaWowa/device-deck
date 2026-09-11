@@ -1,0 +1,5 @@
+{
+  "name": "@device-deck/mcp",
+  "private": true,
+  "type": "module"
+}

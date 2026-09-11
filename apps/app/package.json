@@ -1,0 +1,5 @@
+{
+  "name": "@device-deck/app",
+  "private": true,
+  "type": "module"
+}

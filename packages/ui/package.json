@@ -1,0 +1,6 @@
+{
+  "name": "@device-deck/ui",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.tsx"
+}

@@ -1,0 +1,13 @@
+node_modules/
+dist/
+work/
+outputs/
+.firebase/
+*-debug.log
+.env*
+!.env.example
+.DS_Store
+*.tsbuildinfo
+.sites-runtime/
+test-results/
+playwright-report/

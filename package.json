@@ -1,0 +1,41 @@
+{
+  "name": "device-deck",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "dev": "vite apps/web --host 127.0.0.1 --port 5173 --strictPort",
+    "dev:app": "vite apps/app --host 127.0.0.1 --port 5174 --strictPort",
+    "build": "vite build apps/web --outDir ../../dist --emptyOutDir && vite build apps/app --base=/demo/ --outDir ../../dist/demo --emptyOutDir",
+    "check": "tsc --noEmit",
+    "qa": "node scripts/qa.mjs",
+    "test": "node --import tsx --test packages/core/src/*.test.ts apps/service/src/*.test.ts",
+    "service": "tsx apps/service/src/index.ts",
+    "cli": "tsx packages/cli/src/index.ts",
+    "mcp": "tsx packages/mcp/src/index.ts",
+    "preview": "vite preview apps/web --outDir ../../dist --host 127.0.0.1 --port 5173 --strictPort"
+  },
+  "dependencies": {
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "lucide-react": "^0.468.0",
+    "@modelcontextprotocol/sdk": "^1.17.5",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.2",
+    "vite": "^7.1.5",
+    "@types/react": "^19.1.12",
+    "@types/react-dom": "^19.1.9",
+    "@types/node": "^24.3.1",
+    "tsx": "^4.20.5",
+    "@playwright/test": "^1.55.0"
+  }
+}

@@ -1,0 +1,94 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Device Deck proposed operator configuration v1",
+  "description": "Design contract. The scaffold does not yet load or validate operator configuration.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "server",
+    "captureSources",
+    "devices",
+    "reservations",
+    "capture"
+  ],
+  "properties": {
+    "$schema": { "type": "string" },
+    "schemaVersion": { "const": 1 },
+    "server": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["host", "port"],
+      "properties": {
+        "host": { "const": "127.0.0.1" },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 }
+      }
+    },
+    "captureSources": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "kind", "selector"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "kind": { "enum": ["usb-video", "native"] },
+          "selector": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["deviceId"],
+            "properties": { "deviceId": { "type": "string", "minLength": 1 } }
+          }
+        }
+      }
+    },
+    "devices": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "name", "platform", "connection"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "name": { "type": "string", "minLength": 1 },
+          "platform": {
+            "enum": [
+              "roku",
+              "android-tv",
+              "android-emulator",
+              "apple-simulator"
+            ]
+          },
+          "connection": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["kind", "host"],
+            "properties": {
+              "kind": { "enum": ["roku-ecp", "adb", "simctl"] },
+              "host": { "type": "string", "minLength": 1 }
+            }
+          },
+          "captureSourceId": { "type": ["string", "null"] }
+        }
+      }
+    },
+    "reservations": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["defaultTtlSeconds"],
+      "properties": {
+        "defaultTtlSeconds": {
+          "type": "integer",
+          "minimum": 30,
+          "maximum": 86400
+        }
+      }
+    },
+    "capture": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["outputDirectory"],
+      "properties": { "outputDirectory": { "type": "string", "minLength": 1 } }
+    }
+  }
+}

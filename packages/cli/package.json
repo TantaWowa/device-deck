@@ -1,0 +1,5 @@
+{
+  "name": "@device-deck/cli",
+  "private": true,
+  "type": "module"
+}
