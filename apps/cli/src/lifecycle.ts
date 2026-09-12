@@ -1,0 +1,136 @@
+import { spawn } from "node:child_process";
+import { open, mkdir, readFile, rm } from "node:fs/promises";
+import path from "node:path";
+import os from "node:os";
+import {
+  callService,
+  callOperation,
+  endpoint,
+} from "../../../packages/core/src/client";
+import { dataDirectory } from "../../../packages/core/src/local/paths";
+import { root } from "../../../packages/adapters/src";
+import { run } from "../../../packages/adapters/src/process";
+import { atomicWrite } from "../../../packages/config/src";
+const plist = path.join(
+  os.homedir(),
+  "Library/LaunchAgents/com.tantawowa.device-deck.plist",
+);
+const label = `gui/${process.getuid!()}/com.tantawowa.device-deck`;
+const escape = (s: string) =>
+  s.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+export async function lifecycle(command: string) {
+  const directory = dataDirectory(),
+    entry = path.join(root, "build/daemon.mjs");
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  if (command === "start") {
+    try {
+      await callService("health");
+      return "Device Deck is already running.";
+    } catch {}
+    const log = await open(path.join(directory, "daemon.log"), "a", 0o600);
+    const child = spawn(process.execPath, [entry], {
+      detached: true,
+      stdio: ["ignore", log.fd, log.fd],
+      env: process.env,
+    });
+    child.unref();
+    await log.close();
+    for (let i = 0; i < 100; i++) {
+      try {
+        await callService("health");
+        return "Device Deck started.";
+      } catch {
+        await new Promise((r) => setTimeout(r, 100));
+      }
+    }
+    throw new Error(
+      `Service did not start. Read ${path.join(directory, "daemon.log")}`,
+    );
+  }
+  if (command === "stop") {
+    const ep = await endpoint();
+    await callService("health");
+    // A matching authenticated endpoint confirms that the PID belongs to this daemon.
+    process.kill(ep.pid, "SIGTERM");
+    for (let i = 0; i < 150; i++) {
+      try {
+        process.kill(ep.pid, 0);
+      } catch {
+        return "Device Deck stopped.";
+      }
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    return "Device Deck is finalizing captures. Check status or logs for completion.";
+  }
+  if (command === "logs")
+    return readFile(path.join(directory, "daemon.log"), "utf8").then((s) =>
+      s.slice(-24000),
+    );
+  if (command === "install") {
+    let running = false;
+    try {
+      await callService("health");
+      running = true;
+    } catch {}
+    if (running) {
+      const inventory = await callOperation("inventory");
+      if (inventory.recordings.length)
+        throw new Error(
+          "Stop active recordings before installing the login service.",
+        );
+      await lifecycle("stop");
+    }
+    await mkdir(path.dirname(plist), { recursive: true });
+    const pathValue = [
+      path.dirname(process.execPath),
+      "/opt/homebrew/bin",
+      "/usr/local/bin",
+      "/usr/bin",
+      "/bin",
+      "/usr/sbin",
+      "/sbin",
+      process.env.PATH || "",
+    ].join(":");
+    await atomicWrite(
+      plist,
+      `<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>Label</key><string>com.tantawowa.device-deck</string><key>ProgramArguments</key><array><string>${escape(process.execPath)}</string><string>${escape(entry)}</string></array><key>RunAtLoad</key><true/><key>EnvironmentVariables</key><dict><key>DEVICE_DECK_HOME</key><string>${escape(directory)}</string><key>PATH</key><string>${escape(pathValue)}</string>${[
+        "DEVICE_DECK_CONFIG",
+        "DEVICE_DECK_PORT",
+      ]
+        .filter((key) => process.env[key])
+        .map(
+          (key) =>
+            `<key>${key}</key><string>${escape(process.env[key]!)}</string>`,
+        )
+        .join(
+          "",
+        )}</dict><key>StandardOutPath</key><string>${escape(path.join(directory, "daemon.log"))}</string><key>StandardErrorPath</key><string>${escape(path.join(directory, "daemon.log"))}</string><key>ExitTimeOut</key><integer>180</integer></dict></plist>`,
+    );
+    await run("/bin/launchctl", ["bootout", label]).catch(() => {});
+    await run("/bin/launchctl", [
+      "bootstrap",
+      `gui/${process.getuid!()}`,
+      plist,
+    ]);
+    for (let n = 0; n < 150; n++) {
+      try {
+        await callService("health");
+        return "Device Deck is running and will start at login.";
+      } catch {
+        await new Promise((r) => setTimeout(r, 100));
+      }
+    }
+    throw new Error(
+      "Login service was installed but is not ready. Run devdeck logs.",
+    );
+  }
+  if (command === "uninstall") {
+    await run("/bin/launchctl", ["bootout", label]).catch(() => {});
+    try {
+      await lifecycle("stop");
+    } catch {}
+    await rm(plist, { force: true });
+    return "Login service removed. Your configuration, captures and application files are retained.";
+  }
+  throw new Error("Unknown service command.");
+}

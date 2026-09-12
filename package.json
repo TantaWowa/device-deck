@@ -1,6 +1,6 @@
 {
   "name": "device-deck",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "workspaces": [
@@ -11,16 +11,20 @@
     "node": ">=24"
   },
   "scripts": {
-    "dev": "vite apps/web --host 127.0.0.1 --port 5173 --strictPort",
-    "dev:app": "vite apps/app --host 127.0.0.1 --port 5174 --strictPort",
-    "build": "vite build apps/web --outDir ../../dist --emptyOutDir && vite build apps/app --base=/demo/ --outDir ../../dist/demo --emptyOutDir",
+    "dev": "vite apps/website --host 127.0.0.1 --port 5173 --strictPort",
+    "dev:app": "vite apps/web --host 127.0.0.1 --port 5174 --strictPort",
+    "build": "vite build apps/website --outDir ../../dist --emptyOutDir && vite build apps/web --base=/demo/ --outDir ../../dist/demo --emptyOutDir",
     "check": "tsc --noEmit",
     "qa": "node scripts/qa.mjs",
-    "test": "node --import tsx --test packages/core/src/*.test.ts apps/service/src/*.test.ts",
-    "service": "tsx apps/service/src/index.ts",
-    "cli": "tsx packages/cli/src/index.ts",
-    "mcp": "tsx packages/mcp/src/index.ts",
-    "preview": "vite preview apps/web --outDir ../../dist --host 127.0.0.1 --port 5173 --strictPort"
+    "test": "node --import tsx --test apps/daemon/src/*.test.ts apps/cli/src/*.test.ts packages/*/src/*.test.ts",
+    "service": "node --import tsx apps/daemon/src/index.ts",
+    "cli": "node --import tsx apps/cli/src/index.ts",
+    "mcp": "node --import tsx packages/mcp/src/index.ts",
+    "preview": "vite preview apps/website --outDir ../../dist --host 127.0.0.1 --port 5173 --strictPort",
+    "tui": "node --import tsx apps/tui/src/index.ts",
+    "build:local": "node scripts/build-local.mjs",
+    "schema": "node --import tsx scripts/schema.ts",
+    "package:local": "node scripts/package-local.mjs"
   },
   "dependencies": {
     "react": "^19.1.1",
@@ -36,6 +40,8 @@
     "@types/react-dom": "^19.1.9",
     "@types/node": "^24.3.1",
     "tsx": "^4.20.5",
-    "@playwright/test": "^1.55.0"
+    "@playwright/test": "^1.55.0",
+    "esbuild": "^0.25.9",
+    "zod-to-json-schema": "^3.25.2"
   }
 }

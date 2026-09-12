@@ -1,5 +1,7 @@
 # Website and interactive preview delivery
 
+This records the earlier public demo milestone. See [local application delivery](local-delivery.md) for the subsequent real daemon, clients and capture implementation.
+
 Delivered 11 September 2026. The product name and repository name were available as requested.
 
 ## Resources

@@ -1,35 +1,99 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { callService } from "../../core/src/client";
-const server = new McpServer({ name: "device-deck", version: "0.1.0" });
-for (const [name, path, description] of [
-  [
-    "service_health",
-    "health",
-    "Inspect local service health. This scaffold has no hardware adapters.",
-  ],
-  [
-    "devices_list",
-    "inventory",
-    "Read the same local inventory used by the CLI and HTTP API. No demo devices are injected.",
-  ],
-] as const) {
-  server.tool(name, description, {}, async () => {
+import { callOperation, callService, endpoint } from "../../core/src/client";
+import { operations, type Operation } from "../../core/src/local/types";
+const server = new McpServer({ name: "device-deck", version: "0.2.0" });
+const descriptions: Partial<Record<Operation, string>> = {
+  inventory:
+    "Read real configured devices, capabilities, reservations, capture files and diagnostics. No seeded devices.",
+  discover:
+    "Read connected target and USB identities. Discovery does not automatically register or reserve targets.",
+  "sessions.reserve":
+    "Atomically reserve one device selected by name, ID or capabilities. Return the session and secret leaseToken. Keep this token for subsequent operations; owner is only a display label.",
+  "sessions.release":
+    "Release this credential-owned session after finalizing capture. Old credentials cannot control a successor.",
+  "sessions.takeover":
+    "Explicitly take over an existing session with a reason and confirmed=true. Its recording is finalized before the new reservation.",
+  "remote.input":
+    "Send exactly one key, text string or x/y tap using a current lease credential. Unsupported keys and platforms return errors.",
+  "captures.screenshot":
+    "Save a real screenshot in the shared local capture folder. Optionally copy it to the Mac clipboard or make an annotated copy. Return file metadata and image content.",
+  "recordings.start":
+    "Start a daemon-owned real recording. It survives client disconnection. Native Android recordings have a 175-second managed limit.",
+  "recordings.stop":
+    "Finalize and validate the video file, with clean original and aligned key log. Interrupted recordings remain explicitly interrupted.",
+  "config.save":
+    "Validate and atomically save the complete configuration using the revision from config.get. Reserved devices and source bindings cannot change.",
+};
+for (const [operation, schema] of Object.entries(operations)) {
+  server.tool(
+    operation.replaceAll(".", "_"),
+    descriptions[operation as Operation] ||
+      `Device Deck ${operation}. Uses the same validated operation as CLI and web.`,
+    schema.shape,
+    async (args: Record<string, unknown>) => {
+      try {
+        const result = await callOperation(
+          operation as Operation,
+          args,
+          "Agent",
+        );
+        const content: any[] = [{ type: "text", text: JSON.stringify(result) }];
+        if (
+          operation === "captures.screenshot" &&
+          result.status === "completed"
+        ) {
+          const ep = await endpoint();
+          const res = await fetch(`${ep.url}/v1/artifacts/${result.id}/file`, {
+            headers: { Authorization: `Bearer ${ep.token}` },
+            redirect: "error",
+          });
+          if (res.ok) {
+            const data = Buffer.from(await res.arrayBuffer());
+            if (data.length <= 8 * 1024 * 1024)
+              content.push({
+                type: "image",
+                mimeType: "image/png",
+                data: data.toString("base64"),
+              });
+          }
+        }
+        return { content };
+      } catch (error) {
+        return {
+          isError: true,
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify({
+                error: (error as any).code || "service-error",
+                message: (error as Error).message,
+                details: (error as any).details,
+              }),
+            },
+          ],
+        };
+      }
+    },
+  );
+}
+server.tool(
+  "service_health",
+  "Inspect the real local daemon and dependency diagnostics.",
+  {},
+  async () => {
     try {
       return {
         content: [
-          {
-            type: "text" as const,
-            text: JSON.stringify(await callService(path)),
-          },
+          { type: "text", text: JSON.stringify(await callService("health")) },
         ],
       };
-    } catch (error) {
+    } catch (e) {
       return {
         isError: true,
-        content: [{ type: "text" as const, text: (error as Error).message }],
+        content: [{ type: "text", text: (e as Error).message }],
       };
     }
-  });
-}
+  },
+);
 await server.connect(new StdioServerTransport());

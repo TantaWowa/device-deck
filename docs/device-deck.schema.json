@@ -1,94 +1,363 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Device Deck proposed operator configuration v1",
-  "description": "Design contract. The scaffold does not yet load or validate operator configuration.",
-  "type": "object",
-  "additionalProperties": false,
-  "required": [
-    "schemaVersion",
-    "server",
-    "captureSources",
-    "devices",
-    "reservations",
-    "capture"
-  ],
-  "properties": {
-    "$schema": { "type": "string" },
-    "schemaVersion": { "const": 1 },
-    "server": {
+  "$ref": "#/definitions/DeviceDeckConfig",
+  "definitions": {
+    "DeviceDeckConfig": {
       "type": "object",
-      "additionalProperties": false,
-      "required": ["host", "port"],
       "properties": {
-        "host": { "const": "127.0.0.1" },
-        "port": { "type": "integer", "minimum": 1, "maximum": 65535 }
-      }
-    },
-    "captureSources": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["id", "kind", "selector"],
-        "properties": {
-          "id": { "type": "string", "minLength": 1 },
-          "kind": { "enum": ["usb-video", "native"] },
-          "selector": {
+        "schemaVersion": {
+          "type": "number",
+          "const": 1
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535,
+          "default": 47831
+        },
+        "devices": {
+          "type": "array",
+          "items": {
             "type": "object",
-            "additionalProperties": false,
-            "required": ["deviceId"],
-            "properties": { "deviceId": { "type": "string", "minLength": 1 } }
-          }
-        }
-      }
-    },
-    "devices": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["id", "name", "platform", "connection"],
-        "properties": {
-          "id": { "type": "string", "minLength": 1 },
-          "name": { "type": "string", "minLength": 1 },
-          "platform": {
-            "enum": [
-              "roku",
-              "android-tv",
-              "android-emulator",
-              "apple-simulator"
-            ]
-          },
-          "connection": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["kind", "host"],
             "properties": {
-              "kind": { "enum": ["roku-ecp", "adb", "simctl"] },
-              "host": { "type": "string", "minLength": 1 }
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[\\w.-]+$"
+              },
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              "platform": {
+                "type": "string",
+                "enum": [
+                  "Roku",
+                  "Android",
+                  "Apple"
+                ]
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "physical",
+                  "virtual"
+                ]
+              },
+              "model": {
+                "type": "string",
+                "maxLength": 256,
+                "default": ""
+              },
+              "visibility": {
+                "type": "string",
+                "enum": [
+                  "local",
+                  "shared"
+                ],
+                "default": "local"
+              },
+              "connection": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "type": "string",
+                        "const": "roku"
+                      },
+                      "host": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 253,
+                        "pattern": "^[\\w.:-]+$"
+                      },
+                      "serial": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "host",
+                      "serial"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "type": "string",
+                        "const": "adb"
+                      },
+                      "serial": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 256
+                      },
+                      "hardwareId": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 256
+                      },
+                      "port": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 65535,
+                        "default": 5037
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "serial"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "type": "string",
+                        "const": "simulator"
+                      },
+                      "udid": {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      "os": {
+                        "type": "string",
+                        "enum": [
+                          "ios",
+                          "tvos"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "udid",
+                      "os"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "type": "string",
+                        "const": "apple-tv"
+                      },
+                      "host": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 253,
+                        "pattern": "^[\\w.:-]+$"
+                      },
+                      "identifier": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "host",
+                      "identifier"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "type": "string",
+                        "const": "apple-device"
+                      },
+                      "udid": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "udid"
+                    ],
+                    "additionalProperties": false
+                  }
+                ]
+              },
+              "captureSourceId": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "default": null
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "platform",
+              "kind",
+              "connection"
+            ],
+            "additionalProperties": false
+          },
+          "default": []
+        },
+        "sources": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 160
+              },
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "usb",
+                  "native"
+                ]
+              },
+              "deviceId": {
+                "type": "string"
+              },
+              "uniqueId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "kind"
+            ],
+            "additionalProperties": false
+          },
+          "default": []
+        },
+        "settings": {
+          "type": "object",
+          "properties": {
+            "folder": {
+              "type": "string",
+              "minLength": 1
+            },
+            "naming": {
+              "type": "string",
+              "default": "{device}-{date}-{time}"
+            },
+            "owner": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "default": "You"
+            },
+            "ttl": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 240,
+              "default": 15
+            },
+            "overlay": {
+              "type": "boolean",
+              "default": true
+            },
+            "logging": {
+              "type": "boolean",
+              "default": true
+            },
+            "clipboard": {
+              "type": "boolean",
+              "default": false
+            },
+            "captureMode": {
+              "type": "string",
+              "enum": [
+                "clean",
+                "annotated"
+              ],
+              "default": "clean"
+            },
+            "maxRecordingMinutes": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 120,
+              "default": 15
+            },
+            "previewIntervalMs": {
+              "type": "integer",
+              "minimum": 250,
+              "maximum": 5000,
+              "default": 750
             }
           },
-          "captureSourceId": { "type": ["string", "null"] }
+          "required": [
+            "folder"
+          ],
+          "additionalProperties": false
+        },
+        "tools": {
+          "type": "object",
+          "properties": {
+            "adb": {
+              "type": "string"
+            },
+            "ffmpeg": {
+              "type": "string"
+            },
+            "ffprobe": {
+              "type": "string"
+            },
+            "idb": {
+              "type": "string"
+            },
+            "python": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false,
+          "default": {}
+        },
+        "savedViews": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 32
+              },
+              "filters": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "name",
+              "filters"
+            ],
+            "additionalProperties": false
+          },
+          "default": []
         }
-      }
-    },
-    "reservations": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["defaultTtlSeconds"],
-      "properties": {
-        "defaultTtlSeconds": {
-          "type": "integer",
-          "minimum": 30,
-          "maximum": 86400
-        }
-      }
-    },
-    "capture": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["outputDirectory"],
-      "properties": { "outputDirectory": { "type": "string", "minLength": 1 } }
+      },
+      "required": [
+        "schemaVersion",
+        "settings"
+      ],
+      "additionalProperties": false
     }
-  }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
 }

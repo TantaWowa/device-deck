@@ -1,0 +1,5 @@
+{
+  "name": "@device-deck/daemon",
+  "private": true,
+  "type": "module"
+}

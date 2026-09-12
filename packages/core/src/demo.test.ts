@@ -5,7 +5,7 @@ import {
   filterDevices,
   emptyFilters,
   cliCommand,
-} from "../../../apps/app/src/demo/model";
+} from "../../../apps/web/src/demo/model";
 
 test("combined filters distinguish offline, maintenance, reservations, types and visibility", () => {
   const m = new DemoModel(() => 0);

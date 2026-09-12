@@ -1,51 +1,35 @@
-# Architecture and reuse map
+# Local application architecture
 
-The immediate milestone is a website and reviewable product preview. The broader build brief remains the intended hardware-manager scope, not a claim of completion.
+The daemon is authoritative. Web, CLI, TUI and MCP send the operations defined in `packages/core/src/local/types.ts`. The browser demo imports none of these adapters and never discovers localhost.
 
-## Ownership
+## State and configuration
 
-One local service owns devices, sessions, capture processes, and artifacts. The browser, CLI, HTTP API, and MCP are clients. The future dashboard must use the service operations, replacing `DemoModel` through a client boundary. The marketing deployment must never connect to a visitor's local devices.
+Operator configuration lives in versioned JSON. `packages/config` validates stable identity, unique friendly names and source binding rules, then serializes read/revision-check/write transactions. Atomic writes use a private temporary file, fsync and rename. External edits are validated when the next snapshot/config request arrives; invalid changes preserve the running configuration. Changing an idle preview's configuration closes its source stream before accepting the new mapping.
 
-Logical devices and capture sources are separate records. A network Roku input adapter and an HDMI capture adapter may serve the same device. Source discovery cannot identify the attached HDMI device. Pairing must be explicit, remembered, and stable across USB enumeration changes.
+Runtime state lives in SQLite with WAL, a busy timeout and immediate reservation transactions. Partial unique indexes prohibit two non-closed reservations for one logical device or canonical source identity. Lease credentials are random 256-bit values; only hashes are stored with sessions. Inventory never returns those credentials. Owner labels cannot authorize anything.
 
-Configuration belongs in versioned JSON. Session credentials and lease history belong in transactional runtime storage, such as SQLite. A durable Tawi run is not a prerequisite. Optional correlation metadata can refer to external jobs.
+The service marks a session `closing` synchronously before waiting for its device queue. Subsequent input fails immediately. Queued operations revalidate before execution. Recorder finalization and source cleanup complete before a successor can reserve. On restart, persisted worker identities are checked before signalling processes. Unverifiable remote cleanup keeps the reservation closing, visible and unavailable.
 
-The initial host is one Mac with multiple independent sources. Office-wide host discovery, team SaaS, cloud devices, billing, and distributed scheduling are deferred.
+Maintenance locks are distinct from reservations. Maintenance on a reserved device returns a per-device failure. A restart temporarily establishes a maintenance lock before awaiting adapter I/O.
 
-## Current implementation
+## Capture ownership
 
-`apps/app/src/demo/model.ts` owns browser-only sample state. It defines isolated simulation types and imports no service or hardware adapter. The service imports no demo data and registers no adapters. It exposes only GET health and inventory. CLI and MCP both call the shared core HTTP client. The service does not yet serve the local dashboard.
+Each device has a command queue. Different devices can work concurrently. A logical device and its video source are separate records. USB sources use stable AVFoundation unique IDs; native screens belong to their own device. Ambiguous bindings are rejected.
 
-The `DeviceAdapter` and `SessionOperations` interfaces mark the intended extraction boundaries. They are preliminary, not implemented adapters. Before implementation, split optional adapter capabilities so discovery-only targets cannot accidentally advertise unsupported operations. Add capture-source coordination separate from platform input drivers.
+USB preview, screenshots and recording consume one helper stream per physical source. The web preview uses periodic images. Native simulator screenshots and videos use simctl; ADB uses screencap/screenrecord. Android's exact child PID is captured from stdout immediately at process creation. Its UUID-specific command identity is rechecked before signalling it.
 
-## Source review
+Native simulator recordVideo can omit elapsed time while a screen is static. Finalization repeats the last real frame to the requested stop time, preserving the source picture and input timeline. A partial playable file after an unexpected exit remains interrupted. USB disconnects end encoder input and trigger session cleanup.
 
-Reviewed 11 September 2026. Tawi revision `3398128c000402d5bc47ed8bba0027f71f13bd29`; Hosanna Tools revision `b1e5dd51d8c1b689bd5e556f78f218bb10689d12`. Source repositories remain untouched. No implementation was extracted in this milestone, so there is no copied source whose license has been silently changed.
+Clean captures contain only source pixels. Annotated exports preserve the clean original and burn an ASS key overlay into a separate output. JSON manifests retain device/session/source identity, status, capture timing and recording-relative dispatch timestamps. Input text is stored only when logging is enabled.
 
-| Existing capability                                             | Owner and source                                                        | Reuse direction and remaining gap                                                                                                                                                                                     |
-| --------------------------------------------------------------- | ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Named inventory, discovery, transactional leases, health/expiry | TantaWowa/tawi `src/resources.ts`                                       | Preserve alias, health and SQLite locking ideas. Replace run identity with independent sessions and credentials. Audit cleanup before resource reuse.                                                                 |
-| Platform/capability selection                                   | Tawi `src/resource-policy.ts`, referenced in the brief                  | Candidate selection boundary. Detailed extraction is deferred.                                                                                                                                                        |
-| Background service and shared client                            | Tawi `src/daemon.ts`, `src/rpc.ts`                                      | RPC already exists. `resources.reserve` in daemon line 1069 requires a durable run and updates that run. Keep device sessions independent of this dependency.                                                         |
-| MCP and browser console                                         | Tawi `src/mcp-server.ts`, `src/web-console.ts`, referenced in the brief | Existing interfaces are available. Further integration audit is deferred; they are not missing building blocks.                                                                                                       |
-| Android screenshots/recording                                   | Tawi `src/android-proof.ts`                                             | Uses ADB capture and validates artifacts, bound to proof/run contracts. Extract tool execution without proof approval and ticket workflows.                                                                           |
-| Roku remote and screenshots                                     | Tawi `src/roku-proof.ts`, `src/roku-device.ts`                          | ECP keys exist. Current screenshot route requires a configured credential and developer capture path. This is not evidence that arbitrary Roku apps can be captured this way. Use HDMI pairing when needed.           |
-| Apple devices and simulators                                    | Tawi resources and `src/apple-proof.ts`                                 | Discovery distinguishes physical Apple from sims. Verify operation-specific capability before adding real control/capture. Physical discovery alone is insufficient.                                                  |
-| AVFoundation HDMI, Mac screen/window, simulator recording       | Hosanna Tools `src/capture/video-capture.ts`                            | `VideoCaptureManager.start` refuses a second active recording per manager. Lower-level `VideoCaptureSession` may support separate concurrent sources; source locking, preview sharing and cancellation need auditing. |
-| Device files and platform drivers                               | Hosanna Tools `src/device/driver-registry.ts`, `devices-file.ts`        | Registry exposes discover and resolve with platform drivers. Remove personal environment fallback and interactive selection from service/agent paths.                                                                 |
-| Existing remote scripts                                         | George's Roku ECP helpers, documented in the brief                      | No script code extracted. Android/iOS script locations remain unverified and do not block the website milestone.                                                                                                      |
+Recordings belong to the daemon, so client disappearance does not stop them. Lease expiry, explicit stop/release/takeover, duration limit and service shutdown do. File removal is a two-step library trash and explicit disk purge operation.
 
-## Hardware implementation acceptance gates
+## Local access
 
-1. Atomic exclusive reservation returns a secret credential tied to that lease. Names identify owners for display only.
-2. Every client must validate the current lease on every input/capture operation. Stale credentials fail after expiry, release or takeover.
-3. Reject old commands immediately. Finish capture cleanup before a successor acquires the device or shared source.
-4. Serialize commands per device. Permit parallel work only for independent sources. Coordinate preview, screenshots and recording for one session.
-5. Recordings survive dashboard closure. Stop produces a playable source-only file and an accurate manifest. Restart reports interrupted work.
-6. Config writes are atomic, revision-checked and validated. Invalid edits retain the previous configuration. IDs and pairings survive rediscovery.
-7. Add local authentication and browser-origin protections before enabling mutations. Test all clients against the same ownership failure cases.
-8. Exercise a real physical session and a virtual-device session before calling adapters supported.
+The server binds `127.0.0.1`. A private endpoint file contains its port, PID and API token. CLI and MCP read that file. A local command obtains a one-use browser ticket; the browser exchanges it for an HttpOnly SameSite cookie. Host/Origin checks, a required custom mutation header and JSON-only request bodies protect browser access.
 
-## Visual assets
+The threat boundary is the Mac user. This release does not provide accounts, multi-host coordination or protection from a process already able to read that user's private files. Shared visibility is a label, not a network listener.
 
-Dashboard and session screenshots are generated from the running React prototype, then encoded as WebP for the website. The fictional FIELDNOTES screen uses an original image made with built-in imagegen: a cinematic aerial dark mountain ridge and deep teal fjord at sunset, with no text, logos, UI, people or buildings. It is artwork, not a device capture. No customer data or device addresses are embedded in public assets.
+## Distribution
+
+The local build bundles the Node entry points and browser assets, plus the Mac helper for the build architecture. The package runs without source checkouts or npm at runtime, using Node 24 and the configured external platform tools. A per-user launchd job runs the daemon at login. The independent website build produces only static marketing and demo assets for the existing Firebase preview.

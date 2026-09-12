@@ -1,5 +1,7 @@
 # Readable workspace revision
 
+This records the earlier public demo milestone. See [local application delivery](local-delivery.md) for the subsequent real daemon, clients and capture implementation.
+
 This revision keeps the browser mockup separate from the local service. All device operations, source discovery, sessions, reports and recording files are simulated. It does not import hardware adapters, connect to a visitor's Mac, or change the source inspiration repositories.
 
 ## Interaction coverage

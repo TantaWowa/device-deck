@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleIdentifier</key><string>com.tantawowa.device-deck.capture</string>
+<key>CFBundleName</key><string>Device Deck Capture</string>
+<key>CFBundleVersion</key><string>0.2.0</string>
+<key>NSCameraUsageDescription</key><string>Device Deck reads the capture input you select to preview and record your connected device.</string>
+<key>NSCameraUseContinuityCameraDeviceType</key><true/>
+</dict></plist>

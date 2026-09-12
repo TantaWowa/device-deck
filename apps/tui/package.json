@@ -1,0 +1,5 @@
+{
+  "name": "@device-deck/tui",
+  "private": true,
+  "type": "module"
+}
