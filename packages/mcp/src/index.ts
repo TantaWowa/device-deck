@@ -2,8 +2,12 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { callOperation, callService, endpoint } from "../../core/src/client";
 import { operations, type Operation } from "../../core/src/local/types";
-const server = new McpServer({ name: "device-deck", version: "0.2.0" });
+const server = new McpServer({ name: "device-deck", version: "0.3.0" });
 const descriptions: Partial<Record<Operation, string>> = {
+  "reports.get":
+    "Report actual reservation overlap, capture attempts/outcomes by creation timestamp, and contention events within a local calendar range. Defaults to today. Custom start/end dates are inclusive; weeks start Monday. Includes resolved timezone, exclusive end timestamp and asOf timestamp.",
+  "capture-cards.list":
+    "List detected USB video capture cards and configured disconnected cards by stable hardware identity. Assign using revision-checked config.save; active bindings cannot change.",
   inventory:
     "Read real configured devices, capabilities, reservations, capture files and diagnostics. No seeded devices.",
   discover:

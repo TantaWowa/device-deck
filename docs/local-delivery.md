@@ -1,5 +1,7 @@
 # Local application delivery
 
+The 0.3.0 follow-up adds [report ranges and Capture Cards](reports-and-capture-cards.md). The original 0.2.0 proof below remains historical coverage.
+
 Delivered 12 September 2026 as Device Deck 0.2.0 for Apple Silicon Macs. The public demo is a separate simulated experience.
 
 The local application includes the device table and viewers, a shared daemon, CLI, separate TUI, MCP, editable JSON, durable sessions and capture library. The daemon owns capture processes so closing a client leaves a valid recording running. It verifies lease credentials, serializes device commands and cleans up owned processes before releasing a source.

@@ -2,7 +2,15 @@
 
 Validated on 12 September 2026 on an Apple Silicon Mac. The local application is separate from the public simulated demo.
 
-## Real device sessions
+## Version 0.3.0 reports and Capture Cards
+
+The current suite has 32 passing tests with no skips. The eight added tests cover local calendar boundaries and daylight saving changes, actual reservation overlap, full-history aggregation, stable USB identities, persisted assignments and reservation guards.
+
+Scoped browser checks cover day/week/month/custom reports, invalid and empty ranges, saved range preferences, hovered and focused selected-period contrast, capture-card assignment conflicts, refresh/reload persistence, device selector consistency and 390-pixel layouts. Local HTTP, CLI and MCP return the same custom-range totals. All 16 public demo QA checks also pass.
+
+Capture-card assignment was exercised against an isolated service fixture and the simulated demo. No physical card was opened or reassigned for this update. The native helper compiles on the Mac. The real-device evidence below belongs to version 0.2.0 and was not repeated for this scoped update.
+
+## Version 0.2.0 real device sessions
 
 Two fresh Apple simulators and a dedicated Android TV AVD were created for this work. Existing Tawi/lab targets were not used or interrupted. Android used a separate data directory and emulator port 5580.
 
@@ -25,7 +33,7 @@ Android static-screen and changing-screen recordings both completed at 4.83 seco
 
 ## Automated checks
 
-The current suite has 24 passing tests with no skips. Twelve cover the isolated public demo. Twelve cover real service/configuration logic and recorder fixtures, including:
+Version 0.2.0 had 24 passing tests with no skips. Twelve cover the isolated public demo. Twelve cover real service/configuration logic and recorder fixtures, including:
 
 - Exclusive device/source reservations, competing callers and credential validation.
 - Closing-state invalidation before recorder cleanup, renewal, expiry and takeover.

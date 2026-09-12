@@ -229,6 +229,15 @@ export class DeckService {
     switch (operation) {
       case "inventory":
         return this.snapshot();
+      case "reports.get":
+        try {
+          return this.store.reports(args);
+        } catch (e) {
+          fail("invalid-range", (e as Error).message, 400);
+        }
+      case "capture-cards.list":
+        await this.refresh();
+        return this.adapters.captureCards(this.config.config.sources);
       case "discover":
         return this.adapters.discover();
       case "config.get":

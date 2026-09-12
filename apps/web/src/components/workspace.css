@@ -1,0 +1,345 @@
+.workspace-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: 24px;
+}
+.workspace-heading h1 {
+  font-size: 30px;
+  letter-spacing: -1px;
+  margin: 0 0 8px;
+}
+.workspace-heading p,
+.card-scope,
+.report-semantics,
+.report-asof {
+  color: #536680;
+  font-size: 14px;
+  line-height: 1.6;
+}
+.workspace-heading button,
+.period-buttons button,
+.card-assignment button {
+  border: 1px solid #b9c9df;
+  background: white;
+  border-radius: 6px;
+  color: #193250;
+  font: inherit;
+  font-size: 13px;
+  padding: 9px 13px;
+  cursor: pointer;
+}
+.period-controls {
+  border: 1px solid #d7e1ee;
+  background: white;
+  border-radius: 9px;
+  padding: 20px;
+  margin: 20px 0;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 14px 24px;
+}
+.period-buttons {
+  display: flex;
+  gap: 5px;
+}
+.period-buttons button {
+  min-width: 44px;
+  font-weight: 650;
+}
+.period-buttons button[aria-pressed="true"] {
+  background: #245bc7;
+  border-color: #245bc7;
+  color: white;
+}
+.period-controls small {
+  flex-basis: 100%;
+  color: #536680;
+}
+.period-caption {
+  margin: 0;
+  font-weight: 550;
+  font-size: 14px;
+}
+.period-dates {
+  display: flex;
+  gap: 12px;
+}
+.period-dates label,
+.card-assignment label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  color: #344c6b;
+}
+.period-dates input,
+.card-assignment select {
+  background: white;
+  border: 1px solid #b9c9df;
+  color: #152840;
+  border-radius: 5px;
+  padding: 8px;
+  font: inherit;
+  min-height: 36px;
+}
+.range-metrics {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 14px;
+  margin: 22px 0;
+}
+.range-metrics article {
+  background: white;
+  border: 1px solid #d7e1ee;
+  border-radius: 8px;
+  padding: 20px;
+}
+.range-metrics span {
+  display: block;
+  font-size: 12px;
+  color: #536680;
+  margin-bottom: 12px;
+}
+.range-metrics strong {
+  font-size: 23px;
+  color: #14283f;
+}
+.range-usage {
+  background: white;
+  border: 1px solid #d7e1ee;
+  border-radius: 8px;
+  padding: 24px;
+}
+.range-usage h2 {
+  font-size: 18px;
+  margin: 0 0 20px;
+}
+.workspace-table-scroll {
+  overflow: auto;
+}
+.range-usage table {
+  border-collapse: collapse;
+  width: 100%;
+  text-align: left;
+  font-size: 13px;
+  min-width: 680px;
+}
+.range-usage td,
+.range-usage th {
+  padding: 16px 12px;
+  border-bottom: 1px solid #e3eaf2;
+}
+.range-usage thead th {
+  color: #536680;
+  font-size: 11px;
+}
+.range-usage meter {
+  display: block;
+  width: 160px;
+  height: 8px;
+  margin-top: 7px;
+  accent-color: #245bc7;
+}
+.workspace-error {
+  color: #a52c21;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.workspace-empty {
+  padding: 42px 24px;
+  background: white;
+  border: 1px dashed #b9c9df;
+  border-radius: 8px;
+  text-align: center;
+  color: #536680;
+}
+.workspace-empty h2 {
+  font-size: 18px;
+  color: #193250;
+}
+.card-counts {
+  display: flex;
+  gap: 24px;
+  font-size: 14px;
+  color: #536680;
+  margin: 24px 0;
+}
+.card-counts strong {
+  color: #14283f;
+}
+.capture-card-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+}
+.capture-card {
+  background: white;
+  border: 1px solid #d7e1ee;
+  border-radius: 9px;
+  padding: 24px;
+  min-width: 0;
+}
+.card-title {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.card-title h2 {
+  font-size: 17px;
+  margin: 0;
+  line-height: 1.4;
+}
+.card-state {
+  font-size: 11px;
+  border: 1px solid #cbd7e7;
+  border-radius: 4px;
+  padding: 5px 8px;
+  white-space: nowrap;
+  background: #f2f5f9;
+}
+.card-state.available {
+  background: #eaf7f1;
+  color: #246b54;
+  border-color: #bddfce;
+}
+.card-connection {
+  font-size: 12px;
+  color: #536680;
+}
+.hardware-id {
+  font-size: 11px;
+  color: #536680;
+}
+.hardware-id code {
+  display: block;
+  color: #193250;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  margin-top: 5px;
+}
+.card-ownership {
+  border-top: 1px solid #e3eaf2;
+  border-bottom: 1px solid #e3eaf2;
+  margin: 18px 0;
+  padding: 16px 0;
+  min-height: 70px;
+  font-size: 13px;
+}
+.card-ownership p {
+  color: #536680;
+  margin: 6px 0;
+}
+.card-device-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: #245bc7;
+  font: inherit;
+  font-weight: 650;
+  cursor: pointer;
+}
+.card-assignment {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px;
+}
+.card-assignment label {
+  flex-basis: 100%;
+}
+.card-assignment select {
+  width: 100%;
+  max-width: 100%;
+}
+.card-assignment small,
+.card-assignment .workspace-error {
+  flex-basis: 100%;
+  line-height: 1.5;
+}
+.card-assignment small {
+  color: #536680;
+}
+.card-assignment button:disabled,
+.workspace-heading button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.workspace-reports button:focus-visible,
+.capture-card-page button:focus-visible {
+  outline: 3px solid #7da4ed;
+  outline-offset: 3px;
+}
+@media (max-width: 1050px) {
+  .range-metrics {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .capture-card-grid {
+    grid-template-columns: 1fr;
+  }
+}
+@media (max-width: 600px) {
+  .workspace-heading {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .range-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+  .range-metrics article {
+    padding: 16px;
+  }
+  .range-metrics strong {
+    font-size: 19px;
+  }
+  .period-controls {
+    padding: 15px;
+    gap: 14px;
+  }
+  .period-dates {
+    flex-wrap: wrap;
+  }
+  .period-dates input {
+    max-width: 145px;
+  }
+  .range-usage {
+    padding: 16px;
+  }
+  .capture-card {
+    padding: 18px;
+  }
+  .card-title {
+    flex-direction: column;
+  }
+  .card-counts {
+    gap: 14px;
+    flex-wrap: wrap;
+  }
+}
+.workspace-reports > .workspace-heading {
+  display: block;
+}
+.workspace-reports .period-buttons button[aria-pressed="true"],
+.workspace-reports .period-buttons button[aria-pressed="true"]:hover,
+.workspace-reports .period-buttons button[aria-pressed="true"]:focus-visible {
+  background: #245bc7;
+  border-color: #245bc7;
+  color: #fff;
+}
+.range-usage meter::-webkit-meter-bar {
+  background: #e7eef9;
+  border: 0;
+  border-radius: 5px;
+}
+.range-usage meter::-webkit-meter-optimum-value {
+  background: #245bc7;
+  border-radius: 5px;
+}
+.range-usage meter::-moz-meter-bar {
+  background: #245bc7;
+}

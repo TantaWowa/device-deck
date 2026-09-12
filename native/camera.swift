@@ -13,7 +13,7 @@ if args.first == "clipboard" {
 }
 let devices = AVCaptureDevice.DiscoverySession(deviceTypes: [.external, .builtInWideAngleCamera], mediaType: .video, position: .unspecified).devices
 if args.first == "list" {
- let list = devices.map { ["uniqueId": $0.uniqueID, "name": $0.localizedName, "model": $0.modelID, "inUse": $0.isInUseByAnotherApplication ? "true" : "false"] }
+ let list = devices.filter { $0.deviceType == .external && $0.transportType == 0x75736220 }.map { ["uniqueId": $0.uniqueID, "name": $0.localizedName, "model": $0.modelID, "inUse": $0.isInUseByAnotherApplication ? "true" : "false"] }
  let data = try JSONSerialization.data(withJSONObject: list, options: [.sortedKeys]); FileHandle.standardOutput.write(data); exit(0)
 }
 guard args.count == 2 && args[0] == "stream", let device = devices.first(where: { $0.uniqueID == args[1] }) else { die("Configured capture source is missing. Choose its unique ID from sources discovery.") }

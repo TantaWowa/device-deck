@@ -1,3 +1,8 @@
+import {
+  aggregateReport,
+  resolveReportRange,
+  type ReportRequest,
+} from "../../../../packages/core/src/reports";
 import { DatabaseSync } from "node:sqlite";
 import {
   createHash,
@@ -239,39 +244,19 @@ export class Store {
       }[]
     ).map((r) => ({ id: r.artifact_id, ...JSON.parse(r.payload) }));
   }
-  reports() {
-    const sessions = this.sessions(),
-      events = this.events(),
-      artifacts = this.artifacts();
-    const byDevice = new Map<string, number>();
-    for (const s of sessions) {
-      const ms = Math.max(
-        0,
-        Math.min(s.endedAt || Date.now(), s.expiresAt) - s.createdAt,
-      );
-      byDevice.set(s.deviceId, (byDevice.get(s.deviceId) || 0) + ms);
-    }
-    return {
-      sessions: sessions.length,
-      reservedMs: [...byDevice.values()].reduce((a, b) => a + b, 0),
-      contentions: Number(
-        (
-          this.db
-            .prepare(
-              "SELECT count(*) AS count FROM events WHERE json_extract(payload, '$.action') = 'contention'",
-            )
-            .get() as { count: number }
-        ).count,
-      ),
-      captureAttempts: artifacts.length,
-      captureFailures: artifacts.filter(
-        (a) => a.status === "failed" || a.status === "interrupted",
-      ).length,
-      byDevice: [...byDevice].map(([deviceId, reservedMs]) => ({
-        deviceId,
-        reservedMs,
-      })),
-    };
+  reports(request: ReportRequest = {}, now = Date.now()) {
+    const range = resolveReportRange(request, now);
+    const contentions = this.db
+      .prepare(
+        "SELECT json_extract(payload, '$.deviceId') AS deviceId,json_extract(payload, '$.at') AS at FROM events WHERE json_extract(payload, '$.action') = 'contention' AND json_extract(payload, '$.at') >= ? AND json_extract(payload, '$.at') < ?",
+      )
+      .all(range.startMs, range.endMs) as { deviceId: string; at: number }[];
+    return aggregateReport(
+      range,
+      this.sessions(),
+      this.artifacts(),
+      contentions,
+    );
   }
   close() {
     this.db.close();

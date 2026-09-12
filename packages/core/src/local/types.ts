@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { reportRequestSchema, type UsageReport } from "../reports";
 export const capabilitySchema = z.enum([
   "preview",
   "key",
@@ -191,14 +192,7 @@ export type Snapshot = {
     sessionId: string;
     startedAt: number;
   }[];
-  reports: {
-    sessions: number;
-    reservedMs: number;
-    contentions: number;
-    captureAttempts: number;
-    captureFailures: number;
-    byDevice: { deviceId: string; reservedMs: number }[];
-  };
+  reports: UsageReport;
 };
 export const selectorSchema = z
   .object({
@@ -219,6 +213,8 @@ const leaseFields = {
 export const operations = {
   inventory: z.object({}).strict(),
   discover: z.object({}).strict(),
+  "capture-cards.list": z.object({}).strict(),
+  "reports.get": reportRequestSchema,
   "config.get": z.object({}).strict(),
   "config.save": z
     .object({ config: configSchema, revision: z.string() })

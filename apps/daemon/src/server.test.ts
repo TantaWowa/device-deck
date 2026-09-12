@@ -475,3 +475,63 @@ test("config edits close idle preview sources, and reject edits to reserved bind
     await cleanup();
   }
 });
+test("Capture Cards assignment uses revision-checked config and rejects both sides of an active binding change", async () => {
+  const { deck, cleanup } = await setup();
+  try {
+    const { assignCaptureCard } =
+      await import("../../../packages/core/src/capture-cards");
+    const card = {
+      id: "usb-fixture",
+      name: "Fixture HDMI",
+      kind: "usb" as const,
+      uniqueId: "usb-hardware-fixture",
+    };
+    let config = structuredClone(deck.config.config);
+    config.devices.forEach((d) => (d.captureSourceId = null));
+    config.sources.push(card);
+    config.devices[0].captureSourceId = card.id;
+    await deck.execute("config.save", {
+      config,
+      revision: deck.config.revision,
+    });
+    const owned = await reserve(deck);
+    await assert.rejects(
+      deck.execute("config.save", {
+        config: assignCaptureCard(deck.config.config, card, "two"),
+        revision: deck.config.revision,
+      }),
+      /Release the affected session/,
+    );
+    assert.equal(deck.config.config.devices[0].captureSourceId, card.id);
+    await deck.execute("sessions.release", {
+      sessionId: owned.session.id,
+      leaseToken: owned.leaseToken,
+    });
+    const saved = await deck.execute("config.save", {
+      config: assignCaptureCard(deck.config.config, card, "two"),
+      revision: deck.config.revision,
+    });
+    const { ConfigStore } = await import("../../../packages/config/src");
+    const reload = new ConfigStore(deck.config.file);
+    await reload.load();
+    assert.equal(reload.config.devices[1].captureSourceId, card.id);
+    assert.equal(
+      reload.config.sources.find((s) => s.id === card.id)?.uniqueId,
+      card.uniqueId,
+    );
+    const target = await reserve(deck, "one");
+    await assert.rejects(
+      deck.execute("config.save", {
+        config: assignCaptureCard(deck.config.config, card, "one"),
+        revision: deck.config.revision,
+      }),
+      /Release the affected session/,
+    );
+    await deck.execute("sessions.release", {
+      sessionId: target.session.id,
+      leaseToken: target.leaseToken,
+    });
+  } finally {
+    await cleanup();
+  }
+});

@@ -1,3 +1,6 @@
+import { Reports } from "../components/Reports";
+import { CaptureCards, type CardView } from "../components/CaptureCards";
+import { assignCaptureCard } from "../../../../packages/core/src/capture-cards";
 import React, {
   useState,
   useEffect,
@@ -8,6 +11,7 @@ import React, {
 import { createRoot } from "react-dom/client";
 import {
   Monitor,
+  Usb,
   Camera,
   History,
   BarChart3,
@@ -47,7 +51,8 @@ import { api, bootstrap } from "./api";
 import "../style.css";
 import "./style.css";
 type Lease = { session: Session; leaseToken: string };
-type Tab = "Devices" | "Captures" | "History" | "Reports" | "Settings";
+type Tab =
+  "Capture Cards" | "Devices" | "Captures" | "History" | "Reports" | "Settings";
 const time = (value: number) => new Date(value).toLocaleString();
 const duration = (ms: number) =>
   `${Math.floor(ms / 60000)}m ${Math.floor(ms / 1000) % 60}s`;
@@ -140,12 +145,36 @@ function Preview({
   );
 }
 function App() {
+  const [cards, setCards] = useState<{
+    sources: (SourceConfig & {
+      status: "connected" | "missing";
+      detail?: string;
+    })[];
+    diagnostics: string[];
+  }>({ sources: [], diagnostics: [] });
+  const [cardsLoading, setCardsLoading] = useState(false);
   const [data, setData] = useState<Snapshot | null>(null),
     [connectionError, setConnectionError] = useState(""),
     [error, setError] = useState(""),
     [notice, setNotice] = useState(""),
     [busy, setBusy] = useState(false),
     [tab, setTab] = useState<Tab>("Devices");
+  const refreshCards = async () => {
+    setCardsLoading(true);
+    try {
+      setCards(await api("capture-cards.list"));
+    } catch (e) {
+      setCards((prev) => ({ ...prev, diagnostics: [(e as Error).message] }));
+    } finally {
+      setCardsLoading(false);
+    }
+  };
+  useEffect(() => {
+    if (tab !== "Capture Cards" || !data) return;
+    void refreshCards();
+    const timer = setInterval(refreshCards, 10000);
+    return () => clearInterval(timer);
+  }, [tab, Boolean(data), data?.configRevision]);
   const [filter, setFilter] = useState({
       search: "",
       platform: "",
@@ -339,12 +368,26 @@ function App() {
     lease = credentials(target),
     current = activeSession(target),
     recording = data.recordings.find((r) => r.deviceId === target);
-  const sources = [
+  const sources: SourceConfig[] = [
     ...data.config.sources,
-    ...(discovery?.sources || []).filter(
-      (s) => !data.config.sources.some((x) => x.id === s.id),
-    ),
-  ];
+    ...cards.sources,
+    ...(discovery?.sources || []),
+  ]
+    .filter(
+      (s, index, list) =>
+        list.findIndex((x) =>
+          s.kind === "usb" && s.uniqueId
+            ? x.kind === "usb" && x.uniqueId === s.uniqueId
+            : x.id === s.id,
+        ) === index,
+    )
+    .map(({ id, name, kind, uniqueId, deviceId }) => ({
+      id,
+      name,
+      kind,
+      uniqueId,
+      deviceId,
+    }));
   const changeSource = (d: Device, id: string) => {
     const config = structuredClone(data.config);
     config.devices = config.devices.map((x) =>
@@ -373,6 +416,7 @@ function App() {
   };
   const menu: { name: Tab; icon: ReactNode }[] = [
     { name: "Devices", icon: <Monitor size={18} /> },
+    { name: "Capture Cards", icon: <Usb size={18} /> },
     { name: "Captures", icon: <Camera size={18} /> },
     { name: "History", icon: <History size={18} /> },
     { name: "Reports", icon: <BarChart3 size={18} /> },
@@ -1296,54 +1340,51 @@ function App() {
           </>
         )}
         {tab === "Reports" && (
-          <>
-            <div className="live-heading">
-              <div>
-                <h1>Device usage</h1>
-                <p>
-                  Measured from recorded sessions and capture outcomes on this
-                  Mac.
-                </p>
-              </div>
-            </div>
-            <div className="live-report-stats">
-              {[
-                ["Sessions", data.reports.sessions],
-                ["Reserved time", duration(data.reports.reservedMs)],
-                ["Reservation conflicts", data.reports.contentions],
-                ["Capture attempts", data.reports.captureAttempts],
-                ["Failed / interrupted", data.reports.captureFailures],
-              ].map(([label, value]) => (
-                <article key={label}>
-                  <span>{label}</span>
-                  <strong>{value}</strong>
-                </article>
-              ))}
-            </div>
-            <div className="live-panel live-report">
-              <h2>Reserved time by device</h2>
-              {data.reports.byDevice.map((row) => (
-                <div key={row.deviceId}>
-                  <span>
-                    {data.devices.find((d) => d.id === row.deviceId)?.name ||
-                      row.deviceId}
-                  </span>
-                  <meter
-                    min={0}
-                    max={Math.max(
-                      1,
-                      ...data.reports.byDevice.map((r) => r.reservedMs),
-                    )}
-                    value={row.reservedMs}
-                  />
-                  <strong>{duration(row.reservedMs)}</strong>
-                </div>
-              ))}
-              {!data.reports.sessions && (
-                <p>Usage appears after the first reservation.</p>
-              )}
-            </div>
-          </>
+          <Reports
+            load={(request) => api("reports.get", request)}
+            devices={data.devices}
+            storageKey="deck-local-report-range"
+          />
+        )}
+        {tab === "Capture Cards" && (
+          <CaptureCards
+            cards={cards.sources.map((s) => ({
+              ...s,
+              uniqueId: s.uniqueId!,
+              deviceId: data.devices.find((d) => d.captureSourceId === s.id)
+                ?.id,
+            }))}
+            devices={data.devices.map((d) => ({
+              ...d,
+              owner: activeSession(d.id)?.owner,
+              reason: activeSession(d.id)?.reason,
+              recording: data.recordings.some((r) => r.deviceId === d.id),
+            }))}
+            busy={busy}
+            loading={cardsLoading}
+            diagnostics={cards.diagnostics}
+            refresh={() => void refreshCards()}
+            view={(id) => {
+              setTab("Devices");
+              openViewer([id]);
+            }}
+            assign={async (card, id) => {
+              const source = cards.sources.find((s) => s.id === card.id)!;
+              await saveConfig(
+                assignCaptureCard(
+                  data.config,
+                  {
+                    id: source.id,
+                    name: source.name,
+                    kind: "usb",
+                    uniqueId: source.uniqueId,
+                  },
+                  id,
+                ),
+              );
+              await refreshCards();
+            }}
+          />
         )}
         {tab === "Settings" && (
           <SettingsView data={data} save={saveConfig} busy={busy} />

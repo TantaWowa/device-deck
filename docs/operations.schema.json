@@ -11,6 +11,39 @@
     "additionalProperties": false,
     "$schema": "http://json-schema.org/draft-07/schema#"
   },
+  "capture-cards.list": {
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false,
+    "$schema": "http://json-schema.org/draft-07/schema#"
+  },
+  "reports.get": {
+    "type": "object",
+    "properties": {
+      "preset": {
+        "type": "string",
+        "enum": [
+          "day",
+          "week",
+          "month",
+          "custom"
+        ],
+        "description": "Default day. Calendar periods use the daemon Mac timezone; weeks start Monday."
+      },
+      "start": {
+        "type": "string",
+        "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+        "description": "Custom first calendar date, YYYY-MM-DD, inclusive."
+      },
+      "end": {
+        "type": "string",
+        "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+        "description": "Custom last calendar date, YYYY-MM-DD, inclusive."
+      }
+    },
+    "additionalProperties": false,
+    "$schema": "http://json-schema.org/draft-07/schema#"
+  },
   "config.get": {
     "type": "object",
     "properties": {},

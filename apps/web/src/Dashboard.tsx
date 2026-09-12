@@ -1,3 +1,5 @@
+import { Reports } from "./components/Reports";
+import { CaptureCards } from "./components/CaptureCards";
 import {
   useEffect,
   useRef,
@@ -349,6 +351,9 @@ export function Dashboard() {
     model.screenFocus = {};
     model.savedViews = [];
     model.recordings.clear();
+    model.reportSessions = fresh.reportSessions;
+    model.reportCaptures = fresh.reportCaptures;
+    model.reportContentions = fresh.reportContentions;
     setFilters({ ...emptyFilters });
     setSelected([]);
     setCaptureSelected([]);
@@ -367,10 +372,7 @@ export function Dashboard() {
     <select
       aria-label={`Capture input for ${d.name}`}
       value={d.captureSourceId}
-      disabled={
-        model.recordings.has(d.id) ||
-        Boolean(model.lease(d.id) && !model.lease(d.id)?.mine)
-      }
+      disabled={model.recordings.has(d.id) || Boolean(model.lease(d.id))}
       onChange={(e) =>
         act(
           () => model.bindSource(d.id, e.target.value),
@@ -392,6 +394,7 @@ export function Dashboard() {
   const titles: Record<string, string> = {
     devices: "Devices",
     captures: "Capture library",
+    cards: "Capture Cards",
     history: "Usage history",
     reports: "Reports",
     settings: "Local settings",
@@ -750,6 +753,7 @@ export function Dashboard() {
           <nav>
             {[
               ["devices", "Devices", Monitor],
+              ["cards", "Capture Cards", Usb],
               ["captures", "Capture library", Images],
               ["history", "Usage history", History],
               ["reports", "Reports", ChartNoAxesCombined],
@@ -1832,90 +1836,45 @@ export function Dashboard() {
             </section>
           )}
           {section === "reports" && (
-            <>
-              <div className="notice">
-                <Info size={17} /> Seeded report · example week, 5–11 September.
-                These numbers are illustrative and do not measure your hardware
-                or current demo actions.
-              </div>
-              <div className="report-metrics">
-                {[
-                  ["38", "Sessions", "Across 6 active devices"],
-                  ["21h 40m", "Reserved time", "Exclusive session time"],
-                  [
-                    "4",
-                    "Contention events",
-                    "Requests found a reserved device",
-                  ],
-                  ["2 / 86", "Capture failures", "2.3% of attempted captures"],
-                ].map(([value, label, note]) => (
-                  <section className="panel" key={label}>
-                    <span>{label}</span>
-                    <strong>{value}</strong>
-                    <small>{note}</small>
-                  </section>
-                ))}
-              </div>
-              <div className="report-grid">
-                <section className="panel">
-                  <div className="section-heading">
-                    <h2>Reserved time by device</h2>
-                    <Badge>Seeded hours</Badge>
-                  </div>
-                  <div className="bar-chart">
-                    {[
-                      ["Desk Roku", 7.5],
-                      ["Living room TV", 6.2],
-                      ["Apple TV simulator", 4],
-                      ["Pixel emulator", 2.5],
-                      ["Shield test bench", 1],
-                      ["Android spare", 0.47],
-                    ].map(([name, h]) => (
-                      <div key={name}>
-                        <span>{name}</span>
-                        <div className="bar-track">
-                          <div style={{ width: `${(Number(h) / 8) * 100}%` }} />
-                        </div>
-                        <b>{h} h</b>
-                      </div>
-                    ))}
-                  </div>
-                  <p className="help">
-                    Duration is the union of each device's exclusive
-                    reservations. Offline and maintenance time are excluded.
-                  </p>
-                </section>
-                <section className="panel">
-                  <h2>Where attention went</h2>
-                  <div className="report-note">
-                    <Badge tone="amber">3 requests</Badge>
-                    <h3>Desk Roku was already reserved</h3>
-                    <p>
-                      Two agent requests and one CLI request were blocked by an
-                      active session.
-                    </p>
-                  </div>
-                  <div className="report-note">
-                    <Badge tone="amber">2 failures</Badge>
-                    <h3>USB Video input disconnected</h3>
-                    <p>
-                      Both failed captures came from Android spare. Check its
-                      source binding and cable.
-                    </p>
-                    <button
-                      className="link-button"
-                      onClick={() => nav("viewer/android-spare")}
-                    >
-                      Inspect device <ArrowRight size={14} />
-                    </button>
-                  </div>
-                  <p className="help">
-                    The remaining contention event was on Living room TV. All
-                    metrics are seeded examples.
-                  </p>
-                </section>
-              </div>
-            </>
+            <Reports
+              demo
+              load={(request) => model.report(request)}
+              devices={model.inventory.devices}
+              storageKey="deck-demo-report-range"
+            />
+          )}
+          {section === "cards" && (
+            <CaptureCards
+              demo
+              cards={model.inventory.sources
+                .filter((s) => s.kind === "usb")
+                .map((s) => ({
+                  ...s,
+                  uniqueId: s.uniqueId || `demo-${s.id}`,
+                  deviceId: model.inventory.devices.find(
+                    (d) => d.captureSourceId === s.id,
+                  )?.id,
+                }))}
+              devices={model.inventory.devices.map((d) => ({
+                ...d,
+                owner: model.lease(d.id)?.owner,
+                reason: model.lease(d.id)?.reason,
+                recording: model.recordings.has(d.id),
+              }))}
+              busy={busy}
+              refresh={() => {
+                render((n) => n + 1);
+                notify(
+                  "Simulated capture card discovery refreshed. Bindings retained.",
+                );
+              }}
+              view={(id) => nav(`viewer/${id}`)}
+              assign={async (card, id) => {
+                model.assignCard(card.id, id);
+                persist();
+                notify("Simulated capture card assignment saved.");
+              }}
+            />
           )}
           {section === "settings" && (
             <SettingsForm
@@ -2709,8 +2668,8 @@ function Connect({
             </pre>
             <p className="help">
               The local app has its own daemon, device inventory, reservations
-              and capture files. CLI, TUI and MCP share that service. This public
-              demo stays separate and uses sample data.
+              and capture files. CLI, TUI and MCP share that service. This
+              public demo stays separate and uses sample data.
             </p>
           </section>
         </div>

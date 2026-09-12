@@ -1,3 +1,10 @@
+import {
+  aggregateReport,
+  resolveReportRange,
+  type ReportRequest,
+  type ReportSession,
+  type ReportCapture,
+} from "../../../../packages/core/src/reports";
 /** Browser-only simulation. This module never imports or contacts the local service. */
 export type Platform = "Roku" | "Android" | "Apple";
 export type Device = {
@@ -13,6 +20,7 @@ export type Device = {
   input: boolean;
 };
 export type Source = {
+  uniqueId?: string;
   id: string;
   name: string;
   status: "connected" | "missing";
@@ -202,24 +210,28 @@ export const seedDevices: Device[] = [
 export const sources: Source[] = [
   {
     id: "cam-link",
+    uniqueId: "demo-usb-elgato-camlink-a1",
     name: "Cam Link 4K · USB 01 / HDMI",
     kind: "usb",
     status: "connected",
   },
   {
     id: "hd60",
+    uniqueId: "demo-usb-elgato-hd60-b2",
     name: "Elgato HD60 X · USB 02 / HDMI",
     kind: "usb",
     status: "connected",
   },
   {
     id: "avermedia",
+    uniqueId: "demo-usb-avermedia-c3",
     name: "AVerMedia Mini · USB 03 / HDMI",
     kind: "usb",
     status: "connected",
   },
   {
     id: "usb-video",
+    uniqueId: "demo-usb-video-d4",
     name: "USB Video · USB 04 / HDMI",
     kind: "usb",
     status: "missing",
@@ -306,6 +318,17 @@ export class DemoModel {
   screenFocus: Record<string, number> = {};
   history: HistoryEvent[] = [];
   savedViews: { name: string; filters: Filters }[] = [];
+  reportSessions: (ReportSession & { id: string })[] = [];
+  reportCaptures: (ReportCapture & { id: string })[] = [];
+  reportContentions: { deviceId: string; at: number }[] = [];
+  report(request: ReportRequest = {}) {
+    return aggregateReport(
+      resolveReportRange(request, this.now()),
+      this.reportSessions,
+      this.reportCaptures,
+      this.reportContentions,
+    );
+  }
   constructor(private now = () => Date.now()) {
     this.inventory.leases = [
       {
@@ -396,6 +419,72 @@ export class DemoModel {
         detail: "Simulator restarted successfully",
       },
     );
+    this.reportSessions = this.inventory.leases.map((l, i) => ({
+      id: l.id,
+      deviceId: l.deviceId,
+      createdAt: this.now() - (i + 1) * 300000,
+    }));
+    for (const [index, days] of [1, 3, 10, 20].entries()) {
+      const date = new Date(this.now());
+      date.setDate(date.getDate() - days);
+      date.setHours(10, 0, 0, 0);
+      this.reportSessions.push({
+        id: `report-seed-${index}`,
+        deviceId: ["roku-desk", "android-tv", "apple-sim", "shield"][index],
+        createdAt: date.getTime(),
+        endedAt: date.getTime() + (index + 1) * 1800000,
+      });
+    }
+    this.reportCaptures = this.artifacts.map((a) => ({
+      id: a.id,
+      deviceId: a.deviceId,
+      createdAt: a.createdAt,
+      status: "completed",
+    }));
+    this.reportCaptures.push(
+      {
+        id: "report-failed-1",
+        deviceId: "android-spare",
+        createdAt: this.now() - 900000,
+        status: "failed",
+      },
+      {
+        id: "report-failed-2",
+        deviceId: "android-spare",
+        createdAt: this.now() - 25 * 3600000,
+        status: "interrupted",
+      },
+    );
+    this.reportContentions = [
+      { deviceId: "roku-desk", at: this.now() - 1800000 },
+      { deviceId: "android-tv", at: this.now() - 49 * 3600000 },
+    ];
+  }
+  assignCard(sourceId: string, deviceId: string | null) {
+    const card = this.inventory.sources.find(
+      (s) => s.id === sourceId && s.kind === "usb",
+    );
+    if (!card) throw new Error("Choose a physical USB capture card.");
+    const previous = this.inventory.devices.find(
+      (d) => d.captureSourceId === sourceId,
+    );
+    const next = deviceId ? this.device(deviceId) : undefined;
+    for (const d of [previous, next])
+      if (d && (this.lease(d.id) || this.recordings.has(d.id)))
+        throw new Error(
+          "Release the reserved device and stop recording before changing its binding.",
+        );
+    if (next?.captureSourceId && next.captureSourceId !== sourceId)
+      throw new Error(
+        `${next.name} already has a capture input. Unassign it first.`,
+      );
+    if (previous) previous.captureSourceId = "";
+    if (next) next.captureSourceId = sourceId;
+    this.event(
+      next?.id || previous?.id || this.inventory.devices[0].id,
+      "Capture card assigned",
+      `${card.name} · ${next?.name || "Unassigned"}`,
+    );
   }
   device(id: string) {
     const d = this.inventory.devices.find((x) => x.id === id);
@@ -444,6 +533,8 @@ export class DemoModel {
       if (l.expiresAt <= this.now()) this.cleanup(l, "Session expired");
   }
   private cleanup(l: Lease, action: string) {
+    const row = this.reportSessions.find((s) => s.id === l.id);
+    if (row) row.endedAt = this.now();
     if (this.recordings.has(l.deviceId)) this.finishRecording(l.deviceId);
     this.inventory.leases = this.inventory.leases.filter((x) => x.id !== l.id);
     this.event(
@@ -460,7 +551,10 @@ export class DemoModel {
     const d = this.device(id);
     if (!d.online || d.locked)
       throw new Error("Device must be online and unlocked.");
-    if (this.lease(id)) throw new Error("This device already has an owner.");
+    if (this.lease(id)) {
+      this.reportContentions.push({ deviceId: id, at: this.now() });
+      throw new Error("This device already has an owner.");
+    }
     if (!reason.trim() || !owner.trim())
       throw new Error("Enter an owner label and a session reason.");
     const l = {
@@ -472,6 +566,7 @@ export class DemoModel {
       mine: true,
     };
     this.inventory.leases.push(l);
+    this.reportSessions.push({ id: l.id, deviceId: id, createdAt: this.now() });
     this.event(id, "Session reserved", l.reason, l.id);
     return l;
   }
@@ -498,6 +593,14 @@ export class DemoModel {
   saveDevice(d: Device) {
     validateDevice(d, this.inventory.devices, this.inventory.sources);
     const existing = this.inventory.devices.find((x) => x.id === d.id);
+    if (
+      existing &&
+      existing.captureSourceId !== d.captureSourceId &&
+      this.lease(d.id)
+    )
+      throw new Error(
+        "Stop recording and release the reserved device before changing its binding; wait for the other owner if needed.",
+      );
     if (
       existing &&
       (this.recordings.has(d.id) ||
@@ -597,6 +700,12 @@ export class DemoModel {
       naming: this.settings.naming,
     };
     this.recordings.set(id, r);
+    this.reportCaptures.push({
+      id: r.id,
+      deviceId: id,
+      createdAt: r.startedAt,
+      status: "recording",
+    });
     this.event(id, "Recording started", "Simulated recording", r.sessionId);
   }
   private finishRecording(id: string) {
@@ -652,6 +761,17 @@ export class DemoModel {
       simulated: true,
     };
     this.artifacts.unshift(a);
+    const attempt = r
+      ? this.reportCaptures.find((c) => c.id === r.id)
+      : undefined;
+    if (attempt) attempt.status = "completed";
+    else
+      this.reportCaptures.push({
+        id: a.id,
+        deviceId: id,
+        createdAt: r?.startedAt || a.createdAt,
+        status: "completed",
+      });
     this.event(
       id,
       "Capture saved",
@@ -704,6 +824,9 @@ export class DemoModel {
   serialize() {
     return JSON.stringify({
       version: 2,
+      reportSessions: this.reportSessions,
+      reportCaptures: this.reportCaptures,
+      reportContentions: this.reportContentions,
       inventory: this.inventory,
       artifacts: this.artifacts,
       inputs: this.inputs,
@@ -744,6 +867,26 @@ export class DemoModel {
       this.inputs = data.inputs;
       this.screenFocus = data.screenFocus || {};
       this.history = data.history;
+      this.reportSessions =
+        data.reportSessions ||
+        this.inventory.leases.map((l: Lease) => ({
+          id: l.id,
+          deviceId: l.deviceId,
+          createdAt: this.now(),
+        }));
+      this.reportCaptures =
+        data.reportCaptures ||
+        this.artifacts.map((a) => ({
+          id: a.id,
+          deviceId: a.deviceId,
+          createdAt: a.createdAt,
+          status: "completed",
+        }));
+      this.reportContentions = data.reportContentions || [];
+      for (const [, r] of data.recordings || []) {
+        const attempt = this.reportCaptures.find((c) => c.id === r.id);
+        if (attempt) attempt.status = "interrupted";
+      }
       this.savedViews = data.savedViews;
       // A browser reload cannot resume a real recording. Retain an explicit interruption event.
       for (const [id, r] of data.recordings || [])

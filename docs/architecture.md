@@ -24,6 +24,10 @@ Clean captures contain only source pixels. Annotated exports preserve the clean 
 
 Recordings belong to the daemon, so client disappearance does not stop them. Lease expiry, explicit stop/release/takeover, duration limit and service shutdown do. File removal is a two-step library trash and explicit disk purge operation.
 
+## Range reports and card inventory
+
+Report requests resolve calendar dates in the daemon Mac timezone. A shared aggregator clips reservation intervals and counts timestamped captures/contention for one range. SQLite supplies complete durable rows, independently of the truncated event history. Capture Cards merges configured and detected USB sources by hardware identity and uses the same revision-checked configuration save as Devices. See [report and assignment semantics](reports-and-capture-cards.md).
+
 ## Local access
 
 The server binds `127.0.0.1`. A private endpoint file contains its port, PID and API token. CLI and MCP read that file. A local command obtains a one-use browser ticket; the browser exchanges it for an HttpOnly SameSite cookie. Host/Origin checks, a required custom mutation header and JSON-only request bodies protect browser access.

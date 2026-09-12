@@ -99,9 +99,12 @@ test("device add/edit validates unique friendly names and preserves the previous
   assert.throws(() => m.bindSource("roku-desk", "hd60"), /Source conflict/);
   assert.equal(m.device("roku-desk").captureSourceId, "cam-link");
   assert.throws(() => m.bindSource("roku-desk", "native"), /Native capture/);
+  assert.throws(() => m.bindSource("roku-desk", "avermedia"), /reserved/);
+  m.release("roku-desk");
   m.bindSource("roku-desk", "avermedia");
   assert.equal(m.device("roku-desk").captureSourceId, "avermedia");
   assert.throws(() => m.bindSource("android-tv", "cam-link"), /other owner/);
+  m.reserve("roku-desk", "Recording test");
   m.toggleRecording("roku-desk");
   assert.throws(() => m.bindSource("roku-desk", ""), /Stop recording/);
   m.saveDevice({

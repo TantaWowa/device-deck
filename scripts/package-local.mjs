@@ -66,7 +66,7 @@ const out = path.resolve("../../outputs");
 await mkdir(out, { recursive: true });
 const archive = path.join(
   out,
-  `device-deck-0.2.0-macos-${process.arch}.tar.gz`,
+  `device-deck-0.3.0-macos-${process.arch}.tar.gz`,
 );
 execFileSync("/usr/bin/tar", [
   "-czf",

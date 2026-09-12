@@ -166,6 +166,14 @@ try {
         name: "Capture input for Desk Roku",
         exact: true,
       });
+      assert.equal(await source.isDisabled(), true);
+      await page
+        .getByRole("button", { name: "Desk Roku", exact: true })
+        .click();
+      await page
+        .getByRole("button", { name: "Release session", exact: true })
+        .click();
+      await nav("Devices");
       await source.selectOption("hd60");
       assert.match(
         await page.getByRole("alert").innerText(),
@@ -183,6 +191,21 @@ try {
           .isDisabled(),
         true,
       );
+      await page
+        .getByRole("button", { name: "Desk Roku", exact: true })
+        .click();
+      await page
+        .getByRole("button", { name: "Reserve device", exact: true })
+        .click();
+      await page
+        .getByRole("dialog")
+        .getByLabel("Reason")
+        .fill("Source binding checked");
+      await page
+        .getByRole("dialog")
+        .getByRole("button", { name: /Reserve for/ })
+        .click();
+      await nav("Devices");
     },
   );
   await check(
@@ -549,8 +572,13 @@ try {
       for (const tab of ["MCP", "API", "JSON", "CLI"])
         await page.getByRole("tab", { name: tab, exact: true }).click();
       await nav("Reports");
-      assert.match(await page.locator(".notice").innerText(), /Seeded report/);
-      assert.equal(await page.locator(".report-metrics .panel").count(), 4);
+      await page.getByRole("group", { name: "Report period" }).waitFor();
+      assert.match(
+        await page.locator(".workspace-heading").innerText(),
+        /Seeded report/,
+      );
+      await page.waitForSelector(".range-metrics article");
+      assert.equal(await page.locator(".range-metrics article").count(), 5);
     },
   );
   await check(

@@ -1,3 +1,7 @@
+import {
+  mergeCaptureCards,
+  type DetectedCard,
+} from "../../core/src/capture-cards";
 // Adapted from Tawi discovery, Hosanna Tools Roku SSDP, and George Cook's tv-remote.py.
 // See docs/source-provenance.md. No personal checkout is a runtime dependency.
 import dgram from "node:dgram";
@@ -301,6 +305,19 @@ export class Adapters {
       }),
     ]);
     return { devices, sources, diagnostics };
+  }
+  async captureCards(configs: SourceConfig[]) {
+    let detected: DetectedCard[] = [];
+    const diagnostics: string[] = [];
+    try {
+      detected = JSON.parse((await run(helper, ["list"])).stdout.toString());
+    } catch (e) {
+      diagnostics.push(`USB discovery unavailable: ${(e as Error).message}`);
+    }
+    return {
+      sources: mergeCaptureCards(configs, detected, (id) => uid("usb", id)),
+      diagnostics,
+    };
   }
   async inspectSources(configs: SourceConfig[]): Promise<Source[]> {
     let list: { uniqueId: string; inUse: string }[] = [];

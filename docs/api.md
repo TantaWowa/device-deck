@@ -2,6 +2,8 @@
 
 Every device operation passes through the daemon. The full input schemas are generated from the running TypeScript contract in [operations.schema.json](operations.schema.json). Configuration uses [device-deck.schema.json](device-deck.schema.json).
 
+Reports default to today in the Mac timezone. See [report ranges and Capture Cards](reports-and-capture-cards.md) for timestamp/count semantics, date-range CLI examples and the `capture-cards.list` operation.
+
 ## CLI walkthrough
 
 Use `./devdeck` in an unpacked release. From source, use `node build/devdeck.mjs` after `npm run build:local`.
@@ -94,6 +96,8 @@ Timestamps above illustrate the shape. Actual timestamps are Unix milliseconds. 
 | Operation                                                                | Result                                                                                                     |
 | ------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------- |
 | `inventory`                                                              | Local devices, sources, sessions, artifacts, events, input log, diagnostics and reports                    |
+| `reports.get`                                                            | Range metadata, reservation overlap and capture/contention totals for the same interval                    |
+| `capture-cards.list`                                                     | Detected and configured disconnected USB cards by stable identity, plus diagnostics                        |
 | `discover`                                                               | Discovered device/source configurations and per-provider diagnostics; no automatic registration            |
 | `config.get`, `config.save`                                              | Configuration and revision; save requires the last read revision                                           |
 | `sessions.reserve`                                                       | One exclusive session and secret credential                                                                |

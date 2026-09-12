@@ -10,7 +10,7 @@ const location = path.join(root, "work/George's relocated app");
 await mkdir(location, { recursive: true });
 await exec("/usr/bin/tar", [
   "-xzf",
-  path.resolve("../../outputs/device-deck-0.2.0-macos-arm64.tar.gz"),
+  path.resolve("../../outputs/device-deck-0.3.0-macos-arm64.tar.gz"),
   "-C",
   location,
 ]);

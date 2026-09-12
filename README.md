@@ -28,6 +28,10 @@ From an unpacked release, use `./devdeck` instead of `node build/devdeck.mjs`. K
 
 `start` runs the daemon in the background. `npm run service` runs it in the foreground for development. Closing a browser, CLI or MCP connection leaves recordings running. Release, takeover, expiry, the recording duration limit or service shutdown finalize them.
 
+## Reports and capture cards
+
+Reports offer Day, Week, Month and inclusive custom date ranges. The same range applies to every metric and device row; CLI and MCP can request it too. Capture Cards shows detected and disconnected USB cards, stable hardware IDs, ownership and direct device assignment. See [range and binding semantics](docs/reports-and-capture-cards.md).
+
 ## First device session
 
 1. Open the local dashboard and select **Discover**.

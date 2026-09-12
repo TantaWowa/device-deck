@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { resolveReportRange } from "../../../packages/core/src/reports";
 import { parseArgs } from "node:util";
 import { readFile } from "node:fs/promises";
 import { createInterface } from "node:readline/promises";
@@ -35,7 +36,8 @@ Usage: devdeck <command> [options]
   ui | tui | mcp               Open the dashboard, terminal UI or MCP server
   discover                     Find connected targets and capture cards
   devices [filters]            List configured devices
-  sources | sessions | captures| history | reports
+  sources | sessions | captures | history
+  reports [--range day|week|month|custom] [--start YYYY-MM-DD --end YYYY-MM-DD]
   config [get|import|export|validate] [file]
   reserve [filters] --owner NAME --reason TEXT
   renew | release              Use --session ID --lease TOKEN
@@ -75,6 +77,9 @@ const optionTypes: Record<string, { type: "string" | "boolean" }> =
       "key",
       "text",
       "mode",
+      "range",
+      "start",
+      "end",
     ].map((k) => [k, { type: "string" }]),
   );
 for (const key of ["json", "help", "clipboard", "yes"])
@@ -151,15 +156,23 @@ try {
           });
         } else throw new Error("Unknown config command.");
       }
+    } else if (command === "reports") {
+      let request;
+      try {
+        request = operations["reports.get"].parse({
+          ...(v.range ? { preset: v.range } : {}),
+          ...(v.start ? { start: v.start } : {}),
+          ...(v.end ? { end: v.end } : {}),
+        });
+        resolveReportRange(request);
+      } catch (e) {
+        throw new DeckError("arguments", (e as Error).message, 400);
+      }
+      result = await callOperation("reports.get", request);
     } else if (
-      [
-        "devices",
-        "sources",
-        "sessions",
-        "captures",
-        "history",
-        "reports",
-      ].includes(command)
+      ["devices", "sources", "sessions", "captures", "history"].includes(
+        command,
+      )
     ) {
       const data: Snapshot = await callOperation("inventory");
       result =
@@ -169,7 +182,7 @@ try {
             ? data.events
             : command === "captures"
               ? data.artifacts
-              : data[command as "sources" | "sessions" | "reports"];
+              : data[command as "sources" | "sessions"];
       if (command === "devices" && !v.json) {
         console.table(
           (result as Snapshot["devices"]).map((d) => ({
