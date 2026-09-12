@@ -38,6 +38,8 @@ Usage: devdeck <command> [options]
   devices [filters]            List configured devices
   sources | sessions | captures | history
   reports [--range day|week|month|custom] [--start YYYY-MM-DD --end YYYY-MM-DD]
+  license status|refresh|deactivate
+  license activate <key-file>  Read a license key from a private file
   config [get|import|export|validate] [file]
   reserve [filters] --owner NAME --reason TEXT
   renew | release              Use --session ID --lease TOKEN
@@ -156,6 +158,18 @@ try {
           });
         } else throw new Error("Unknown config command.");
       }
+    } else if (command === "license") {
+      const action = p[1] || "status";
+      if (action === "activate") {
+        if (!p[2])
+          throw new Error("Supply a private file containing your license key.");
+        result = await callOperation("license.activate", {
+          key: (await readFile(p[2], "utf8")).trim(),
+        });
+      } else if (["status", "refresh", "deactivate"].includes(action)) {
+        result = await callOperation(`license.${action}` as Operation);
+      } else
+        throw new Error("Use license status, activate, refresh or deactivate.");
     } else if (command === "reports") {
       let request;
       try {

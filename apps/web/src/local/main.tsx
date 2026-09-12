@@ -1,4 +1,5 @@
 import { Reports } from "../components/Reports";
+import { License, LicenseReminder } from "../components/License";
 import { CaptureCards, type CardView } from "../components/CaptureCards";
 import { assignCaptureCard } from "../../../../packages/core/src/capture-cards";
 import React, {
@@ -52,7 +53,13 @@ import "../style.css";
 import "./style.css";
 type Lease = { session: Session; leaseToken: string };
 type Tab =
-  "Capture Cards" | "Devices" | "Captures" | "History" | "Reports" | "Settings";
+  | "Capture Cards"
+  | "Devices"
+  | "Captures"
+  | "History"
+  | "Reports"
+  | "Settings"
+  | "License";
 const time = (value: number) => new Date(value).toLocaleString();
 const duration = (ms: number) =>
   `${Math.floor(ms / 60000)}m ${Math.floor(ms / 1000) % 60}s`;
@@ -421,6 +428,7 @@ function App() {
     { name: "History", icon: <History size={18} /> },
     { name: "Reports", icon: <BarChart3 size={18} /> },
     { name: "Settings", icon: <Settings size={18} /> },
+    { name: "License", icon: <Lock size={18} /> },
   ];
   return (
     <div className="live-app">
@@ -463,6 +471,15 @@ function App() {
               : "Local service connected"}
           </span>
         </div>
+        {data.license && tab !== "License" && (
+          <LicenseReminder
+            status={data.license}
+            open={() => {
+              setTab("License");
+              setViewing([]);
+            }}
+          />
+        )}
         {connectionError && (
           <div className="live-alert" role="alert">
             {connectionError}
@@ -1383,6 +1400,18 @@ function App() {
                 ),
               );
               await refreshCards();
+            }}
+          />
+        )}
+        {tab === "License" && (
+          <License
+            status={data.license}
+            act={async (action, key) => {
+              await api(
+                `license.${action}`,
+                action === "activate" ? { key } : {},
+              );
+              await refresh();
             }}
           />
         )}

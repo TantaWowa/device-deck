@@ -10,6 +10,7 @@ import {
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 const destination = path.resolve("work/package/device-deck");
+const { version } = JSON.parse(await readFile("package.json", "utf8"));
 await rm(destination, { recursive: true, force: true });
 await mkdir(destination, { recursive: true });
 await mkdir(path.join(destination, "build"), { recursive: true });
@@ -24,7 +25,9 @@ for (const name of [
   await cp(path.join("build", name), path.join(destination, "build", name), {
     recursive: true,
   });
-await cp("native", path.join(destination, "native"), { recursive: true });
+await mkdir(path.join(destination, "native"), { recursive: true });
+// Python is an actual runtime bridge. Swift and its compiler plist stay private.
+await cp("native/apple-tv.py", path.join(destination, "native/apple-tv.py"));
 await cp("docs", path.join(destination, "docs"), { recursive: true });
 await cp("examples", path.join(destination, "examples"), { recursive: true });
 await cp("README.md", path.join(destination, "README.md"));
@@ -66,7 +69,7 @@ const out = path.resolve("../../outputs");
 await mkdir(out, { recursive: true });
 const archive = path.join(
   out,
-  `device-deck-0.3.0-macos-${process.arch}.tar.gz`,
+  `device-deck-${version}-macos-${process.arch}.tar.gz`,
 );
 execFileSync("/usr/bin/tar", [
   "-czf",

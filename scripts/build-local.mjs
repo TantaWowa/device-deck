@@ -38,6 +38,8 @@ await bundle({
   platform: "node",
   target: "node24",
   format: "esm",
+  minify: true,
+  sourcemap: false,
   outExtension: { ".js": ".mjs" },
   banner: {
     js: "import { createRequire as __createRequire } from 'node:module'; const require = __createRequire(import.meta.url);",

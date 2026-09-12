@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { reportRequestSchema, type UsageReport } from "../reports";
+import type { LicenseStatus } from "../../../licensing/src";
 export const capabilitySchema = z.enum([
   "preview",
   "key",
@@ -175,6 +176,7 @@ export type Artifact = {
   origin: "Web" | "CLI" | "Agent" | "API";
 };
 export type Snapshot = {
+  license: LicenseStatus;
   mode: "local";
   devices: Device[];
   sources: Source[];
@@ -212,6 +214,12 @@ const leaseFields = {
 };
 export const operations = {
   inventory: z.object({}).strict(),
+  "license.status": z.object({}).strict(),
+  "license.activate": z
+    .object({ key: z.string().trim().min(1).max(4096) })
+    .strict(),
+  "license.refresh": z.object({}).strict(),
+  "license.deactivate": z.object({}).strict(),
   discover: z.object({}).strict(),
   "capture-cards.list": z.object({}).strict(),
   "reports.get": reportRequestSchema,

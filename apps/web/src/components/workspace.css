@@ -343,3 +343,113 @@
 .range-usage meter::-moz-meter-bar {
   background: #245bc7;
 }
+.license-page {
+  display: grid;
+  gap: 22px;
+  max-width: 1080px;
+  margin: 32px 0;
+}
+.license-page .workspace-heading {
+  margin: 0;
+}
+.license-tier {
+  padding: 10px 18px;
+  border-radius: 8px;
+  background: #e4edff;
+  color: #194aab;
+}
+.license-message {
+  padding: 18px;
+  border: 1px solid #cbd9ed;
+  border-radius: 8px;
+  background: #fff;
+}
+.license-plans {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+}
+.license-plans article,
+.license-details {
+  padding: 26px;
+  border: 1px solid #cfdbed;
+  border-radius: 8px;
+  background: white;
+}
+.license-page h2 {
+  font-size: 20px;
+  margin: 0 0 12px;
+}
+.license-page p {
+  line-height: 1.6;
+  margin: 8px 0;
+}
+.license-checkout {
+  display: inline-block;
+  margin-top: 15px;
+  padding: 10px 14px;
+  background: #245bc7;
+  color: white;
+  border-radius: 6px;
+  text-decoration: none;
+}
+.license-details form,
+.license-actions {
+  display: flex;
+  gap: 12px;
+  align-items: end;
+  flex-wrap: wrap;
+  margin: 20px 0;
+}
+.license-details label {
+  display: grid;
+  gap: 8px;
+  flex: 1;
+  min-width: 180px;
+}
+.license-details input {
+  padding: 10px;
+  border: 1px solid #bdcce2;
+  border-radius: 6px;
+}
+.license-details dl {
+  display: grid;
+  grid-template-columns: 175px 1fr;
+  gap: 12px;
+  font-size: 13px;
+}
+.license-details dt {
+  font-weight: 600;
+}
+.license-details dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.license-reminder {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin: 20px 0;
+  padding: 15px 18px;
+  background: #edf3ff;
+  border: 1px solid #c9d9f4;
+  border-radius: 8px;
+  font-size: 12px;
+}
+.license-reminder span {
+  flex: 1;
+  min-width: 180px;
+}
+@media (max-width: 650px) {
+  .license-plans {
+    grid-template-columns: 1fr;
+  }
+  .license-details dl {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+  .license-details dd {
+    margin-bottom: 10px;
+  }
+}

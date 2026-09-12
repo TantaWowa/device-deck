@@ -1,0 +1,21 @@
+{
+  "name": "@tantawowa/device-deck",
+  "version": "0.4.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "publishConfig": {
+    "access": "restricted"
+  },
+  "bin": {
+    "devdeck": "dist/cli.mjs"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "COPYRIGHT",
+    "THIRD_PARTY_NOTICES.txt"
+  ]
+}

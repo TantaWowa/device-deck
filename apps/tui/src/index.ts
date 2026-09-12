@@ -31,7 +31,7 @@ try {
       })
       .join("\n");
     ui.draw(
-      `DEVICE DECK / TERMINAL\n${rows.length} configured devices · filter ${filter || "all"}\n\n  DEVICE                       PLATFORM TYPE     HEALTH   RESERVATION\n${table || "No configured devices. Use d to discover, or edit configuration in the dashboard."}\n\n↑ ↓ Select   Enter Reserve & remote   / Filter   a Clear filter\nl Lock   u Unlock   d Discover   h History   c Captures\nw Web dashboard   q Quit\n\n${clean(message)}\n`,
+      `DEVICE DECK / TERMINAL\n${rows.length} configured devices · filter ${filter || "all"}\nLicense: ${snapshot.license.tier} · ${snapshot.license.maxSessions === null ? "concurrent sessions" : "one active session"}\n\n  DEVICE                       PLATFORM TYPE     HEALTH   RESERVATION\n${table || "No configured devices. Use d to discover, or edit configuration in the dashboard."}\n\n↑ ↓ Select   Enter Reserve & remote   / Filter   a Clear filter\nl Lock   u Unlock   d Discover   h History   c Captures\nw Web dashboard   p License   q Quit\n\n${clean(message)}\n`,
     );
     const key = await ui.key();
     if (key.name === "q" || (key.ctrl && key.name === "c")) break;
@@ -73,6 +73,16 @@ try {
         } else if (key.name === "w") {
           spawn("/usr/bin/open", [await browserUrl()], { stdio: "ignore" });
           message = "Opened web dashboard.";
+        } else if (key.name === "p") {
+          ui.draw(
+            `${JSON.stringify(await callOperation("license.status"), null, 2)
+              .split("\n")
+              .map(clean)
+              .join(
+                "\n",
+              )}\n\nActivate using devdeck license activate <key-file>, or open License in the dashboard.\nPress any key to return.`,
+          );
+          await ui.key();
         } else if (key.name === "h" || key.name === "c") {
           const text =
             key.name === "h"

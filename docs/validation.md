@@ -2,9 +2,15 @@
 
 Validated on 12 September 2026 on an Apple Silicon Mac. The local application is separate from the public simulated demo.
 
+## Version 0.4.0 licensing foundation
+
+The current suite has 44 passing tests with no skips. Added coverage verifies signed machine/license proof, online validation failures, Free admission under contention, annotation gates, and continued work through its original lease after entitlement loss. Billing tests cover signed webhooks, replay/retry/restart, current subscription state, trial conversion, manual suspension and worker-lock recovery. Installer tests check signed metadata, authenticated archive integrity and installed-app launch after download metadata expiry.
+
+An isolated fixture confirms that HTTP, CLI, TUI, MCP and Web expose the same Free status and reject a second session. Browser checks cover disabled activation before provider setup, the dismissible reminder and desktop/390-pixel license screens. No real devices or billing providers were used for this slice. The separate candidate remains unconfigured Free. See [licensing and billing](licensing-and-billing.md) for policy, setup and the real-provider work still pending.
+
 ## Version 0.3.0 reports and Capture Cards
 
-The current suite has 32 passing tests with no skips. The eight added tests cover local calendar boundaries and daylight saving changes, actual reservation overlap, full-history aggregation, stable USB identities, persisted assignments and reservation guards.
+Version 0.3.0 had 32 passing tests with no skips. The eight added tests cover local calendar boundaries and daylight saving changes, actual reservation overlap, full-history aggregation, stable USB identities, persisted assignments and reservation guards.
 
 Scoped browser checks cover day/week/month/custom reports, invalid and empty ranges, saved range preferences, hovered and focused selected-period contrast, capture-card assignment conflicts, refresh/reload persistence, device selector consistency and 390-pixel layouts. Local HTTP, CLI and MCP return the same custom-range totals. All 16 public demo QA checks also pass.
 
@@ -57,4 +63,4 @@ No idle physical target was confirmed for this work. Physical Roku, Android/Andr
 
 Other physical Apple devices have discovery only, with no claimed native input or capture. USB and native captures are silent. Preview is periodic image refresh rather than a full-motion browser stream. Native Android recording is limited to 175 seconds; other recorders use the configured maximum. Input overlays use dispatch timestamps, not an assertion that the device rendered a frame at the instant a command was sent.
 
-Installer/service lifecycle and package relocation checks are recorded in [local delivery](local-delivery.md). The external delivery receipt includes the revision and archive checksum. No billing, cloud runtime, accounts or multi-host scheduling were added.
+Installer/service lifecycle and package relocation checks are recorded in [local delivery](local-delivery.md). The external delivery receipt includes the revision and archive checksum. Version 0.4.0 adds a private, undeployed billing bridge. Cloud runtime, user accounts and multi-host scheduling remain outside the local application.

@@ -12,6 +12,8 @@ outputs/
 test-results/
 playwright-report/
 build/
+packages/installer/COPYRIGHT
+packages/installer/THIRD_PARTY_NOTICES.txt
 *.sqlite*
 *.mp4
 *.mov

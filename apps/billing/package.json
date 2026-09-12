@@ -1,0 +1,5 @@
+{
+  "name": "@device-deck/billing",
+  "private": true,
+  "type": "module"
+}

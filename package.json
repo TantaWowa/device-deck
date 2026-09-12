@@ -1,6 +1,6 @@
 {
   "name": "device-deck",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
   "workspaces": [
@@ -16,7 +16,7 @@
     "build": "vite build apps/website --outDir ../../dist --emptyOutDir && vite build apps/web --base=/demo/ --outDir ../../dist/demo --emptyOutDir",
     "check": "tsc --noEmit",
     "qa": "node scripts/qa.mjs",
-    "test": "node --import tsx --test apps/daemon/src/*.test.ts apps/cli/src/*.test.ts packages/*/src/*.test.ts",
+    "test": "node --import tsx --test apps/daemon/src/*.test.ts apps/billing/src/*.test.ts apps/cli/src/*.test.ts packages/*/src/*.test.ts",
     "service": "node --import tsx apps/daemon/src/index.ts",
     "cli": "node --import tsx apps/cli/src/index.ts",
     "mcp": "node --import tsx packages/mcp/src/index.ts",
@@ -24,7 +24,10 @@
     "tui": "node --import tsx apps/tui/src/index.ts",
     "build:local": "node scripts/build-local.mjs",
     "schema": "node --import tsx scripts/schema.ts",
-    "package:local": "node scripts/package-local.mjs"
+    "package:local": "node scripts/package-local.mjs",
+    "build:installer": "node scripts/build-installer.mjs",
+    "billing:serve": "node --import tsx apps/billing/src/index.ts",
+    "billing:recover-lock": "node --import tsx scripts/recover-billing-lock.ts"
   },
   "dependencies": {
     "react": "^19.1.1",

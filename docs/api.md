@@ -4,6 +4,8 @@ Every device operation passes through the daemon. The full input schemas are gen
 
 Reports default to today in the Mac timezone. See [report ranges and Capture Cards](reports-and-capture-cards.md) for timestamp/count semantics, date-range CLI examples and the `capture-cards.list` operation.
 
+The `license.status`, `license.activate`, `license.refresh` and `license.deactivate` operations share the same daemon-owned entitlement state. Free allows one new active session and clean recording; concurrent sessions and recording annotations require a verified license. Existing work keeps its bounded lease when paid access ends. See [licensing commands and policy](licensing-and-billing.md).
+
 ## CLI walkthrough
 
 Use `./devdeck` in an unpacked release. From source, use `node build/devdeck.mjs` after `npm run build:local`.

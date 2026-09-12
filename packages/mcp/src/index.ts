@@ -2,8 +2,16 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { callOperation, callService, endpoint } from "../../core/src/client";
 import { operations, type Operation } from "../../core/src/local/types";
-const server = new McpServer({ name: "device-deck", version: "0.3.0" });
+const server = new McpServer({ name: "device-deck", version: "0.4.0" });
 const descriptions: Partial<Record<Operation, string>> = {
+  "license.status":
+    "Read the daemon's verified Free, trial or Pro entitlement state. Never returns the license key.",
+  "license.activate":
+    "Activate an issuer-provided Keygen license on this Mac. Trial and complimentary owner licenses use the same signed verification as paid licenses.",
+  "license.refresh":
+    "Refresh Keygen validation and the bounded offline certificate. Expired access falls back to Free.",
+  "license.deactivate":
+    "Deactivate this Mac in Keygen and return to Free. Existing paid work keeps its current bounded lease; new paid operations are denied.",
   "reports.get":
     "Report actual reservation overlap, capture attempts/outcomes by creation timestamp, and contention events within a local calendar range. Defaults to today. Custom start/end dates are inclusive; weeks start Monday. Includes resolved timezone, exclusive end timestamp and asOf timestamp.",
   "capture-cards.list":

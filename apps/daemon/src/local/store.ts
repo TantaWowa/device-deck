@@ -91,6 +91,7 @@ export class Store {
     owner: string,
     reason: string,
     ttlMinutes: number,
+    maxSessions = Infinity,
   ) {
     return this.transaction(() => {
       if (this.lockReason(deviceId))
@@ -115,6 +116,12 @@ export class Store {
           "source-reserved",
           "Capture source is in use by another session.",
           409,
+        );
+      if (active.length >= maxSessions)
+        fail(
+          "pro-required",
+          "Free supports one active device session. Release it or activate Pro for concurrent sessions.",
+          403,
         );
       const session: Session = {
         id: randomUUID(),

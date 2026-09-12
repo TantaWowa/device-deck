@@ -113,7 +113,7 @@ export function createService(
         if (req.method === "GET" && url.pathname === "/v1/health") {
           reply(200, {
             status: "ready",
-            version: "0.3.0",
+            version: "0.4.0",
             mode: "local",
             pid: process.pid,
             operations: Object.keys(operations),

@@ -34,6 +34,10 @@ The server binds `127.0.0.1`. A private endpoint file contains its port, PID and
 
 The threat boundary is the Mac user. This release does not provide accounts, multi-host coordination or protection from a process already able to read that user's private files. Shared visibility is a label, not a network listener.
 
+## Licensing
+
+`packages/licensing` verifies online Keygen responses and signed, time-bound proof against compiled account/product/policy trust. The daemon enforces Free admission inside the reservation transaction and checks paid recording/renewal operations. Entitlement loss preserves already-running work through its original bounded lease. Clients never select a tier. The separate Lemon Squeezy bridge updates registered Keygen licenses and is excluded from customer bundles. See [licensing and billing](licensing-and-billing.md) for trust, expiry and deployment limits.
+
 ## Distribution
 
 The local build bundles the Node entry points and browser assets, plus the Mac helper for the build architecture. The package runs without source checkouts or npm at runtime, using Node 24 and the configured external platform tools. A per-user launchd job runs the daemon at login. The independent website build produces only static marketing and demo assets for the existing Firebase preview.

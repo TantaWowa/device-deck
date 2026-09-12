@@ -1,5 +1,7 @@
 # Device Deck
 
+Version 0.4.0 adds an unconfigured Free licensing candidate with a Keygen entitlement boundary and a server-side Lemon Squeezy reconciliation foundation. See [licensing, configuration and remaining sandbox work](docs/licensing-and-billing.md). The existing 0.3.0 review installation remains separate.
+
 A local Mac workspace for connected TV devices and simulators. The daemon owns reservations, remote input, capture processes and files. The web app, CLI, terminal UI and MCP use the same authenticated operations.
 
 The public website includes a separate simulated demo. It never connects to the local daemon. The local app has no sample devices and needs no account login.

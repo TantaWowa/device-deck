@@ -31,6 +31,11 @@ import {
   type SourceConfig,
 } from "../../../../packages/core/src/local/types";
 import { Store } from "./store";
+import {
+  LicenseManager,
+  FEATURES,
+  type EntitlementService,
+} from "../../../../packages/licensing/src";
 type Job = {
   artifact: Artifact;
   handle: RecordingHandle;
@@ -41,6 +46,7 @@ export class DeckService {
   readonly config: ConfigStore;
   readonly adapters: Adapters;
   readonly capture: CaptureEngine;
+  readonly licensing: EntitlementService;
   store!: Store;
   private control = new Map<string, SerialQueue>();
   private global = new SerialQueue();
@@ -63,14 +69,17 @@ export class DeckService {
     configFile = path.join(directory, "config.json"),
     adapters?: Adapters,
     capture?: CaptureEngine,
+    licensing?: EntitlementService,
   ) {
     this.config = new ConfigStore(configFile);
     this.adapters = adapters || new Adapters(() => this.config.config);
     this.capture = capture || new CaptureEngine(this.adapters);
+    this.licensing = licensing || new LicenseManager(directory);
   }
   async init() {
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
     await this.config.load();
+    await this.licensing.init();
     this.store = new Store(path.join(this.directory, "state.sqlite"));
     await this.recover();
     this.diagnostics.push(...(await this.adapters.diagnostics()));
@@ -196,6 +205,7 @@ export class DeckService {
     }
     return {
       mode: "local",
+      license: this.licensing.status(),
       devices,
       sources,
       sessions: this.store.sessions(),
@@ -229,6 +239,22 @@ export class DeckService {
     switch (operation) {
       case "inventory":
         return this.snapshot();
+      case "license.status":
+        return this.licensing.status();
+      case "license.activate":
+        try {
+          return await this.licensing.activate(args.key);
+        } catch (e) {
+          fail("license-activation-failed", (e as Error).message, 400);
+        }
+      case "license.refresh": {
+        const status = await this.licensing.refresh();
+        return status;
+      }
+      case "license.deactivate": {
+        const status = await this.licensing.deactivate();
+        return status;
+      }
       case "reports.get":
         try {
           return this.store.reports(args);
@@ -295,6 +321,7 @@ export class DeckService {
               args.owner,
               args.reason,
               args.ttlMinutes || this.config.config.settings.ttl,
+              this.licensing.status().maxSessions ?? Infinity,
             );
           } catch (e) {
             this.store.event({
@@ -309,6 +336,16 @@ export class DeckService {
       }
       case "sessions.renew": {
         const s = this.store.validate(args.sessionId, args.leaseToken);
+        this.checkSessionEntitlement(s);
+        if (
+          this.jobs.get(s.id)?.artifact.mode === "annotated" &&
+          !this.licensing.status().features.includes(FEATURES.annotations)
+        )
+          fail(
+            "pro-required",
+            "Pro access ended. This recording can finish within its existing lease; stop remains available.",
+            403,
+          );
         s.expiresAt =
           Date.now() +
           (args.ttlMinutes || this.config.config.settings.ttl) * 60000;
@@ -733,6 +770,15 @@ export class DeckService {
     mode: Artifact["mode"] | undefined,
     origin: Artifact["origin"],
   ) {
+    if (
+      (mode || this.config.config.settings.captureMode) === "annotated" &&
+      !this.licensing.status().features.includes(FEATURES.annotations)
+    )
+      fail(
+        "pro-required",
+        "Recording annotations require an active Pro or trial license. Clean recording remains available.",
+        403,
+      );
     if (this.jobs.has(s.id))
       fail("already-recording", "This session already has a recording.", 409);
     const a = this.artifact(
@@ -937,6 +983,24 @@ export class DeckService {
         .map((s) => this.closeSession(s.id, "Reservation expired")),
     );
   }
+  private permittedSessionIds() {
+    const limit = this.licensing.status().maxSessions;
+    const active = this.store
+      .sessions()
+      .filter((s) => s.state !== "closed")
+      .sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
+    return new Set(
+      (limit === null ? active : active.slice(0, limit)).map((s) => s.id),
+    );
+  }
+  private checkSessionEntitlement(session: Session) {
+    if (!this.permittedSessionIds().has(session.id))
+      fail(
+        "pro-required",
+        "Pro access ended. This extra session can finish within its existing lease but cannot be renewed.",
+        403,
+      );
+  }
   private async cleanWorker(worker: any) {
     const needle = worker.remotePath || worker.path;
     if (
@@ -1096,6 +1160,7 @@ export class DeckService {
     }
   }
   async close() {
+    this.licensing.close();
     this.shuttingDown = true;
     clearInterval(this.timer);
     await Promise.all(
