@@ -114,6 +114,12 @@ if (!deck.config.config.devices.length) {
     s.state = "closed";
     deck.store.putSession(s);
   }
+}
+if (
+  !deck.store
+    .sessions()
+    .some((s) => s.deviceId === "busy" && s.state !== "closed")
+) {
   const held = deck.store.reserve(
     "busy",
     "saved-b",
