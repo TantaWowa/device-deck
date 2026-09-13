@@ -1888,5 +1888,49 @@
   box-shadow: 0 8px 25px #24344a25;
   min-width: 180px;
 }
-.floating-remote button:disabled { opacity:.4; }
-.floating-remote.options-open { resize:both; }
+.floating-remote button:disabled {
+  opacity: 0.4;
+}
+.floating-remote.options-open {
+  resize: both;
+}
+.simulator-controls {
+  position: relative;
+  display: inline-flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.simulator-confirm {
+  position: relative;
+  z-index: 15;
+  margin-top: 6px;
+  width: 290px;
+  padding: 14px;
+  border: 1px solid #ccd5e2;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 12px 36px #19283c24;
+  color: #19283c;
+}
+.simulator-confirm p {
+  white-space: normal;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.simulator-error {
+  max-width: 270px;
+  white-space: normal;
+  color: #b33131;
+}
+.simulator-spinner {
+  animation: simulator-spin 1s linear infinite;
+}
+@keyframes simulator-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.live-row-actions:has(.simulator-confirm) {
+  align-items: flex-start;
+}

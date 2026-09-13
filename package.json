@@ -1,6 +1,6 @@
 {
   "name": "device-deck",
-  "version": "0.4.0",
+  "version": "0.5.0-beta.1",
   "private": true,
   "type": "module",
   "workspaces": [
@@ -29,7 +29,17 @@
     "package:local": "node scripts/package-local.mjs",
     "build:installer": "node scripts/build-installer.mjs",
     "billing:serve": "node --import tsx apps/billing/src/index.ts",
-    "billing:recover-lock": "node --import tsx scripts/recover-billing-lock.ts"
+    "billing:recover-lock": "node --import tsx scripts/recover-billing-lock.ts",
+    "package:mac": "node scripts/package-mac.mjs",
+    "release:keygen": "node scripts/release/provision-keygen.mjs",
+    "release:team-license": "node scripts/release/issue-team-license.mjs",
+    "test:distribution": "node --test scripts/distribution/*.test.mjs scripts/release/*.test.mjs",
+    "proof:mac": "node scripts/proof-mac-package.mjs",
+    "release:publish": "node scripts/release/publish-mac.mjs",
+    "release:github": "node scripts/release/setup-github.mjs",
+    "release:cask": "node --import tsx scripts/release/generate-cask.ts",
+    "billing:build": "node apps/billing/build.mjs",
+    "billing:operator": "node --import tsx apps/billing/src/operator.ts"
   },
   "dependencies": {
     "react": "^19.1.1",

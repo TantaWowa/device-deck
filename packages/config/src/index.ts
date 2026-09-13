@@ -36,7 +36,8 @@ export function validateConfig(value: unknown) {
     physicalSources = new Set<string>(),
     names = new Set<string>(),
     bindings = new Set<string>(),
-    locators = new Set<string>();
+    locators = new Set<string>(),
+    emulatorTransports = new Map<string, string | undefined>();
   for (const s of c.sources) {
     if (ids.has(s.id))
       fail("invalid-config", "Capture source IDs must be unique.");
@@ -57,6 +58,32 @@ export function validateConfig(value: unknown) {
   if (deviceIds.size !== c.devices.length)
     fail("invalid-config", "Device IDs must be unique.");
   for (const d of c.devices) {
+    if (
+      d.connection.type === "adb" &&
+      /^emulator-\d+$/.test(d.connection.serial)
+    ) {
+      const transport = `${d.connection.port}:${d.connection.serial}`;
+      if (
+        emulatorTransports.has(transport) &&
+        (!emulatorTransports.get(transport) || !d.connection.avdName)
+      )
+        fail(
+          "invalid-config",
+          "An emulator ADB transport cannot be registered twice without distinct AVD names.",
+        );
+      emulatorTransports.set(transport, d.connection.avdName);
+    }
+    if (
+      d.connection.type === "adb" &&
+      d.connection.avdName &&
+      (d.kind !== "virtual" ||
+        d.platform !== "Android" ||
+        d.connection.hardwareId)
+    )
+      fail(
+        "invalid-config",
+        "An AVD name is only valid for Android virtual devices without a physical hardware serial.",
+      );
     if (
       d.connection.type === "capture" &&
       !c.sources.some((s) => s.id === d.captureSourceId && s.kind === "usb")

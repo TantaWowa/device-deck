@@ -6,6 +6,7 @@ import {
   registrationIssue,
 } from "./discovery";
 import { validateConfig } from "../../config/src";
+import { deviceIdentity } from "./local/identity";
 import type { DeviceConfig } from "./local/types";
 
 const device = (id: string, name = "TV"): DeviceConfig => ({
@@ -24,6 +25,75 @@ const discovery = (devices: DeviceConfig[]) => ({
   devices,
   sources: [],
   diagnostics: [],
+});
+
+test("AVD identity survives ADB serial changes and deduplicates legacy rows without merging different AVDs", () => {
+  const current = empty();
+  const configured: DeviceConfig = {
+    ...device("my-tv", "My TV"),
+    captureSourceId: null,
+    connection: {
+      type: "adb",
+      serial: "emulator-5554",
+      port: 5037,
+      avdName: "TV_35",
+    },
+  };
+  current.devices = [configured];
+  const rebound: DeviceConfig = {
+    ...device("found-tv"),
+    connection: {
+      type: "adb",
+      serial: "emulator-5560",
+      port: 5038,
+      avdName: "TV_35",
+    },
+  };
+  assert.equal(deviceIdentity(configured), deviceIdentity(rebound));
+  assert.equal(isDeviceConfigured(current, rebound), true);
+  const different: DeviceConfig = {
+    ...rebound,
+    connection: {
+      type: "adb",
+      serial: "emulator-5554",
+      port: 5037,
+      avdName: "Pixel_35",
+    },
+  };
+  assert.equal(
+    isDeviceConfigured(current, different),
+    false,
+    "An old serial may now belong to a different AVD",
+  );
+  current.devices = [
+    {
+      ...configured,
+      connection: { type: "adb", serial: "emulator-5554", port: 5037 },
+    },
+  ];
+  assert.equal(
+    isDeviceConfigured(current, different),
+    true,
+    "A serial-only legacy row is not duplicated during discovery",
+  );
+  const offline: DeviceConfig = {
+    ...rebound,
+    connection: {
+      type: "adb",
+      serial: "avd-found-tv",
+      port: 5037,
+      avdName: "TV_35",
+    },
+  };
+  const registered = registerDiscoveredDevices(empty(), discovery([offline]), [
+    offline.id,
+  ]);
+  validateConfig(registered.config);
+  assert.equal(
+    registered.config.devices[0].connection.type === "adb" &&
+      registered.config.devices[0].connection.avdName,
+    "TV_35",
+  );
 });
 
 test("bulk registration adds only selected devices, creates native screens, and resolves duplicate names", () => {

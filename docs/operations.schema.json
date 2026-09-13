@@ -201,6 +201,11 @@
                           "minLength": 1,
                           "maxLength": 256
                         },
+                        "avdName": {
+                          "type": "string",
+                          "maxLength": 256,
+                          "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]*$"
+                        },
                         "port": {
                           "type": "integer",
                           "minimum": 1,
@@ -407,6 +412,9 @@
             "type": "object",
             "properties": {
               "adb": {
+                "type": "string"
+              },
+              "emulator": {
                 "type": "string"
               },
               "ffmpeg": {
@@ -639,6 +647,32 @@
       "ids",
       "action",
       "reason"
+    ],
+    "additionalProperties": false,
+    "$schema": "http://json-schema.org/draft-07/schema#"
+  },
+  "devices.simulator": {
+    "type": "object",
+    "properties": {
+      "deviceId": {
+        "type": "string",
+        "minLength": 1
+      },
+      "action": {
+        "type": "string",
+        "enum": [
+          "launch",
+          "close"
+        ]
+      },
+      "confirmed": {
+        "type": "boolean",
+        "const": true
+      }
+    },
+    "required": [
+      "deviceId",
+      "action"
     ],
     "additionalProperties": false,
     "$schema": "http://json-schema.org/draft-07/schema#"

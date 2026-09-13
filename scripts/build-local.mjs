@@ -1,7 +1,16 @@
 import { build as bundle } from "esbuild";
 import { build as vite } from "vite";
-import { mkdir, rename } from "node:fs/promises";
+import { mkdir, rename, readFile, writeFile, rm } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
+import { parseArgs } from "node:util";
+const { values } = parseArgs({ options: { mode: { type: "string", default: "live" } } });
+const mode = values.mode;
+if (!["live", "test"].includes(mode)) throw new Error("Use --mode live or --mode test.");
+const { version } = JSON.parse(await readFile("package.json", "utf8"));
+const trust = JSON.parse(await readFile("config/releases/keygen.json", "utf8"))[mode];
+if (!trust?.productId || trust.mode !== mode || !/^[a-f0-9]{64}$/.test(trust.publicKey)) throw new Error("Release trust configuration is incomplete.");
+// Remove stale success metadata before starting any part of the build.
+await rm("build/build-metadata.json", { force: true });
 await mkdir("build/native", { recursive: true });
 execFileSync(
   "swiftc",
@@ -40,6 +49,7 @@ await bundle({
   format: "esm",
   minify: true,
   sourcemap: false,
+  define: { __DEVICE_DECK_RELEASE_MODE__: JSON.stringify(mode), __DEVICE_DECK_VERSION__: JSON.stringify(version) },
   outExtension: { ".js": ".mjs" },
   banner: {
     js: "import { createRequire as __createRequire } from 'node:module'; const require = __createRequire(import.meta.url);",
@@ -55,3 +65,12 @@ await vite({
   },
 });
 await rename("build/web/local.html", "build/web/index.html");
+for (const name of ["daemon", "devdeck", "tui", "mcp"]) {
+  const output = await readFile(`build/${name}.mjs`, "utf8");
+  if (/LocalLicenseManager|local-license\.ts|DEVICE_DECK_MOCK_PRO|KEYGEN_ADMIN_TOKEN/.test(output)) throw new Error(`Development or operator code leaked into ${name}.`);
+}
+await writeFile("build/build-metadata.json", JSON.stringify({
+  schema: 1, version, mode, arch: process.arch, builtAt: new Date().toISOString(),
+  commit: execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
+  licenseProductId: trust.productId,
+}, null, 2) + "\n");

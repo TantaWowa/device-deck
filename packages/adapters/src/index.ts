@@ -1,4 +1,6 @@
 import { androidKeys, rokuKeys, hidKeys } from "../../core/src/remote";
+import { controlSimulator, simulatorState } from "./simulator";
+import { AndroidEmulators, isAndroidEmulator } from "./android-emulator";
 import {
   mergeCaptureCards,
   type DetectedCard,
@@ -38,7 +40,10 @@ export type Discovery = {
   diagnostics: string[];
 };
 export class Adapters {
-  constructor(private getConfig: () => Config) {}
+  readonly emulators: AndroidEmulators;
+  constructor(private getConfig: () => Config) {
+    this.emulators = new AndroidEmulators(getConfig);
+  }
   tool(name: keyof Config["tools"]) {
     return (
       this.getConfig().tools[name] || (name === "python" ? "python3" : name)
@@ -54,7 +59,9 @@ export class Adapters {
         ["adb", "ffmpeg", "ffprobe", "idb"].map(async (n) =>
           (await available(this.tool(n as keyof Config["tools"])))
             ? ""
-            : `${n} not found; its capabilities are unavailable.`,
+            : n === "ffmpeg" || n === "ffprobe"
+              ? `${n} not found. Recording needs ffmpeg and ffprobe; USB screenshots also need ffmpeg. Install with brew install ffmpeg, then reopen Device Deck, or set the ffmpeg/ffprobe executable paths in Settings configuration.`
+              : `${n} not found; its capabilities are unavailable.`,
         ),
       )
     ).filter(Boolean);
@@ -87,6 +94,7 @@ export class Adapters {
             "devices",
             "-l",
           ]);
+          const emulators = await this.emulators.running(port);
           for (const line of stdout.toString().split("\n").slice(1)) {
             const [serial, state, ...parts] = line.trim().split(/\s+/);
             if (
@@ -97,6 +105,7 @@ export class Adapters {
             const model =
               parts.find((p) => p.startsWith("model:"))?.slice(6) || serial;
             let hardwareId: string | undefined;
+            const avdName = emulators.find((e) => e.serial === serial)?.avdName;
             if (state === "device" && !serial.startsWith("emulator-")) {
               hardwareId =
                 (
@@ -113,7 +122,9 @@ export class Adapters {
                   .toString()
                   .trim() || undefined;
             }
-            const id = uid("adb", hardwareId || serial),
+            const id = avdName
+                ? uid("avd", avdName)
+                : uid("adb", hardwareId || serial),
               nativeId = `native-${id}`;
             if (devices.some((d) => d.id === id)) continue;
             devices.push({
@@ -128,6 +139,7 @@ export class Adapters {
                 serial,
                 port,
                 ...(hardwareId ? { hardwareId } : {}),
+                ...(avdName ? { avdName } : {}),
               },
               captureSourceId: nativeId,
             });
@@ -137,6 +149,50 @@ export class Adapters {
               kind: "native",
               deviceId: id,
             });
+          }
+          try {
+            for (const avdName of await this.emulators.names()) {
+              const configured = this.getConfig().devices.find(
+                (d) =>
+                  d.connection.type === "adb" &&
+                  d.connection.avdName === avdName,
+              );
+              const configuredPort =
+                configured?.connection.type === "adb"
+                  ? configured.connection.port
+                  : 5037;
+              if (
+                configuredPort !== port ||
+                devices.some(
+                  (d) =>
+                    d.connection.type === "adb" &&
+                    d.connection.avdName === avdName,
+                )
+              )
+                continue;
+              const id = uid("avd", avdName),
+                nativeId = `native-${id}`;
+              devices.push({
+                id,
+                name: avdName,
+                model: "Android virtual device",
+                platform: "Android",
+                kind: "virtual",
+                visibility: "local",
+                connection: { type: "adb", serial: `avd-${id}`, port, avdName },
+                captureSourceId: nativeId,
+              });
+              sources.push({
+                id: nativeId,
+                name: `${avdName} native screen`,
+                kind: "native",
+                deviceId: id,
+              });
+            }
+          } catch (e) {
+            diagnostics.push(
+              `Android virtual devices: ${(e as Error).message}`,
+            );
           }
         }
       }),
@@ -315,7 +371,22 @@ export class Adapters {
           : "Capture card disconnected";
       }
       if (c.type === "adb") {
-        await this.verifyIdentity(d);
+        if (isAndroidEmulator(d)) {
+          const status = await this.emulators.inspect(d);
+          result.simulatorState = status.state;
+          result.healthDetail =
+            status.state === "shutdown"
+              ? "Android emulator stopped · Launch to use it"
+              : status.state === "unavailable"
+                ? "Android AVD unavailable in the configured SDK"
+                : `Android emulator ${status.state}`;
+          if (status.resolved) {
+            d = status.resolved;
+            result.connection = d.connection;
+          }
+          if (status.state !== "booted") return result;
+        }
+        d = await this.verifyIdentity(d);
         const { stdout } = await run(this.tool("adb"), [
           ...this.adb(d),
           "get-state",
@@ -334,20 +405,14 @@ export class Adapters {
         result.capabilities.push("key", "text");
       }
       if (c.type === "simulator") {
-        const data = JSON.parse(
-          (
-            await run("xcrun", [
-              "simctl",
-              "list",
-              "devices",
-              "available",
-              "--json",
-            ])
-          ).stdout.toString(),
-        );
-        result.online = Object.values(data.devices || {})
-          .flat()
-          .some((x: any) => x.udid === c.udid && x.state === "Booted");
+        result.simulatorState = await simulatorState(d);
+        result.online = result.simulatorState === "booted";
+        result.healthDetail =
+          result.simulatorState === "booted"
+            ? "Simulator running"
+            : result.simulatorState === "shutdown"
+              ? "Simulator stopped · Launch to use it"
+              : `Simulator ${result.simulatorState}`;
         if (result.online) {
           result.capabilities.push("restart");
           if (
@@ -422,7 +487,16 @@ export class Adapters {
     }
     return result;
   }
+  async simulator(d: DeviceConfig, action: "launch" | "close") {
+    if (isAndroidEmulator(d)) return this.emulators.control(d, action);
+    return controlSimulator(d, action);
+  }
+  async prepareSimulator(d: DeviceConfig) {
+    if (isAndroidEmulator(d)) return this.emulators.prepare(d);
+    return d;
+  }
   async verifyIdentity(d: DeviceConfig) {
+    if (isAndroidEmulator(d)) d = (await this.emulators.resolve(d))!;
     if (d.connection.type === "adb" && d.connection.hardwareId) {
       const serial = (
         await run(this.tool("adb"), [
@@ -441,6 +515,22 @@ export class Adapters {
           409,
         );
     }
+    return d;
+  }
+  async verifyCaptureTransport(d: DeviceConfig) {
+    if (!isAndroidEmulator(d)) return;
+    const current = await this.verifyIdentity(d);
+    if (
+      d.connection.type !== "adb" ||
+      current.connection.type !== "adb" ||
+      current.connection.serial !== d.connection.serial ||
+      current.connection.port !== d.connection.port
+    )
+      fail(
+        "capture-disconnected",
+        "The emulator connection changed during recording. The original recorder cannot be finalized on a different ADB transport.",
+        409,
+      );
   }
   async input(
     d: DeviceConfig,
@@ -448,7 +538,7 @@ export class Adapters {
   ) {
     const c = d.connection;
     if (c.type === "adb") {
-      await this.verifyIdentity(d);
+      d = await this.verifyIdentity(d);
       if (input.x !== undefined && input.y !== undefined) {
         await run(this.tool("adb"), [
           ...this.adb(d),
@@ -581,7 +671,7 @@ export class Adapters {
     fail("pairing-timeout", "Apple TV did not show a pairing PIN.", 504);
   }
   async screenshot(d: DeviceConfig) {
-    await this.verifyIdentity(d);
+    d = await this.verifyIdentity(d);
     if (d.connection.type === "adb")
       return (
         await run(this.tool("adb"), [
@@ -610,7 +700,7 @@ export class Adapters {
   }
   async restart(d: DeviceConfig) {
     if (d.connection.type === "adb") {
-      await this.verifyIdentity(d);
+      d = await this.verifyIdentity(d);
       await run(this.tool("adb"), [...this.adb(d), "reboot"]);
       return;
     }

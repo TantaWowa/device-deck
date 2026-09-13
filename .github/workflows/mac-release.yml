@@ -1,0 +1,158 @@
+name: Mac distribution
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: Team beta or signed public release (both Mac architectures)
+        type: choice
+        options: [team, public]
+        default: team
+      publish:
+        description: Publish both verified packages to Keygen after validation
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: mac-release-${{ inputs.channel || 'team' }}
+  cancel-in-progress: false
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - architecture: arm64
+            runner: macos-15
+          - architecture: x64
+            runner: macos-15-intel
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    # PR/team builds receive no release secrets. Only main's public build uses
+    # the environment containing Developer ID signing credentials.
+    environment: ${{ github.event_name == 'workflow_dispatch' && inputs.channel == 'public' && 'device-deck-public' || 'device-deck-build' }}
+    env:
+      RELEASE_CHANNEL: ${{ inputs.channel || 'team' }}
+      RELEASE_ARCH: ${{ matrix.architecture }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.17.0
+          package-manager-cache: false
+      - name: Validate release request
+        run: |
+          if [[ "$RELEASE_CHANNEL" == public && "$GITHUB_REF" != refs/heads/main ]]; then
+            echo 'Public releases must run from main.' >&2
+            exit 1
+          fi
+          node -e 'if(process.arch!==process.env.RELEASE_ARCH)throw Error("Runner architecture mismatch")'
+      - run: npm ci
+      - run: npm run check
+      - run: npm test
+      - run: npm run test:distribution
+      - name: Prepare public signing
+        if: github.event_name == 'workflow_dispatch' && inputs.channel == 'public'
+        env:
+          DEVICE_DECK_APPLICATION_P12: ${{ secrets.DEVICE_DECK_APPLICATION_P12 }}
+          DEVICE_DECK_INSTALLER_P12: ${{ secrets.DEVICE_DECK_INSTALLER_P12 }}
+          DEVICE_DECK_P12_PASSWORD: ${{ secrets.DEVICE_DECK_P12_PASSWORD }}
+          DEVICE_DECK_APPLE_ID: ${{ secrets.DEVICE_DECK_APPLE_ID }}
+          DEVICE_DECK_APPLE_TEAM_ID: ${{ secrets.DEVICE_DECK_APPLE_TEAM_ID }}
+          DEVICE_DECK_APPLE_APP_PASSWORD: ${{ secrets.DEVICE_DECK_APPLE_APP_PASSWORD }}
+        run: node scripts/distribution/ci-signing.mjs
+      - name: Build Mac installer
+        env:
+          DEVICE_DECK_APPLICATION_IDENTITY: ${{ vars.DEVICE_DECK_APPLICATION_IDENTITY }}
+          DEVICE_DECK_INSTALLER_IDENTITY: ${{ vars.DEVICE_DECK_INSTALLER_IDENTITY }}
+          DEVICE_DECK_NOTARY_PROFILE: device-deck
+        run: |
+          if [[ "$RELEASE_CHANNEL" == public ]]; then
+            npm run package:mac -- --mode live --release
+          else
+            npm run package:mac -- --mode test
+          fi
+      - name: Prove staged application lifecycle
+        run: |
+          mode=test
+          [[ "$RELEASE_CHANNEL" != public ]] || mode=live
+          npm run proof:mac -- --app "work/distribution/staging/$RELEASE_ARCH-$mode/payload/Applications/Device Deck.app"
+      - name: Validate actual package before keeping it
+        run: |
+          node --input-type=module <<'JS'
+          import {readdir} from 'node:fs/promises';
+          import {execFileSync} from 'node:child_process';
+          const files=(await readdir('work/distribution')).filter(f=>/^device-deck-.*\.json$/.test(f)&&!f.endsWith('.manifest.json'));
+          if(files.length!==1)throw Error('Expected one package metadata file');
+          const args=['scripts/release/publish-mac.mjs','--metadata',`work/distribution/${files[0]}`];
+          if(process.env.RELEASE_CHANNEL==='public')args.push('--release');
+          execFileSync(process.execPath,args,{stdio:'inherit'});
+          JS
+      - name: Keep installer and verification metadata
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: device-deck-${{ inputs.channel || 'team' }}-${{ matrix.architecture }}
+          path: |
+            work/distribution/*.pkg
+            work/distribution/*.sha256
+            work/distribution/*.json
+          if-no-files-found: error
+          retention-days: 30
+      - name: Remove temporary signing material
+        if: always()
+        run: node scripts/distribution/ci-signing.mjs --cleanup
+  publish:
+    needs: package
+    if: github.event_name == 'workflow_dispatch' && inputs.publish
+    runs-on: macos-15
+    timeout-minutes: 30
+    environment: ${{ inputs.channel == 'public' && 'device-deck-public' || 'device-deck-team' }}
+    env:
+      RELEASE_CHANNEL: ${{ inputs.channel }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.17.0
+          package-manager-cache: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: device-deck-${{ inputs.channel }}-*
+          merge-multiple: true
+          path: work/distribution
+      - name: Publish both architectures together
+        env:
+          KEYGEN_ACCOUNT_ID: ${{ vars.KEYGEN_ACCOUNT_ID }}
+          KEYGEN_TOKEN: ${{ secrets.KEYGEN_TOKEN }}
+          DEVICE_DECK_RELEASE_SIGNING_KEY: ${{ secrets.DEVICE_DECK_RELEASE_SIGNING_KEY }}
+        run: |
+          node --input-type=module <<'JS'
+          import {readdir,readFile,mkdir,writeFile} from 'node:fs/promises';
+          import {execFileSync} from 'node:child_process';
+          if(process.env.RELEASE_CHANNEL==='public'&&process.env.GITHUB_REF!=='refs/heads/main')throw Error('Public releases require main');
+          const files=(await readdir('work/distribution')).filter(f=>/^device-deck-.*\.json$/.test(f)&&!f.endsWith('.manifest.json'));
+          const metadata=await Promise.all(files.map(f=>readFile(`work/distribution/${f}`,'utf8').then(JSON.parse)));
+          if(files.length!==2||new Set(metadata.map(m=>m.arch)).size!==2||!metadata.every(m=>['arm64','x64'].includes(m.arch)))throw Error('Both verified Mac architectures are required');
+          if(!process.env.KEYGEN_TOKEN||!process.env.DEVICE_DECK_RELEASE_SIGNING_KEY)throw Error('Release publishing secrets are missing');
+          await mkdir('work/release-secrets',{recursive:true,mode:0o700});
+          await writeFile('work/release-secrets/release-signing.pem',process.env.DEVICE_DECK_RELEASE_SIGNING_KEY,{mode:0o600});
+          const args=['scripts/release/publish-mac.mjs',...files.flatMap(f=>['--metadata',`work/distribution/${f}`]),'--apply'];
+          if(process.env.RELEASE_CHANNEL==='public')args.push('--release');
+          execFileSync(process.execPath,args,{stdio:'inherit'});
+          JS
+      - name: Keep published manifests
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: device-deck-${{ inputs.channel }}-published-manifests
+          path: work/distribution/*.manifest.json
+          if-no-files-found: error
+          retention-days: 90
+      - name: Remove release signing key
+        if: always()
+        run: rm -rf work/release-secrets

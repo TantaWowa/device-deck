@@ -5,7 +5,7 @@ export function deviceIdentity(d: DeviceConfig) {
     case "capture":
       return `capture:${d.captureSourceId}`;
     case "adb":
-      return `adb:${c.hardwareId || c.serial}`;
+      return c.avdName ? `avd:${c.avdName}` : `adb:${c.hardwareId || c.serial}`;
     case "roku":
       return `roku:${c.serial}`;
     case "simulator":

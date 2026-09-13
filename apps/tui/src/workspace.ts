@@ -11,6 +11,8 @@ import {
   supportsRemoteKey,
 } from "../../../packages/core/src/remote";
 import {
+  supportsSimulatorLifecycle,
+  canLaunchSimulator,
   type Artifact,
   type Config,
   type Device,
@@ -341,7 +343,7 @@ export class Workspace {
             return {
               id: d.id,
               label: d.name,
-              meta: `${d.platform} · ${d.kind === "virtual" ? "Sim" : "Real"} · ${recording ? "REC" : d.locked ? "LOCKED" : session ? "RESERVED" : d.online ? "Ready" : "Offline"}`,
+              meta: `${d.platform} · ${d.kind === "virtual" ? "Sim" : "Real"} · ${recording ? "REC" : d.simulatorState === "starting" ? "Launching" : d.simulatorState === "stopping" ? "Closing" : d.locked ? "LOCKED" : session ? "RESERVED" : d.online ? "Ready" : d.simulatorState === "shutdown" ? "Stopped" : "Offline"}`,
               detail: [
                 d.name,
                 `${d.platform} · ${d.kind} · ${d.model}`,
@@ -515,7 +517,10 @@ export class Workspace {
     switch (this.view) {
       case "Devices":
         return [
-          "C Remote   R Reserve   S Screenshot   V Record   W View",
+          this.activeDevice() &&
+          supportsSimulatorLifecycle(this.activeDevice()!)
+            ? "O Launch / close sim   C Remote   R Reserve   S Shot   V Record"
+            : "C Remote   R Reserve   S Screenshot   V Record   W View",
           "/ Search   F Filters   X Clear   D Discover   Enter Actions",
         ];
       case "Feeds":
@@ -718,6 +723,28 @@ export class Workspace {
   }
   deviceActions(device: Device): Action[] {
     return [
+      ...(supportsSimulatorLifecycle(device)
+        ? [
+            {
+              key: "o",
+              label:
+                device.simulatorState === "starting"
+                  ? "Launching simulator…"
+                  : device.simulatorState === "stopping"
+                    ? "Closing simulator…"
+                    : device.online
+                      ? "Close simulator…"
+                      : "Launch simulator",
+              disabled:
+                device.locked ||
+                (!device.online && !canLaunchSimulator(device)) ||
+                ["starting", "stopping", "unavailable"].includes(
+                  device.simulatorState || "",
+                ),
+              run: () => this.simulator(device),
+            },
+          ]
+        : []),
       {
         key: "c",
         label: "Open remote",
@@ -803,6 +830,45 @@ export class Workspace {
           ),
       },
     ];
+  }
+  simulator(device: Device) {
+    if (!supportsSimulatorLifecycle(device)) return;
+    const action = device.online ? "close" : "launch";
+    const session = this.session(device.id),
+      lease = this.lease(device.id);
+    if (session && !lease) {
+      this.info("Simulator is reserved", [
+        `${session.owner}: ${session.reason}`,
+        "End the current session before changing simulator state. T offers an explicit takeover; then E ends and saves its recording.",
+      ]);
+      return;
+    }
+    const work = () =>
+      this.run(
+        action === "close" ? "Closing simulator" : "Launching simulator",
+        async () => {
+          if (session && lease) {
+            await this.io.call("sessions.release", lease);
+            this.leases.delete(device.id);
+            if (this.remoteId === device.id) this.remoteId = undefined;
+          }
+          await this.io.call("devices.simulator", {
+            deviceId: device.id,
+            action,
+            ...(action === "close" ? { confirmed: true } : {}),
+          });
+          this.notice(
+            `${device.name} ${action === "close" ? "closed" : "launched"}.`,
+          );
+        },
+      );
+    if (action === "close" || session)
+      this.confirm(
+        `${action === "close" ? "Close" : "Launch"} simulator?`,
+        `${device.name}. ${session ? `This ends your session${this.recording(device.id) ? " and stops and saves its recording" : ""} first. ` : ""}Other simulators stay open.`,
+        work,
+      );
+    else work();
   }
   activeDevice() {
     const s = this.snapshot,

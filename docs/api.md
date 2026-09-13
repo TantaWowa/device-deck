@@ -4,6 +4,8 @@ Every device operation passes through the daemon. The full input schemas are gen
 
 Reports default to today in the Mac timezone. See [report ranges and Capture Cards](reports-and-capture-cards.md) for timestamp/count semantics, date-range CLI examples and the `capture-cards.list` operation.
 
+Apple iOS/tvOS simulators and Android AVDs can be launched and closed directly in web Devices or with **O** in TUI Devices. The shared `devices.simulator` operation uses the configured UDID or exact AVD identity, requires confirmation to close, and protects reservations and recordings. See [simulator controls](simulator-controls.md).
+
 The `license.status`, `license.activate`, `license.refresh` and `license.deactivate` operations share the same daemon-owned entitlement state. Free allows one new active session and clean recording; concurrent sessions and recording annotations require a verified license. Existing work keeps its bounded lease when paid access ends. See [licensing commands and policy](licensing-and-billing.md).
 
 ## CLI walkthrough
@@ -19,9 +21,9 @@ Use `./devdeck` in an unpacked release. From source, use `node build/devdeck.mjs
 ./devdeck remote --device 'Desk TV' --owner George --reason 'Inspect player controls'
 ```
 
-`remote` with no selector offers an interactive device list. Enter a number or filter text/platform. Arrow keys control the chosen device, Enter selects, `b` goes back, `h` goes home, `t` sends text, `s` saves a screenshot, `c` copies a screenshot, and `r` toggles recording. `u` renews; `q` explicitly releases and exits. A noninteractive invocation never waits for a picker. Use a unique name or ID in scripts.
+`remote` with no selector offers an interactive device list. Enter a number or filter text/platform. Arrow keys control the chosen device, Enter selects, `b` goes back, `h` goes home, `t` sends text, `s` saves a screenshot, and `v` toggles recording. `u` renews; `q` asks to release the session and exit. A noninteractive invocation never waits for a picker. Use a unique name or ID in scripts.
 
-The separate `tui` command opens the full terminal inventory with owner/reason, selection, filtering, maintenance, history and capture access. Enter opens a credential-owned remote session.
+The separate `tui` command opens fixed-screen Devices, Feeds, Captures, Sessions, History, Reports, Settings and License menus. Keys 1–8 switch views, arrows select items, Enter opens item actions, and C opens a credential-owned remote. O launches or closes a selected Apple simulator or Android AVD.
 
 ```sh
 ./devdeck reserve --device 'Desk TV' --owner 'Agent A' --reason 'Playback regression' --ttl 15 --json
@@ -52,6 +54,8 @@ Other operations:
 ./devdeck lock --device 'Desk TV' --reason 'Cable maintenance'
 ./devdeck unlock --device 'Desk TV' --reason 'Cabling repaired'
 ./devdeck restart --device 'Android emulator' --reason 'Reset test state'
+./devdeck call devices.simulator '{"deviceId":"SIMULATOR_ID","action":"launch"}'
+./devdeck call devices.simulator '{"deviceId":"SIMULATOR_ID","action":"close","confirmed":true}'
 ./devdeck takeover --device 'Desk TV' --owner George --reason 'Previous client abandoned' --yes
 ./devdeck call captures.edit '{"id":"CAPTURE_ID","name":"Player focus","tags":["regression"]}'
 ./devdeck call captures.remove '{"ids":["CAPTURE_ID"],"confirmed":true}'

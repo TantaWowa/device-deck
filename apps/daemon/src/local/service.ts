@@ -21,6 +21,7 @@ import {
 import {
   operations,
   matchDevices,
+  supportsSimulatorLifecycle,
   fail,
   type Config,
   type Device,
@@ -63,6 +64,7 @@ export class DeckService {
   private timer?: ReturnType<typeof setInterval>;
   private shuttingDown = false;
   private changingConfig = false;
+  private simulatorActions = new Map<string, "launch" | "close">();
   diagnostics: string[] = [];
   constructor(
     readonly directory: string,
@@ -110,7 +112,19 @@ export class DeckService {
       );
     return s;
   }
-  private validateChange = (next: Config) => {
+  private validateChange = (next: Config, lifecycleDevice?: string) => {
+    for (const id of this.simulatorActions.keys()) {
+      if (id === lifecycleDevice) continue;
+      if (
+        JSON.stringify(this.device(id)) !==
+        JSON.stringify(next.devices.find((d) => d.id === id))
+      )
+        fail(
+          "device-busy",
+          "Wait for simulator launch or shutdown before changing this device.",
+          409,
+        );
+    }
     const active = this.store.sessions().filter((s) => s.state !== "closed");
     for (const s of active) {
       if (
@@ -128,12 +142,12 @@ export class DeckService {
         );
     }
     if (
-      active.length &&
+      (active.length || this.simulatorActions.size) &&
       JSON.stringify(next.tools) !== JSON.stringify(this.config.config.tools)
     )
       fail(
         "device-busy",
-        "Release sessions before changing adapter executables.",
+        "Release sessions and wait for simulator launch or shutdown before changing adapter executables.",
         409,
       );
   };
@@ -188,6 +202,18 @@ export class DeckService {
   private decorate(ds: Device[]) {
     return ds.map((d) => ({
       ...d,
+      ...(this.simulatorActions.has(d.id)
+        ? {
+            simulatorState:
+              this.simulatorActions.get(d.id) === "launch"
+                ? ("starting" as const)
+                : ("stopping" as const),
+            healthDetail:
+              this.simulatorActions.get(d.id) === "launch"
+                ? "Launching simulator…"
+                : "Closing simulator…",
+          }
+        : {}),
       locked: !!this.store.lockReason(d.id),
       lockReason: this.store.lockReason(d.id),
     }));
@@ -313,6 +339,36 @@ export class DeckService {
             );
           const d = matches[0];
           if (!d.online) fail("device-offline", d.healthDetail, 409);
+          if (supportsSimulatorLifecycle(d) && d.connection.type === "adb") {
+            const configured = this.device(d.id);
+            const resolved = await this.adapters.verifyIdentity(configured);
+            if (
+              resolved.connection.type !== "adb" ||
+              !resolved.connection.avdName
+            )
+              fail(
+                "emulator-identity-required",
+                "Wait for this emulator's AVD identity to become available before reserving it. Discover again or set its exact AVD name in Edit device.",
+                409,
+              );
+            if (
+              JSON.stringify(configured.connection) !==
+              JSON.stringify(resolved.connection)
+            ) {
+              const next = structuredClone(this.config.config);
+              next.devices = next.devices.map((device) =>
+                device.id === d.id
+                  ? { ...device, connection: resolved.connection }
+                  : device,
+              );
+              await this.config.save(
+                next,
+                this.config.revision,
+                this.validateChange,
+              );
+              this.healthAt = 0;
+            }
+          }
           const source = this.config.config.sources.find(
             (s) => s.id === d.captureSourceId,
           );
@@ -385,12 +441,114 @@ export class DeckService {
           origin,
         );
       }
+      case "devices.simulator": {
+        await this.refresh();
+        const device = await this.global.run(async () => {
+          if (this.changingConfig || this.shuttingDown)
+            fail(
+              "configuration-changing",
+              "Wait for the current configuration change.",
+              409,
+            );
+          let device = this.device(args.deviceId);
+          if (!supportsSimulatorLifecycle(device))
+            fail(
+              "unsupported-lifecycle",
+              "Launch and close are supported for configured Apple iOS/tvOS simulators and Android emulators.",
+            );
+          if (args.action === "close" && args.confirmed !== true)
+            fail(
+              "confirmation-required",
+              "Confirm before closing this simulator.",
+            );
+          const session = this.store
+            .sessions()
+            .find((s) => s.deviceId === device.id && s.state !== "closed");
+          if (session)
+            fail(
+              "device-reserved",
+              `Reserved by ${session.owner}. End its session and save any recording before ${args.action === "launch" ? "launching" : "closing"} the simulator.`,
+              409,
+            );
+          if (this.store.lockReason(device.id))
+            fail(
+              "device-locked",
+              "Unlock this device before changing simulator state.",
+              409,
+            );
+          this.simulatorActions.set(device.id, args.action);
+          this.store.lock(
+            device.id,
+            args.action === "launch"
+              ? "Simulator launch in progress"
+              : "Simulator shutdown in progress",
+          );
+          try {
+            // Learn an existing emulator's AVD only from its exact live ADB transport.
+            const resolved = await this.adapters.prepareSimulator(device);
+            if (
+              resolved.connection.type === "adb" &&
+              resolved.connection.avdName &&
+              JSON.stringify(resolved.connection) !==
+                JSON.stringify(device.connection)
+            ) {
+              const next = structuredClone(this.config.config);
+              next.devices = next.devices.map((d) =>
+                d.id === device.id
+                  ? { ...d, connection: resolved.connection }
+                  : d,
+              );
+              await this.config.save(next, this.config.revision, (next) =>
+                this.validateChange(next, device.id),
+              );
+              device = this.device(device.id);
+              this.healthAt = 0;
+            }
+            return device;
+          } catch (error) {
+            this.simulatorActions.delete(device.id);
+            this.store.lock(device.id, null);
+            throw error;
+          }
+        });
+        return this.queue(device.id).run(async () => {
+          try {
+            const source = this.config.config.sources.find(
+              (s) => s.id === device.captureSourceId,
+            );
+            if (args.action === "close" && source?.kind === "native")
+              await this.capture.closeSource(source);
+            const result = await this.adapters.simulator(device, args.action);
+            this.store.event({
+              deviceId: device.id,
+              owner: origin,
+              action: `simulator-${args.action}`,
+              detail:
+                args.action === "launch"
+                  ? "Launched simulator"
+                  : "Closed simulator",
+            });
+            return result;
+          } finally {
+            this.simulatorActions.delete(device.id);
+            this.store.lock(device.id, null);
+            if (this.healthPending) await this.healthPending.catch(() => {});
+            this.healthAt = 0;
+          }
+        });
+      }
       case "devices.bulk":
         return Promise.all(
           [...new Set<string>(args.ids)].map((id) =>
             this.queue(id).run(async () => {
               try {
                 const d = this.device(id);
+                if (this.simulatorActions.has(id))
+                  fail(
+                    "device-busy",
+                    "Wait for simulator launch or close to finish.",
+                    409,
+                  );
                 if (
                   this.store
                     .sessions()
@@ -830,13 +988,17 @@ export class DeckService {
         a.path,
         this.config.config.settings.maxRecordingMinutes,
         (worker) =>
-          this.store.worker(a.id, { ...worker, path: a.path, device: d }),
+          this.store.worker(a.id, {
+            ...worker,
+            path: a.path,
+            device: worker.device || d,
+          }),
       );
       a.createdAt = handle.startedAt;
       this.store.worker(a.id, {
         pid: handle.pid,
         path: a.path,
-        device: d,
+        device: handle.device || d,
         remotePid: handle.remotePid,
         remotePath: handle.remotePath,
       });
@@ -1033,6 +1195,12 @@ export class DeckService {
       );
   }
   private async cleanWorker(worker: any) {
+    if (
+      worker.remotePath &&
+      worker.device?.connection.type === "adb" &&
+      worker.device.connection.avdName
+    )
+      worker.device = await this.adapters.verifyIdentity(worker.device);
     const needle = worker.remotePath || worker.path;
     if (
       worker.remotePath &&
@@ -1199,6 +1367,11 @@ export class DeckService {
         .sessions()
         .filter((s) => s.state !== "closed")
         .map((s) => this.closeSession(s.id, "Service stopped")),
+    );
+    await Promise.all(
+      [...this.simulatorActions.keys()].map((id) =>
+        this.queue(id).run(async () => {}),
+      ),
     );
     await this.capture.close();
     this.store.close();

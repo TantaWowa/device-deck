@@ -11,6 +11,7 @@ import { dataDirectory } from "../../../packages/core/src/local/paths";
 import { root } from "../../../packages/adapters/src";
 import { run } from "../../../packages/adapters/src/process";
 import { atomicWrite } from "../../../packages/config/src";
+import { existsSync } from "node:fs";
 const plist = path.join(
   os.homedir(),
   "Library/LaunchAgents/com.tantawowa.device-deck.plist",
@@ -18,6 +19,21 @@ const plist = path.join(
 const label = `gui/${process.getuid!()}/com.tantawowa.device-deck`;
 const escape = (s: string) =>
   s.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+// Launch the packaged daemon through LaunchServices so camera access belongs to
+// Device Deck even when the entry point is a terminal, TUI or login service.
+export function packagedApplication() {
+  const bundle = path.resolve(root, "../..");
+  return root.endsWith("/Contents/Resources") &&
+    existsSync(path.join(bundle, "Contents/MacOS/Device Deck"))
+    ? bundle
+    : undefined;
+}
+function applicationArgs(bundle: string, directory: string) {
+  return ["-n", "-g", "-a", bundle, "--args", "--service", "--profile", directory,
+    ...["DEVICE_DECK_CONFIG", "DEVICE_DECK_PORT"].flatMap((key) =>
+      process.env[key] ? [key === "DEVICE_DECK_CONFIG" ? "--config" : "--port", process.env[key]!] : []),
+  ];
+}
 export async function lifecycle(command: string, launchArgs?: string[]) {
   const directory = dataDirectory(),
     entry = path.join(root, "build/daemon.mjs");
@@ -27,15 +43,20 @@ export async function lifecycle(command: string, launchArgs?: string[]) {
       await callService("health");
       return "Device Deck is already running.";
     } catch {}
-    const log = await open(path.join(directory, "daemon.log"), "a", 0o600);
-    const child = spawn(process.execPath, launchArgs || [entry], {
-      detached: true,
-      stdio: ["ignore", log.fd, log.fd],
-      env: process.env,
-    });
-    child.unref();
-    await log.close();
-    for (let i = 0; i < 100; i++) {
+    const bundle = packagedApplication();
+    if (bundle && !launchArgs) {
+      await run("/usr/bin/open", applicationArgs(bundle, directory));
+    } else {
+      const log = await open(path.join(directory, "daemon.log"), "a", 0o600);
+      const child = spawn(process.execPath, launchArgs || [entry], {
+        detached: true,
+        stdio: ["ignore", log.fd, log.fd],
+        env: process.env,
+      });
+      child.unref();
+      await log.close();
+    }
+    for (let i = 0; i < 300; i++) {
       try {
         await callService("health");
         return "Device Deck started.";
@@ -49,7 +70,9 @@ export async function lifecycle(command: string, launchArgs?: string[]) {
   }
   if (command === "stop") {
     const ep = await endpoint();
-    await callService("health");
+    const health = await callService("health");
+    if (health.pid !== ep.pid)
+      throw new Error("The service changed while checking its identity. Run devdeck status and retry.");
     // A matching authenticated endpoint confirms that the PID belongs to this daemon.
     process.kill(ep.pid, "SIGTERM");
     for (let i = 0; i < 150; i++) {
@@ -74,11 +97,12 @@ export async function lifecycle(command: string, launchArgs?: string[]) {
     } catch {}
     if (running) {
       const inventory = await callOperation("inventory");
-      if (inventory.recordings.length)
+      if (inventory.recordings.length || inventory.sessions.some((s: { state: string }) => s.state !== "closed"))
         throw new Error(
-          "Stop active recordings before installing the login service.",
+          "Finish active reservations and recordings before installing the login service.",
         );
-      await lifecycle("stop");
+      const stopped = await lifecycle("stop");
+      if (stopped !== "Device Deck stopped.") throw new Error(stopped);
     }
     await mkdir(path.dirname(plist), { recursive: true });
     const pathValue = [
@@ -91,9 +115,13 @@ export async function lifecycle(command: string, launchArgs?: string[]) {
       "/sbin",
       process.env.PATH || "",
     ].join(":");
+    const bundle = packagedApplication();
+    const programArguments = bundle
+      ? ["/usr/bin/open", ...applicationArgs(bundle, directory)]
+      : [process.execPath, entry];
     await atomicWrite(
       plist,
-      `<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>Label</key><string>com.tantawowa.device-deck</string><key>ProgramArguments</key><array><string>${escape(process.execPath)}</string><string>${escape(entry)}</string></array><key>RunAtLoad</key><true/><key>EnvironmentVariables</key><dict><key>DEVICE_DECK_HOME</key><string>${escape(directory)}</string><key>PATH</key><string>${escape(pathValue)}</string>${[
+      `<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>Label</key><string>com.tantawowa.device-deck</string><key>ProgramArguments</key><array>${programArguments.map((value) => `<string>${escape(value)}</string>`).join("")}</array><key>RunAtLoad</key><true/><key>EnvironmentVariables</key><dict><key>DEVICE_DECK_HOME</key><string>${escape(directory)}</string><key>PATH</key><string>${escape(pathValue)}</string>${[
         "DEVICE_DECK_CONFIG",
         "DEVICE_DECK_PORT",
       ]
@@ -125,6 +153,13 @@ export async function lifecycle(command: string, launchArgs?: string[]) {
     );
   }
   if (command === "uninstall") {
+    let running = false;
+    try { await callService("health"); running = true; } catch {}
+    if (running) {
+      const inventory = await callOperation("inventory");
+      if (inventory.recordings.length || inventory.sessions.some((s: { state: string }) => s.state !== "closed"))
+        throw new Error("Finish active reservations and recordings before removing the login service.");
+    }
     await run("/bin/launchctl", ["bootout", label]).catch(() => {});
     try {
       await lifecycle("stop");

@@ -1,3 +1,6 @@
+import configured from "../../../config/releases/keygen.json";
+declare const __DEVICE_DECK_RELEASE_MODE__: "live" | "test";
+export const releaseMode = typeof __DEVICE_DECK_RELEASE_MODE__ === "undefined" ? "live" : __DEVICE_DECK_RELEASE_MODE__;
 export type LicensingTrust = {
   mode: "test" | "live";
   accountId: string;
@@ -7,10 +10,9 @@ export type LicensingTrust = {
   trialPolicyId?: string;
   checkoutUrl?: string;
 };
-// Release-owned public trust anchors. Set through a reviewed source change after
-// provisioning Device Deck's own product. Never read these from user config/env.
-// An unconfigured build runs Free; it cannot activate any paid or trial license.
-export const releaseTrust: LicensingTrust | null = null;
+// Reviewed public configuration is compiled into the release. Runtime config,
+// environment variables and downloaded files cannot change these trust anchors.
+export const releaseTrust: LicensingTrust = { ...configured[releaseMode], mode: releaseMode };
 export const OFFLINE_SECONDS = 24 * 60 * 60;
 export const FEATURES = {
   concurrent: "DEVICE_DECK_CONCURRENT_SESSIONS",

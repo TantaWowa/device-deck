@@ -1,63 +1,23 @@
-# Proposed installation and update regime
+# Installation and distribution regime
 
-Recommendation, 13 September 2026. This is an implementation plan; the commands and packages described as proposed below are not published. The existing account was checked read-only and has capacity for separate Device Deck production and test products without buying another Keygen subscription.
+Device Deck ships as a Mac application inside a `.pkg`. The app includes its Node runtime, web dashboard, daemon, CLI, TUI, MCP entry point and native capture helper. Team releases use the separate TEST Keygen product; signed public releases use LIVE. The operator commands are in [Mac packaging](macos-distribution.md), [release publishing](release-publishing.md), and [team rollout](team-rollout.md).
 
-Use Lemon Squeezy for checkout and subscription administration, Keygen for Device Deck licenses and release hosting, and a signed Mac application distributed through one installer plus a Homebrew cask. Keep the current Free/Pro feature split. A new customer should be able to install and use Free before purchasing or entering a license.
+| Component | Responsibility and current state |
+| --- | --- |
+| Mac application and installer | Implemented and proved with an isolated staged profile. Public signing/notarization requires Apple identities. |
+| Keygen | Separate products, Pro/trial policies, public trust and ordinary owner license provisioned. Real activation/refresh/deactivation verified. |
+| GitHub Actions | Matching Apple Silicon/Intel build jobs, package proof, and one publication step for all architecture artifacts. Scoped team/public credentials configured; public environment restricted to main. |
+| Update client | Verifies signed release identity and hash, then downloads a package for explicit installation. The installer rejects replacement while the app is running. |
+| Homebrew | Cask generator consumes signed public manifests; publish the reviewed output to a public TantaWowa tap after stable acceptance. |
+| Lemon Squeezy | Automatic issuance/reconciliation and browser retrieval implemented, with a persistent Docker/Caddy deployment. Real store credentials, hosting and test checkout remain to be supplied. |
+| npm | Private legacy launcher retained. The Mac installer is the supported initial route. |
 
-## Distribution choices
+The existing Keygen Std 1 account permits five products; four are now used, including the two existing Hosanna products. No additional subscription was purchased. Its distribution API supports public (`OPEN`) and license-gated (`LICENSED`) products; Device Deck uses both for live/test separation. [Keygen distribution strategies](https://keygen.sh/docs/api/products/).
 
-| Component                   | Recommended responsibility                                                                                                                                      |
-| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Device Deck Mac application | Own the daemon, capture helper, runtime, local web assets, CLI, TUI and MCP entry points.                                                                       |
-| Signed and notarized `.pkg` | Install the application and stable `devdeck` command. Offer the same versioned package from the website and Homebrew.                                           |
-| TantaWowa Homebrew tap      | Provide a cask for the Mac package and upgrades. An independent public tap avoids depending on acceptance into Homebrew's central repository.                   |
-| Keygen                      | Issue and validate product-specific licenses; host immutable application releases and update metadata.                                                          |
-| Lemon Squeezy               | Checkout, subscriptions, receipts and merchant-of-record responsibilities; feed authoritative billing changes into the issuer service.                          |
-| npm                         | Optional developer convenience after the Mac package works. A small launcher should use the same release stream rather than create another independent install. |
+Lemon Squeezy can host purchased files and generate its own license keys, but Device Deck already verifies Keygen's signed offline certificates. Keep Lemon responsible for checkout/subscription administration and Keygen responsible for licenses and immutable releases. Leave Lemon's native license-key generation off to avoid issuing an incompatible second key. [Lemon file API](https://docs.lemonsqueezy.com/api/files/the-file-object), [native licensing](https://docs.lemonsqueezy.com/help/licensing/generating-license-keys).
 
-Keygen's current Standard tiers include binary and npm distribution. Its product API supports public (`OPEN`) and license-gated (`LICENSED`) releases. For the current Free/Pro model, use public application downloads and require a license only to activate paid features. This is a proposed change from the protected-download installer scaffold; proprietary source can remain private. [Keygen pricing](https://keygen.sh/pricing/), [distribution strategies](https://keygen.sh/docs/api/products/).
+The current team package requires external FFmpeg for recording and USB screenshots; Roku control and USB preview are included. The app offers targeted Capture setup instructions. A future bundled encoder must include a verified relocatable dependency set and the matching source/license materials, as enforced by the packaging script.
 
-Homebrew supports `.pkg` installers and CLI links through cask definitions. Use immutable version URLs and SHA-256 checksums, with a matching uninstall definition that removes software but preserves user data. Proposed install command: `brew install --cask tantawowa/tap/device-deck`. Verify the final tap name when publishing. [Homebrew cask documentation](https://docs.brew.sh/Cask-Cookbook).
+Upgrades preserve user profiles, licenses, pairings and capture files. Finish reservations and recordings, quit the app, then install the verified package. Keep the previous compatible installer and a stopped-profile backup before accepting a data migration. Homebrew users should upgrade through Homebrew. No automatic application replacement or rollback is claimed in this beta.
 
-## First installation
-
-1. Build separate Apple Silicon and Intel artifacts. Ship only architectures that pass the hardware and lifecycle checks below.
-2. Package a private Node runtime alongside the existing bundled JavaScript, web assets and compiled capture helper. Users should not need npm, NVM, Xcode or a TypeScript build to launch the product.
-3. Sign the application and nested executable code, then sign, notarize and staple the installer using the appropriate Apple Developer ID identities. Retain stable application/helper identifiers across versions. [Apple notarization guidance](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution).
-4. Install a stable CLI launcher into a standard command directory, handling an existing development launcher or another installation explicitly. CLI, TUI, MCP and the web UI must reach the same selected application/profile.
-5. On first launch, initialize the user profile and offer launch-at-login. The capture service must run as the user; installer privileges must not become daemon privileges.
-6. Request camera access from the Device Deck application. Prove on a clean Mac that permission attribution and reuse work when later launched through the CLI and after an upgrade. The development helper currently inherits its launching application's permission identity.
-7. Discover devices and capture cards, offer bulk add, and show all usable feeds immediately. Make USB bindings explicit.
-8. Show adapter readiness per platform. Bundle permitted capture dependencies or provide targeted setup for them. Keep Xcode/simulator tooling, ADB authorization and TV pairing conditional on the selected device; do not require every SDK for USB/Roku users.
-
-The first supported distribution should bundle the runtime, rather than depend on the customer's global Node installation. A single executable can be evaluated later, but it still needs web assets and platform helpers, and packaging does not make local JavaScript impossible to inspect. Node offers single executable applications; Device Deck's complete daemon/helper lifecycle has not been proved in that format. [Node SEA documentation](https://nodejs.org/api/single-executable-applications.html).
-
-## Licensing and purchase
-
-Create distinct `device-deck` and `device-deck-test` Keygen products. Pin product-specific public trust, Pro/trial policies and the existing feature entitlements in the release. Retain the normal signed-certificate and offline-expiry verification. An owner license should be an ordinary complimentary license.
-
-Complete the existing Lemon Squeezy bridge so a successful purchase creates or reuses the correct Keygen customer/license, delivers activation instructions, and reconciles renewals, cancellation, expiry, refunds and chargebacks idempotently. Keep Lemon's own key generation disabled while Keygen is the authority. Test the lifecycle against provider test mode before enabling paid checkout.
-
-Lemon Squeezy can alternatively provide native license keys, purchased file downloads and file versions. A desktop updater still needs application-side integration. Its file API returns expiring, rate-limited download URLs, so those URLs should not be pasted into a static Homebrew cask. Retaining Keygen fits our existing signed offline-license implementation and already-paid distribution capacity. [Lemon file versions](https://docs.lemonsqueezy.com/help/products/managing-file-versions), [file API](https://docs.lemonsqueezy.com/api/files/the-file-object), [native licensing](https://docs.lemonsqueezy.com/help/licensing/generating-license-keys).
-
-## Updates and rollback
-
-Publish immutable, signed releases with architecture, minimum OS, version, checksum and size. Keep stable and beta channels separate. Do not make a moving `latest` artifact the integrity anchor.
-
-Homebrew installations use `brew upgrade --cask device-deck`. Direct installations offer Check for Updates and launch the verified installer; an automatic updater can follow once this flow works. Record installation ownership so the in-app updater does not overwrite a Homebrew-managed installation.
-
-Stage and verify an update before changing the active application. Defer replacement while any client has a reservation or recording; never kill an active capture to upgrade. Stop an idle daemon cleanly, back up configuration/database state before migrations, install, restart and check health. On failure, restore the previous compatible application and data snapshot. Preserve captures, device identities, pairings and licenses. Keep rollback constrained by data-schema compatibility.
-
-The CLI currently uses `devdeck install` for login-service installation, while the npm scaffold also uses `install` for runtime downloads. Resolve that command collision before publishing: use explicit `service install/uninstall` commands and reserve package installation/update commands for the application runtime, with compatibility aliases where appropriate.
-
-## Work remaining in this repository
-
-| Existing foundation                                                             | Required release work                                                                                                    |
-| ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| Bundled CLI, daemon, TUI, MCP, web assets and Swift helper                      | Self-contained application package, signed/notarized artifacts, Intel validation and consistent launch identity.         |
-| Signed release metadata, archive verification and versioned protected installer | Public Free onboarding/downloads, release publishing, stable launch path, channel selection and safe upgrade/rollback.   |
-| Real Keygen validation and offline certificates                                 | Provision Device Deck products/policies and replace the null release trust configuration.                                |
-| Subscription reconciliation bridge                                              | Automatic purchase-to-license issuance/delivery, refund/chargeback coverage and provider sandbox verification.           |
-| npm installer package                                                           | Choose wrapper behavior, eliminate command collisions and intentionally configure publication. It remains private today. |
-
-Release checks: clean Mac with no Node; launch through app, CLI, TUI and MCP; camera permission attributed correctly; three simultaneous USB feeds; concurrent capture; bulk discovery; Free-to-Pro activation; offline expiry; cancellation/refund; upgrade deferral during recording; rollback; uninstall preserving captures and settings. None of the proposed publishing, account provisioning or billing changes has been performed by writing this plan.
+Before public distribution, complete clean-Mac Camera/Gatekeeper/capture checks and genuine Lemon test-mode lifecycle tests, then sign, notarize and staple the public installer. [Apple notarization guidance](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution).

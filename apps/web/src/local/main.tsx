@@ -1,5 +1,6 @@
 import { FloatingRemote } from "./FloatingRemote";
 import { DeviceControls } from "./DeviceControls";
+import { SimulatorControls } from "./SimulatorControls";
 import { FeedActions, type FeedAction } from "./FeedActions";
 import { DiscoveryDevices } from "./DiscoveryDevices";
 import { registerDiscoveredDevices } from "../../../../packages/core/src/discovery";
@@ -846,7 +847,15 @@ function App() {
                             <span
                               className={`live-status ${d.online ? "green" : ""}`}
                             >
-                              {d.online ? "Online" : "Offline"}
+                              {d.simulatorState === "starting"
+                                ? "Launching…"
+                                : d.simulatorState === "stopping"
+                                  ? "Closing…"
+                                  : d.simulatorState === "shutdown"
+                                    ? "Stopped"
+                                    : d.online
+                                      ? "Online"
+                                      : "Offline"}
                             </span>
                             {d.locked && (
                               <span className="live-status amber">
@@ -911,6 +920,21 @@ function App() {
                           </td>
                           <td>
                             <div className="live-row-actions">
+                              <SimulatorControls
+                                device={d}
+                                session={s}
+                                lease={credentials(d.id)}
+                                recording={data.recordings.some(
+                                  (r) => r.deviceId === d.id,
+                                )}
+                                refresh={refresh}
+                                manageSession={() =>
+                                  setControl({
+                                    deviceId: d.id,
+                                    action: "reserve",
+                                  })
+                                }
+                              />
                               <button onClick={() => openViewer([d.id])}>
                                 View
                               </button>
@@ -1571,6 +1595,9 @@ function DeviceEditor({
             ? device.connection.hardwareId || ""
             : "",
     ),
+    [avdName, setAvdName] = useState(
+      device?.connection.type === "adb" ? device.connection.avdName || "" : "",
+    ),
     [port, setPort] = useState(
       device?.connection.type === "adb" ? device.connection.port : 5037,
     ),
@@ -1595,8 +1622,9 @@ function DeviceEditor({
                 : type === "adb"
                   ? {
                       type,
-                      serial: address,
+                      serial: address || `avd-${id}`,
                       port,
+                      ...(avdName.trim() ? { avdName: avdName.trim() } : {}),
                       ...(identity ? { hardwareId: identity } : {}),
                     }
                   : type === "simulator"
@@ -1630,7 +1658,9 @@ function DeviceEditor({
                         : "Apple",
                 kind:
                   type === "simulator" ||
-                  (type === "adb" && address.startsWith("emulator-"))
+                  (type === "adb" &&
+                    (Boolean(avdName.trim()) ||
+                      address.startsWith("emulator-")))
                     ? "virtual"
                     : "physical",
                 model: device?.model || "",
@@ -1686,7 +1716,7 @@ function DeviceEditor({
                 ? "ADB serial"
                 : "Device UDID"}
             <input
-              required
+              required={type !== "adb" || !avdName.trim()}
               value={address}
               onChange={(e) => setAddress(e.target.value)}
             />
@@ -1714,6 +1744,20 @@ function DeviceEditor({
               value={port}
               onChange={(e) => setPort(Number(e.target.value))}
             />
+          </label>
+        )}
+        {type === "adb" && (
+          <label>
+            Android virtual device (AVD) name
+            <input
+              value={avdName}
+              onChange={(e) => setAvdName(e.target.value)}
+              placeholder="Optional · exact name from Android Studio"
+            />
+            <small>
+              For emulators only. Device Deck resolves its current ADB serial
+              after launch.
+            </small>
           </label>
         )}
         {type === "simulator" && (
@@ -2041,26 +2085,26 @@ function SettingsView({
               />
             </label>
             <h2>Adapter executables</h2>
-            {(["adb", "ffmpeg", "ffprobe", "idb", "python"] as const).map(
-              (tool) => (
-                <label key={tool}>
-                  {tool}
-                  <input
-                    placeholder="Use PATH"
-                    value={config.tools[tool] || ""}
-                    onChange={(e) =>
-                      setConfig({
-                        ...config,
-                        tools: {
-                          ...config.tools,
-                          [tool]: e.target.value || undefined,
-                        },
-                      })
-                    }
-                  />
-                </label>
-              ),
-            )}
+            {(
+              ["adb", "emulator", "ffmpeg", "ffprobe", "idb", "python"] as const
+            ).map((tool) => (
+              <label key={tool}>
+                {tool}
+                <input
+                  placeholder="Use PATH"
+                  value={config.tools[tool] || ""}
+                  onChange={(e) =>
+                    setConfig({
+                      ...config,
+                      tools: {
+                        ...config.tools,
+                        [tool]: e.target.value || undefined,
+                      },
+                    })
+                  }
+                />
+              </label>
+            ))}
           </>
         )}
         <div className="live-actions">

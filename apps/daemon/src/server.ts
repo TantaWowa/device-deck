@@ -1,3 +1,4 @@
+import { version } from "../../../packages/core/src/version";
 import http from "node:http";
 import path from "node:path";
 import { createReadStream } from "node:fs";
@@ -115,7 +116,7 @@ export function createService(
         if (req.method === "GET" && url.pathname === "/v1/health") {
           reply(200, {
             status: "ready",
-            version: "0.4.0",
+            version,
             mode: "local",
             pid: process.pid,
             operations: Object.keys(operations),

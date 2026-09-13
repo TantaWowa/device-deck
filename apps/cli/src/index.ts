@@ -28,12 +28,19 @@ import path from "node:path";
 import { lifecycle } from "./lifecycle";
 import { pick, parseSelector } from "./selection";
 import { selectFeeds, feedQuery } from "./feeds";
+import { checkMacUpdates, compareVersions, downloadMacUpdate } from "../../../packages/installer/src/mac-update";
+import { releaseMode } from "../../../packages/licensing/src/trust";
+import { version } from "../../../packages/core/src/version";
 const help = `Device Deck · local Mac device manager
 Usage: devdeck <command> [options]
 
   init                         Create a local config file
   start | stop | status | logs  Run and inspect the daemon
   install | uninstall          Enable/remove the login service
+  service <action>             Explicit start/stop/status/logs/install/uninstall
+  version | doctor             Inspect installed version and capture readiness
+  update check|download        Find/download a verified Mac installer
+       [--channel beta|stable] [--key-file FILE] [--output DIRECTORY]
   ui | tui | mcp               Open the dashboard, terminal UI or MCP server
   discover                     Find connected targets and capture cards
   feeds                        List capture feeds and stable IDs
@@ -88,16 +95,20 @@ const optionTypes: Record<string, { type: "string" | "boolean" }> =
       "end",
       "source",
       "sources",
+      "channel",
+      "key-file",
+      "output",
     ].map((k) => [k, { type: "string" }]),
   );
-for (const key of ["json", "help", "clipboard", "yes", "mux", "browser"])
+for (const key of ["json", "help", "clipboard", "yes", "mux", "browser", "version"])
   optionTypes[key] = { type: "boolean" };
 try {
   const { values: v, positionals: p } = parseArgs({
     allowPositionals: true,
     options: optionTypes,
   });
-  const command = p[0];
+  const command = v.version ? "version" : p[0] === "service" ? (p[1] || "status") : p[0];
+  if (p[0] === "service" && !["start", "stop", "status", "logs", "install", "uninstall"].includes(command)) throw new DeckError("arguments", "Use service start, stop, status, logs, install or uninstall.", 400);
   if (!command || v.help) {
     console.log(help);
   } else {
@@ -121,7 +132,35 @@ try {
       return String(v.reason);
     };
     let result: unknown;
-    if (command === "status") result = await callService("health");
+    if (command === "version") result = { version, mode: releaseMode, platform: process.platform, arch: process.arch };
+    else if (command === "doctor") {
+      let metadata: unknown;
+      try { metadata = JSON.parse(await readFile(path.join(root, "build/build-metadata.json"), "utf8")); } catch {}
+      try {
+        const inventory: Snapshot = await callOperation("inventory");
+        result = { version, mode: releaseMode, build: metadata, service: "running", license: inventory.license, diagnostics: inventory.diagnostics, devices: inventory.devices.length, sources: inventory.sources.length };
+      } catch (error) {
+        result = { version, mode: releaseMode, build: metadata, service: "unavailable", message: (error as Error).message, next: "Open Device Deck.app or run devdeck service start, then run devdeck doctor again." };
+        process.exitCode = 1;
+      }
+    } else if (command === "update") {
+      const action = p[1] || "check";
+      if (!["check", "download"].includes(action) || (v.channel && !["beta", "stable"].includes(String(v.channel)))) throw new DeckError("arguments", "Use update check|download with --channel beta|stable.", 400);
+      let key: string | undefined;
+      if (v["key-file"]) key = (await readFile(String(v["key-file"]), "utf8")).trim();
+      else {
+        try { key = JSON.parse(await readFile(path.join(dataDirectory(), "license.json"), "utf8")).key; }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw new Error("Saved license cannot be read. Use --key-file with a private license file."); }
+      }
+      const release = await checkMacUpdates({ key, ...(v.channel ? { channel: String(v.channel) as "beta" | "stable" } : {}) });
+      if (!release) result = { currentVersion: version, available: false, message: "No verified package is available for this release channel and Mac." };
+      else if (action === "check") result = { currentVersion: version, available: compareVersions(release.manifest.version, version) > 0, release: release.manifest };
+      else {
+        if (compareVersions(release.manifest.version, version) < 0) throw new Error("The available package is older than this version. Automatic downgrade is not supported.");
+        const file = await downloadMacUpdate(release, path.resolve(String(v.output || path.join(dataDirectory(), "updates"))), key);
+        result = { file, version: release.manifest.version, signing: release.manifest.signing, next: "Finish reservations and recordings, quit Device Deck, then open this installer. Homebrew users should upgrade through Homebrew." };
+      }
+    } else if (command === "status") result = await callService("health");
     else if (
       ["start", "stop", "install", "uninstall", "logs"].includes(command)
     )

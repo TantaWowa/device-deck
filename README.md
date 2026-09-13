@@ -1,12 +1,16 @@
 # Device Deck
 
-Version 0.4.0 adds an unconfigured Free licensing candidate with a Keygen entitlement boundary and a server-side Lemon Squeezy reconciliation foundation. See [licensing, configuration and remaining sandbox work](docs/licensing-and-billing.md). The existing 0.3.0 review installation remains separate.
+Version 0.5.0-beta.1 adds simulator launch/close controls, a Mac application and team installer, real Device Deck Keygen activation, verified update downloads, and automated purchase-to-license issuance. Start with [team deployment](docs/team-rollout.md), [Mac packaging](docs/macos-distribution.md), and [licensing and billing](docs/licensing-and-billing.md).
 
 A local Mac workspace for connected TV devices and simulators. The daemon owns reservations, remote input, capture processes and files. The web app, CLI, terminal UI and MCP use the same authenticated operations.
 
 The public website includes a separate simulated demo. It never connects to the local daemon. The local app has no sample devices and needs no account login.
 
-## Run the local app
+## Install the Mac application
+
+Use the team `.pkg` from the release operator, then open `/Applications/Device Deck.app`. It includes Node and the native helper. Run `devdeck version`, `devdeck doctor`, `devdeck ui`, or `devdeck tui`; `devdeck service install` enables launch at login. Recording and USB screenshots currently need `brew install ffmpeg`. Team builds use TEST licenses and an unsigned installer; signed/notarized public builds use LIVE licenses. See [installation and update details](docs/macos-distribution.md).
+
+## Build from source
 
 Requires macOS 14 or later, Node 24 or later, and Xcode command line tools to build the capture helper. The downloadable package already contains that helper for its named architecture.
 
@@ -84,6 +88,8 @@ The CLI picker offers the same workflow:
 
 The TUI uses a fixed terminal screen with **Devices, Feeds, Captures, Sessions, History, Reports, Settings, and License** menus. Use **1–8** to switch views, **Tab** to move between the menu and items, and **↑/↓** or **J/K** to select. **Enter** opens the selected item's actions; each view shows its action keys along the bottom. **PgUp/PgDn** and **Home/End** move through long lists. It fits an 80×24 terminal and adds a side detail pane in wider windows.
 
+In Devices, **O** launches or closes the selected supported simulator; the web device row has the same controls. Active reservations and recordings must be finished before closing it. See [simulator lifecycle details](docs/simulator-controls.md).
+
 In Devices, **F** chooses platform and Sim/Real filters, **/** searches, and **D** discovers devices. Discovery supports **Space** to select, **A** for all available devices, and **Enter** to add them together. In Feeds, select sources with **Space** and press **G** for a browser split screen, or **W** for one feed.
 
 **C** opens a device remote, **R** reserves it, **S** takes a screenshot, and **V** starts or stops recording. Inside the remote, arrows and **Enter** control the device; **B** is Back, **H** is Home, **Space** is Play/Pause, **[ / ]** seek, **P** replays, **\*** sends Special, and **T** opens text entry. **Esc** returns to the workspace while keeping your reservation. **Q** asks to release this TUI's reservations and save their recordings before quitting. Taking over another client's session requires confirmation. Forced termination leaves reservations to expire at their configured TTL.
@@ -153,7 +159,7 @@ The source adaptation map is in [source provenance](docs/source-provenance.md). 
 
 ## Develop and validate
 
-For hardware development before the billing providers are configured:
+For hardware development with an explicitly labelled local Pro mock:
 
 ```sh
 npm ci
@@ -180,6 +186,6 @@ npm run dev             # Marketing site on 5173
 npm run dev:app         # Public demo on 5174
 ```
 
-The static Firebase preview remains in the existing `tantawowa-device-deck` project. Only `dist/` is hosted. Never deploy the local `build/`, runtime directory, capture files or private endpoint credentials to Firebase. Billing and cloud services are outside this release.
+The static Firebase preview remains in the existing `tantawowa-device-deck` project. Only `dist/` is hosted. Never deploy the local `build/`, runtime directory, capture files or private endpoint credentials to Firebase. The separate [billing service](apps/billing/README.md) has its own deployment and secrets.
 
 Copyright 2026 TantaWowa. All rights reserved. Dependency licenses are included in the release's `THIRD_PARTY_NOTICES.txt`.

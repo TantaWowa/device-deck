@@ -16,7 +16,12 @@ export function isDeviceConfigured(config: Config, device: DeviceConfig) {
   return config.devices.some(
     (d) =>
       d.id.toLowerCase() === device.id.toLowerCase() ||
-      deviceIdentity(d) === deviceIdentity(device),
+      deviceIdentity(d) === deviceIdentity(device) ||
+      (d.connection.type === "adb" &&
+        device.connection.type === "adb" &&
+        (!d.connection.avdName || !device.connection.avdName) &&
+        d.connection.serial === device.connection.serial &&
+        d.connection.port === device.connection.port),
   );
 }
 

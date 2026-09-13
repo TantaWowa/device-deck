@@ -303,6 +303,124 @@ test("occupied or recording devices require takeover confirmation even with the 
   );
 });
 
+test("Devices O launches stopped Apple simulators; closing asks first and finalizes only a credential-owned session", async () => {
+  const { io, snapshot, acquired, calls } = fixture();
+  const sim: Device = {
+    ...snapshot.devices[0],
+    platform: "Apple",
+    kind: "virtual",
+    online: false,
+    simulatorState: "shutdown",
+    connection: {
+      type: "simulator",
+      os: "tvos",
+      udid: "F4B9CA01-BA57-40A0-984D-38B7F91AB8A1",
+    },
+  };
+  snapshot.devices[0] = sim;
+  const workspace = new Workspace(io, { acquired });
+  workspace.snapshot = structuredClone(snapshot);
+  assert.match(workspace.hints()[0], /O Launch \/ close sim/);
+  key(workspace, "o");
+  await settled(workspace);
+  assert.deepEqual(
+    calls.find((c) => c.operation === "devices.simulator")?.args,
+    { deviceId: "00", action: "launch" },
+  );
+  snapshot.devices[0].online = true;
+  snapshot.devices[0].simulatorState = "booted";
+  snapshot.sessions = [acquired.session];
+  snapshot.recordings = [
+    {
+      id: "recording",
+      sessionId: acquired.session.id,
+      deviceId: "00",
+      startedAt: Date.now(),
+    },
+  ];
+  // Adopt the session through the same credential-bearing construction used by `devdeck remote`.
+  const owned = new Workspace(io, { acquired });
+  owned.snapshot = structuredClone(snapshot);
+  calls.length = 0;
+  key(owned, "o");
+  assert.equal(owned.dialog?.kind, "menu");
+  assert(
+    owned.dialog?.kind === "menu" &&
+      owned.dialog.description.includes("stops and saves its recording"),
+  );
+  key(owned, "return");
+  assert.equal(
+    calls.length,
+    0,
+    "Cancel is the default and preserves the recording",
+  );
+  key(owned, "o");
+  key(owned, "y");
+  await settled(owned);
+  assert.deepEqual(
+    calls.filter((c) => c.operation !== "inventory").map((c) => c.operation),
+    ["sessions.release", "devices.simulator"],
+  );
+  assert.deepEqual(
+    calls.find((c) => c.operation === "devices.simulator")?.args,
+    { deviceId: "00", action: "close", confirmed: true },
+  );
+  snapshot.sessions = [{ ...acquired.session, id: "someone-else" }];
+  await owned.refresh();
+  calls.length = 0;
+  key(owned, "o");
+  assert.equal(owned.dialog?.kind, "info");
+  assert.equal(calls.length, 0, "Another session is never silently ended");
+  assert(!owned.deviceActions(device("physical")).some((a) => a.key === "o"));
+});
+
+test("Devices O launches and closes known Android AVDs and offers only close for a legacy running emulator", async () => {
+  const { workspace, snapshot, calls } = fixture();
+  const android: Device = {
+    ...snapshot.devices[0],
+    platform: "Android",
+    kind: "virtual",
+    online: false,
+    simulatorState: "shutdown",
+    connection: { type: "adb", serial: "avd-tv", port: 5037, avdName: "TV_35" },
+  };
+  snapshot.devices[0] = android;
+  workspace.snapshot = structuredClone(snapshot);
+  key(workspace, "o");
+  await settled(workspace);
+  assert.deepEqual(
+    calls.find((c) => c.operation === "devices.simulator")?.args,
+    { deviceId: "00", action: "launch" },
+  );
+  calls.length = 0;
+  snapshot.devices[0] = {
+    ...android,
+    online: true,
+    simulatorState: "booted",
+    connection: { type: "adb", serial: "emulator-5554", port: 5037 },
+  };
+  await workspace.refresh();
+  key(workspace, "o");
+  assert.equal(workspace.dialog?.kind, "menu");
+  key(workspace, "y");
+  await settled(workspace);
+  assert.deepEqual(
+    calls.find((c) => c.operation === "devices.simulator")?.args,
+    { deviceId: "00", action: "close", confirmed: true },
+  );
+  assert.equal(
+    workspace
+      .deviceActions({
+        ...snapshot.devices[0],
+        online: false,
+        simulatorState: "shutdown",
+      })
+      .find((a) => a.key === "o")?.disabled,
+    true,
+    "A stopped legacy serial cannot identify an AVD to launch",
+  );
+});
+
 test("batch discovery excludes configured devices and saves all selected additions in one revisioned operation", async () => {
   const { workspace, calls, snapshot } = fixture();
   workspace.discovery = {
