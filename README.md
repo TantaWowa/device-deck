@@ -82,6 +82,12 @@ The CLI picker offers the same workflow:
 ./devdeck tui
 ```
 
+The TUI uses a fixed terminal screen with **Devices, Feeds, Captures, Sessions, History, Reports, Settings, and License** menus. Use **1–8** to switch views, **Tab** to move between the menu and items, and **↑/↓** or **J/K** to select. **Enter** opens the selected item's actions; each view shows its action keys along the bottom. **PgUp/PgDn** and **Home/End** move through long lists. It fits an 80×24 terminal and adds a side detail pane in wider windows.
+
+In Devices, **F** chooses platform and Sim/Real filters, **/** searches, and **D** discovers devices. Discovery supports **Space** to select, **A** for all available devices, and **Enter** to add them together. In Feeds, select sources with **Space** and press **G** for a browser split screen, or **W** for one feed.
+
+**C** opens a device remote, **R** reserves it, **S** takes a screenshot, and **V** starts or stops recording. Inside the remote, arrows and **Enter** control the device; **B** is Back, **H** is Home, **Space** is Play/Pause, **[ / ]** seek, **P** replays, **\*** sends Special, and **T** opens text entry. **Esc** returns to the workspace while keeping your reservation. **Q** asks to release this TUI's reservations and save their recordings before quitting. Taking over another client's session requires confirmation. Forced termination leaves reservations to expire at their configured TTL.
+
 For scripts, `reserve --json` returns a session ID and secret lease token. Every control/capture command requires both. See [CLI, API and MCP](docs/api.md) for complete examples.
 
 ## Platform adapters

@@ -10,6 +10,8 @@ Reviewed and adapted on 12 September 2026. The source checkouts were read withou
 
 The old Tawi daemon requires a durable run for reservation. That coupling is absent here. No ticket workflow, Hosanna UI framework, proof approval state or global singleton recording manager was imported.
 
+On 13 September 2026, Tawi's `src/tui.tsx` at `0878018401c03d5cc1495ad12ef12657947590da` informed the terminal interaction pattern: persistent menus, a bounded selection window, contextual details, inline forms and visible action keys. Device Deck implements those patterns with its own terminal renderer and existing daemon operations; it does not import Tawi's Ink application or add a runtime dependency on that checkout.
+
 `native/camera.swift` is new Device Deck code. It discovers AVFoundation inputs by unique ID, emits frames for a selected source, exits after parent loss or capture failure, and writes images to the native Mac clipboard. USB enumeration indexes are never stored as identity.
 
 `native/apple-tv.py` is a small Companion bridge adapted from George's consolidated remote script. It uses pyatv's private per-user credential storage and verifies the selected Companion identifier before input. The daemon owns pairing processes; clients provide a PIN through the session API.
