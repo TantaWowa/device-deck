@@ -105,6 +105,30 @@ export class AndroidEmulators {
           .map((s) => s.trim())
           .find((s) => avdName.test(s) && s !== "OK");
       } catch {}
+      if (!name) {
+        try {
+          // Some SDK versions return success with no console output. The
+          // immutable boot property identifies the AVD on this same transport.
+          const bootName = (
+            await this.execute(
+              this.adb(),
+              [
+                "-P",
+                String(port),
+                "-s",
+                serial,
+                "shell",
+                "getprop",
+                "ro.boot.qemu.avd_name",
+              ],
+              3000,
+            )
+          ).stdout
+            .toString()
+            .trim();
+          if (bootName.length <= 256 && avdName.test(bootName)) name = bootName;
+        } catch {}
+      }
       result.push({ serial, state, ...(name ? { avdName: name } : {}) });
     }
     return result;

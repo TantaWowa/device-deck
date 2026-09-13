@@ -237,7 +237,11 @@ export function storageUrl(value) {
     url.username ||
     url.password ||
     url.port ||
-    !url.hostname.endsWith(".amazonaws.com")
+    !(
+      url.hostname.endsWith(".amazonaws.com") ||
+      url.hostname ===
+        "keygen-dist.c3c9112df8df715f42d1162cdce5dba1.r2.cloudflarestorage.com"
+    )
   )
     throw new Error("Untrusted Keygen upload redirect.");
   return url;

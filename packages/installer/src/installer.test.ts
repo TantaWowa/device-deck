@@ -107,6 +107,56 @@ test("installer rejects forged/wrong-product metadata, tampered archives and uns
     /Untrusted/,
   );
 });
+test("downloads accept only Keygen's exact R2 host and never forward the license to storage", async () => {
+  const hostname =
+    "keygen-dist.c3c9112df8df715f42d1162cdce5dba1.r2.cloudflarestorage.com";
+  const m = manifest();
+  for (const redirect of [
+    `https://${hostname}/archive?download-secret`,
+    `http://${hostname}/archive`,
+    `https://user:password@${hostname}/archive`,
+    `https://${hostname}:8443/archive`,
+    `https://${hostname}.evil.test/archive`,
+    `https://evil.${hostname}/archive`,
+    `https://not-${hostname}/archive`,
+    "https://keygen-dist.other-account.r2.cloudflarestorage.com/archive",
+  ]) {
+    let calls = 0;
+    const transport: typeof fetch = async (url, init) => {
+      calls++;
+      assert.equal(init?.redirect, "error");
+      if (calls === 1) {
+        assert.equal(new URL(String(url)).origin, "https://api.keygen.sh");
+        assert.equal(
+          new Headers(init?.headers).get("Authorization"),
+          "License fixture-key",
+        );
+        return Response.json({
+          data: {
+            type: "artifacts",
+            id: m.artifactId,
+            attributes: { filename: m.filename, filesize: m.bytes },
+            relationships: {
+              product: { data: { id: m.productId } },
+              release: { data: { id: m.releaseId } },
+            },
+            links: { redirect },
+          },
+        });
+      }
+      assert.equal(String(url), redirect);
+      assert.equal(init?.headers, undefined);
+      return new Response(bytes);
+    };
+    if (redirect === `https://${hostname}/archive?download-secret`) {
+      assert.deepEqual(await download(m, "fixture-key", transport), bytes);
+      assert.equal(calls, 2);
+    } else {
+      await assert.rejects(download(m, "fixture-key", transport), /Untrusted/);
+      assert.equal(calls, 1, "Rejected storage must not receive any request");
+    }
+  }
+});
 test("expired download metadata denies a new install but does not expire an existing installed app", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "deck-installer-"));
   try {

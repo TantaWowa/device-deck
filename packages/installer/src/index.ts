@@ -136,7 +136,9 @@ export async function download(
     url.port ||
     !(
       url.hostname.endsWith(".amazonaws.com") ||
-      url.hostname.endsWith(".keygen.sh")
+      url.hostname.endsWith(".keygen.sh") ||
+      url.hostname ===
+        "keygen-dist.c3c9112df8df715f42d1162cdce5dba1.r2.cloudflarestorage.com"
     )
   )
     throw new Error("Untrusted artifact storage redirect");

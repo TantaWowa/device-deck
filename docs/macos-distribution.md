@@ -1,6 +1,6 @@
 # Building and installing Device Deck for Mac
 
-The Mac package contains `Device Deck.app`, a pinned private Node 24 runtime, the daemon, web dashboard, CLI, TUI, MCP server and native camera helper. The initial team package supports Apple Silicon Macs running macOS 14 or later. Build and validate Intel packages on an Intel Mac before offering that architecture.
+The Mac package contains `Device Deck.app`, a pinned private Node 24 runtime, the daemon, web dashboard, CLI, TUI, MCP server and native camera helper. Separate Apple Silicon and Intel installers support macOS 14 or later. The Mac distribution workflow builds and validates each installer on its matching architecture.
 
 The team build currently uses an **external FFmpeg installation** for recording, USB screenshots and annotations. Live USB previews and Roku control do not require FFmpeg. This is an explicit packaging mode, not a claim that every adapter dependency is bundled.
 

@@ -19,7 +19,9 @@ const config = {
   test: trust,
   live: { ...trust, mode: "live", productId: "live-product" },
 };
-async function fixture() {
+const keygenR2Host =
+  "keygen-dist.c3c9112df8df715f42d1162cdce5dba1.r2.cloudflarestorage.com";
+async function fixture(storageHost = "keygen-dist.s3.us-east-2.amazonaws.com") {
   const directory = await mkdtemp(path.join(os.tmpdir(), "deck-publish-test-"));
   const data = Buffer.from("test-only installer bytes");
   const m = {
@@ -87,8 +89,7 @@ async function fixture() {
           id: "artifact-1",
           attributes: { ...options.body.data.attributes, status: "WAITING" },
           links: {
-            redirect:
-              "https://keygen-dist.s3.us-east-2.amazonaws.com/test?upload-secret",
+            redirect: `https://${storageHost}/test?upload-secret`,
           },
         };
         artifacts.push(a);
@@ -265,12 +266,42 @@ test("unsafe upload redirects are rejected without sending package data", () => 
     "https://bucket.amazonaws.com.evil.test/a",
     "https://user:password@bucket.amazonaws.com/a",
     "https://bucket.amazonaws.com:8443/a",
+    `http://${keygenR2Host}/a`,
+    `https://user:password@${keygenR2Host}/a`,
+    `https://${keygenR2Host}:8443/a`,
+    `https://${keygenR2Host}.evil.test/a`,
+    `https://evil.${keygenR2Host}/a`,
+    `https://not-${keygenR2Host}/a`,
+    "https://keygen-dist.other-account.r2.cloudflarestorage.com/a",
   ])
     assert.throws(() => storageUrl(url), /Untrusted/);
   assert.equal(
     storageUrl("https://keygen-dist.s3.us-east-2.amazonaws.com/a").protocol,
     "https:",
   );
+});
+test("Keygen's exact R2 host accepts uploads without forwarding provider credentials", async () => {
+  const f = await fixture(keygenR2Host);
+  try {
+    assert.equal(storageUrl(`https://${keygenR2Host}/a`).hostname, keygenR2Host);
+    await publish(f.plan, {
+      client: f.client,
+      privateKey: f.keypair.privateKey,
+      publicKeyHex: f.publicKeyHex,
+      transport: f.transport,
+      log: () => {},
+    });
+    const upload = f.calls.find((call) => call.storage);
+    assert.equal(upload.url.hostname, keygenR2Host);
+    assert.deepEqual(Object.keys(upload.headers).sort(), [
+      "Content-Length",
+      "Content-MD5",
+    ]);
+    assert.equal(upload.redirect, "error");
+    assert.equal(f.getRelease().attributes.status, "PUBLISHED");
+  } finally {
+    await f.cleanup();
+  }
 });
 test("public release revalidates package signature before invoking notarization and never trusts metadata alone", async () => {
   const f = await fixture();

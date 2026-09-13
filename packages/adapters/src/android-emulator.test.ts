@@ -21,7 +21,14 @@ const device = deviceSchema.parse({
     port: 5038,
   },
 });
-type Entry = { serial: string; state: string; name?: string; booted?: boolean };
+type Entry = {
+  serial: string;
+  state: string;
+  name?: string;
+  booted?: boolean;
+  consoleEmpty?: boolean;
+  bootName?: string;
+};
 function fixture(initial: Entry[] = []) {
   const state = {
     entries: initial,
@@ -56,8 +63,13 @@ function fixture(initial: Entry[] = []) {
       const entry = state.entries.find((e) => e.serial === args[3]);
       assert(entry, "A command must never address a stale or guessed serial");
       if (args.slice(4).join(" ") === "emu avd name") {
-        if (!entry.name) throw new Error("Identity still unavailable");
-        output = `${entry.name}\nOK\n`;
+        if (!entry.consoleEmpty && !entry.name)
+          throw new Error("Identity still unavailable");
+        output = entry.consoleEmpty ? "" : `${entry.name}\nOK\n`;
+      } else if (
+        args.slice(4).join(" ") === "shell getprop ro.boot.qemu.avd_name"
+      ) {
+        output = entry.bootName || "";
       } else if (args.slice(4).join(" ") === "shell getprop sys.boot_completed")
         output = entry.booted ? "1\n" : "\n";
       else if (args.slice(4).join(" ") === "emu kill") {
@@ -264,4 +276,71 @@ test("available AVD discovery uses the configured existing emulator executable a
     missing.names(),
     /Configured Android emulator executable is unavailable/,
   );
+});
+
+test("empty emulator console output falls back to the boot AVD property on the exact same serial", async () => {
+  const f = fixture([
+    {
+      serial: "emulator-5558",
+      state: "device",
+      consoleEmpty: true,
+      bootName: "TV_API_35",
+      booted: true,
+    },
+  ]);
+  const resolved = await f.emulator.resolve(device);
+  assert.equal(
+    resolved?.connection.type === "adb" && resolved.connection.serial,
+    "emulator-5558",
+  );
+  assert.equal(
+    resolved?.connection.type === "adb" && resolved.connection.avdName,
+    "TV_API_35",
+  );
+  assert.deepEqual(
+    f.calls
+      .filter((c) => c.args.includes("ro.boot.qemu.avd_name"))
+      .map((c) => c.args),
+    [
+      [
+        "-P",
+        "5038",
+        "-s",
+        "emulator-5558",
+        "shell",
+        "getprop",
+        "ro.boot.qemu.avd_name",
+      ],
+    ],
+  );
+  assert.equal(f.launches.length, 0);
+  const legacy: DeviceConfig = {
+    ...device,
+    connection: { type: "adb", serial: "emulator-5558", port: 5038 },
+  };
+  f.state.entries[0].consoleEmpty = false;
+  const recovered = await f.emulator.prepare(legacy);
+  assert.equal(
+    recovered.connection.type === "adb" && recovered.connection.avdName,
+    "TV_API_35",
+    "A failed console query uses the same verified boot-property fallback",
+  );
+  for (const invalid of [
+    "",
+    "wrong/name",
+    "-invalid",
+    "two\nnames",
+    "a".repeat(257),
+  ]) {
+    f.state.entries[0].bootName = invalid;
+    await assert.rejects(
+      f.emulator.prepare(legacy),
+      /identity is not available/,
+    );
+    await assert.rejects(
+      f.emulator.control(legacy, "close"),
+      /identity is not available/,
+    );
+  }
+  assert(!f.calls.some((c) => c.args.includes("kill")));
 });
