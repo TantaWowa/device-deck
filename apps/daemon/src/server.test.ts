@@ -1,5 +1,6 @@
 import test from "node:test";
 import { licensedManager } from "../../../tests/licensing";
+import { LocalDevelopmentLicense } from "../../../scripts/local-license";
 import assert from "node:assert/strict";
 import http from "node:http";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -63,6 +64,11 @@ class TestAdapters extends Adapters {
   }
 }
 class TestCapture extends CaptureEngine {
+  previewed: string[] = [];
+  async preview(_device: DeviceConfig | null, source: { id: string }) {
+    this.previewed.push(source.id);
+    return Buffer.from([255, 216, 255, 217]);
+  }
   resolveStop?: () => void;
   starts = 0;
   stops = 0;
@@ -151,6 +157,18 @@ const reserve = (deck: DeckService, device = "one") =>
     owner: "same label",
     reason: "test",
   }) as Promise<{ session: { id: string }; leaseToken: string }>;
+test("the explicit local development mock starts active and can reset without provider calls", async () => {
+  const mock = new LocalDevelopmentLicense();
+  await mock.init();
+  assert.equal(mock.status().tier, "pro");
+  assert.equal(mock.status().maxSessions, null);
+  assert.match(mock.status().message, /activation mock/);
+  assert.equal((await mock.deactivate()).tier, "free");
+  assert.equal((await mock.refresh()).maxSessions, 1);
+  assert.equal((await mock.activate("local")).tier, "pro");
+  assert.equal(new LocalDevelopmentLicense().status().state, "active");
+  mock.close();
+});
 test("Free admits at most one session when different-device requests race, preserving collisions and clean capture", async () => {
   const { deck, capture, cleanup } = await setup(true);
   try {
@@ -425,6 +443,73 @@ test("authenticated HTTP and browser bootstrap reject origins, unknown hosts, mi
   }
 });
 
+test("direct USB previews share bound-device locks and need HTTP authentication", async () => {
+  const { deck, capture, cleanup } = await setup(true);
+  const config = structuredClone(deck.config.config);
+  config.sources.push({
+    id: "usb-free",
+    name: "Unassigned",
+    kind: "usb",
+    uniqueId: "physical-free",
+  });
+  config.sources.push({
+    id: "usb-bound",
+    name: "Assigned",
+    kind: "usb",
+    uniqueId: "physical-bound",
+  });
+  config.devices[0].captureSourceId = "usb-bound";
+  await deck.execute("config.save", { config, revision: deck.config.revision });
+  const token = "b".repeat(64),
+    server = createService(deck, token, "/tmp/no-web");
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+  try {
+    assert.equal(
+      (await fetch(base + "/v1/source-preview/usb-free")).status,
+      401,
+    );
+    const response = await fetch(base + "/v1/source-preview/usb-free", {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("content-type"), "image/jpeg");
+    assert.equal(response.headers.get("cache-control"), "no-store");
+    assert.deepEqual(
+      Buffer.from(await response.arrayBuffer()),
+      Buffer.from([255, 216, 255, 217]),
+    );
+    await reserve(deck);
+    await Promise.all([
+      deck.previewSource("usb-bound"),
+      deck.previewSource("usb-free"),
+    ]);
+    assert.ok(capture.previewed.includes("usb-bound"));
+    await assert.rejects(deck.previewSource("screen-two"), /USB capture card/);
+    await assert.rejects(
+      deck.previewSource("not-configured"),
+      /USB capture card/,
+    );
+    const session = deck.store.sessions().find((s) => s.deviceId === "one")!;
+    session.state = "closing";
+    deck.store.putSession(session);
+    await assert.rejects(deck.previewSource("usb-bound"), /being released/);
+    session.state = "closed";
+    deck.store.putSession(session);
+    await deck.execute("devices.bulk", {
+      ids: ["one"],
+      action: "lock",
+      reason: "maintenance",
+    });
+    await assert.rejects(deck.previewSource("usb-bound"), /locked/);
+    await deck.previewSource("usb-free");
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>((r) => server.close(() => r()));
+    await cleanup();
+  }
+});
+
 test("renewal, expiry and takeover invalidate credentials while preserving ownership history", async () => {
   const { deck, capture, cleanup } = await setup();
   capture.resolveStop = () => {};
@@ -641,6 +726,120 @@ test("Capture Cards assignment uses revision-checked config and rejects both sid
       sessionId: target.session.id,
       leaseToken: target.leaseToken,
     });
+  } finally {
+    await cleanup();
+  }
+});
+
+test("browser credentials coexist across local instances without overwriting another port's login", async () => {
+  const { deck, cleanup } = await setup();
+  const token = "c".repeat(64);
+  const servers = [
+    createService(deck, token, "/tmp/no-web"),
+    createService(deck, token, "/tmp/no-web"),
+  ];
+  try {
+    await Promise.all(
+      servers.map(
+        (server) => new Promise<void>((r) => server.listen(0, "127.0.0.1", r)),
+      ),
+    );
+    const bases = servers.map(
+      (server) =>
+        `http://127.0.0.1:${(server.address() as { port: number }).port}`,
+    );
+    const cookies = await Promise.all(
+      bases.map(async (base) => {
+        const { ticket } = await fetch(base + "/v1/browser-ticket", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: "{}",
+        }).then((r) => r.json());
+        const response = await fetch(base + "/v1/bootstrap", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ticket }),
+        });
+        return response.headers.get("set-cookie")!.split(";")[0];
+      }),
+    );
+    assert.notEqual(cookies[0].split("=")[0], cookies[1].split("=")[0]);
+    for (const [index, base] of bases.entries()) {
+      assert.equal(
+        (
+          await fetch(base + "/v1/health", {
+            headers: { Cookie: cookies.join("; ") },
+          })
+        ).status,
+        200,
+      );
+      assert.equal(
+        (
+          await fetch(base + "/v1/health", {
+            headers: { Cookie: cookies[1 - index] },
+          })
+        ).status,
+        401,
+      );
+    }
+  } finally {
+    await Promise.all(
+      servers.map((server) => {
+        server.closeAllConnections();
+        return new Promise<void>((r) => server.close(() => r()));
+      }),
+    );
+    await cleanup();
+  }
+});
+
+test("capture-only USB devices can reserve and record while source bindings remain exclusive", async () => {
+  const { deck, capture, cleanup } = await setup();
+  try {
+    const config = structuredClone(deck.config.config);
+    config.sources.push({
+      id: "usb-only",
+      name: "Fire capture",
+      kind: "usb",
+      uniqueId: "usb-fire",
+    });
+    config.devices.push({
+      id: "fire-feed",
+      name: "Fire feed",
+      platform: "Other",
+      kind: "physical",
+      model: "USB capture",
+      visibility: "local",
+      connection: { type: "capture" },
+      captureSourceId: "usb-only",
+    });
+    await deck.execute("config.save", {
+      config,
+      revision: deck.config.revision,
+    });
+    const reserved = await reserve(deck, "fire-feed");
+    const credentials = {
+      sessionId: reserved.session.id,
+      leaseToken: reserved.leaseToken,
+    };
+    await deck.execute("recordings.start", { ...credentials, mode: "clean" });
+    assert.equal(capture.starts, 1);
+    await assert.rejects(reserve(deck, "fire-feed"), /reserved/);
+    const broken = structuredClone(config);
+    broken.devices.find((d) => d.id === "fire-feed")!.captureSourceId = null;
+    await assert.rejects(
+      deck.execute("config.save", {
+        config: broken,
+        revision: deck.config.revision,
+      }),
+      /require a USB/,
+    );
+    capture.resolveStop = () => {};
+    await deck.execute("sessions.release", credentials);
+    assert.equal(capture.stops, 1);
   } finally {
     await cleanup();
   }

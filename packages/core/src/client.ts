@@ -58,7 +58,7 @@ export async function callService(route: "health" | "inventory") {
   if (!res.ok) throw new Error(`Device Deck returned ${res.status}`);
   return res.json();
 }
-export async function browserUrl() {
+export async function browserUrl(query?: URLSearchParams) {
   const ep = await endpoint();
   const res = await fetch(`${ep.url}/v1/browser-ticket`, {
     method: "POST",
@@ -71,5 +71,5 @@ export async function browserUrl() {
   });
   if (!res.ok) throw new Error("Unable to open local dashboard.");
   const { ticket } = await res.json();
-  return `${ep.url}/#ticket=${ticket}`;
+  return `${ep.url}/${query?.size ? `?${query}` : ""}#ticket=${ticket}`;
 }

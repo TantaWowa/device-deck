@@ -1,3 +1,10 @@
+import { FloatingRemote } from "./FloatingRemote";
+import { DeviceControls } from "./DeviceControls";
+import { FeedActions, type FeedAction } from "./FeedActions";
+import { DiscoveryDevices } from "./DiscoveryDevices";
+import { registerDiscoveredDevices } from "../../../../packages/core/src/discovery";
+import { CapturePreview } from "./CapturePreview";
+import { FeedViewer } from "./FeedViewer";
 import { Reports } from "../components/Reports";
 import { License, LicenseReminder } from "../components/License";
 import { CaptureCards, type CardView } from "../components/CaptureCards";
@@ -22,7 +29,6 @@ import {
   ArrowLeft,
   RefreshCw,
   Play,
-  Square,
   Download,
   Copy,
   Trash2,
@@ -30,12 +36,6 @@ import {
   Columns2,
   Lock,
   Unlock,
-  ChevronUp,
-  ChevronDown,
-  ChevronLeft,
-  ChevronRight,
-  Home,
-  CornerUpLeft,
 } from "lucide-react";
 import { Brand } from "../../../../packages/ui/src";
 import type {
@@ -53,6 +53,7 @@ import "../style.css";
 import "./style.css";
 type Lease = { session: Session; leaseToken: string };
 type Tab =
+  | "Feeds"
   | "Capture Cards"
   | "Devices"
   | "Captures"
@@ -96,62 +97,25 @@ function Preview({
   device: Device;
   active?: boolean;
 }) {
-  const [src, setSrc] = useState(""),
-    [error, setError] = useState("");
-  useEffect(() => {
-    if (!active) return;
-    let done = false,
-      url = "",
-      timer: ReturnType<typeof setTimeout>;
-    const update = async () => {
-      try {
-        const r = await fetch(`/v1/preview/${encodeURIComponent(device.id)}`);
-        if (!r.ok) {
-          const e = await r.json();
-          throw new Error(e.message);
-        }
-        const blob = await r.blob();
-        if (done) return;
-        const next = URL.createObjectURL(blob);
-        if (url) URL.revokeObjectURL(url);
-        url = next;
-        setSrc(next);
-        setError("");
-      } catch (e) {
-        if (!done) setError((e as Error).message);
-      } finally {
-        if (!done) timer = setTimeout(update, 1000);
-      }
-    };
-    void update();
-    return () => {
-      done = true;
-      clearTimeout(timer);
-      if (url) URL.revokeObjectURL(url);
-    };
-  }, [device.id, active]);
   return (
-    <div className="live-screen">
-      {src && !error ? (
-        <img src={src} alt={`Live screen of ${device.name}`} />
-      ) : (
-        <div className="live-screen-message">
-          <Monitor size={32} />
-          <strong>{error || "Connecting to capture input…"}</strong>
-          <span>
-            {device.captureSourceId
-              ? "Check device, source and host permissions."
-              : "Choose a capture input for this device."}
-          </span>
-        </div>
-      )}
-      <span className="live-screen-label">
-        Local capture · refreshes about once a second
-      </span>
-    </div>
+    <CapturePreview
+      key={device.id}
+      name={device.name}
+      endpoint={`/v1/preview/${encodeURIComponent(device.id)}`}
+      active={active}
+    />
   );
 }
 function App() {
+  const [control, setControl] = useState<{
+    deviceId: string;
+    action: FeedAction;
+  } | null>(null);
+  const [identify, setIdentify] = useState<{
+    name: string;
+    sourceId?: string;
+    deviceId?: string;
+  } | null>(null);
   const [cards, setCards] = useState<{
     sources: (SourceConfig & {
       status: "connected" | "missing";
@@ -165,7 +129,11 @@ function App() {
     [error, setError] = useState(""),
     [notice, setNotice] = useState(""),
     [busy, setBusy] = useState(false),
-    [tab, setTab] = useState<Tab>("Devices");
+    [tab, setTab] = useState<Tab>(() =>
+      new URLSearchParams(location.search).get("view") === "feeds"
+        ? "Feeds"
+        : "Devices",
+    );
   const refreshCards = async () => {
     setCardsLoading(true);
     try {
@@ -220,12 +188,8 @@ function App() {
       "lock" | "unlock" | "restart" | null
     >(null),
     [reason, setReason] = useState(""),
-    [owner, setOwner] = useState("You"),
-    [text, setText] = useState("");
-  const [captureMode, setCaptureMode] = useState<"clean" | "annotated">(
-      "clean",
-    ),
-    [overlay, setOverlay] = useState(true),
+    [owner, setOwner] = useState("You");
+  const [overlay, setOverlay] = useState(true),
     [captureSearch, setCaptureSearch] = useState(""),
     [trash, setTrash] = useState(false),
     [artifact, setArtifact] = useState<Artifact | null>(null),
@@ -262,11 +226,20 @@ function App() {
     () => localStorage.setItem("deck-local-leases", JSON.stringify(leases)),
     [leases],
   );
+  useEffect(() => {
+    const sync = (event: StorageEvent) => {
+      if (event.key !== "deck-local-leases" || !event.newValue) return;
+      try {
+        setLeases(JSON.parse(event.newValue));
+      } catch {}
+    };
+    window.addEventListener("storage", sync);
+    return () => window.removeEventListener("storage", sync);
+  }, []);
   const initialized = useRef(false);
   useEffect(() => {
     if (data && !initialized.current) {
       setOwner(data.config.settings.owner);
-      setCaptureMode(data.config.settings.captureMode);
       setOverlay(data.config.settings.overlay);
       initialized.current = true;
     }
@@ -303,39 +276,6 @@ function App() {
   };
   const saveConfig = async (config: Config, revision = data!.configRevision) =>
     action("config.save", { config, revision }, "Configuration saved.");
-  const send = async (key: string) => {
-    const lease = credentials(target);
-    if (!lease) throw new Error("Reserve the target device first.");
-    return action("remote.input", { ...lease, key });
-  };
-  useEffect(() => {
-    const handler = (event: KeyboardEvent) => {
-      if (
-        !viewing.length ||
-        busy ||
-        document.querySelector("dialog[open]") ||
-        (event.target as HTMLElement).closest(
-          "input,textarea,select,[contenteditable]",
-        )
-      )
-        return;
-      const keys: Record<string, string> = {
-        ArrowUp: "Up",
-        ArrowDown: "Down",
-        ArrowLeft: "Left",
-        ArrowRight: "Right",
-        Enter: "OK",
-        Escape: "Back",
-        " ": "Play",
-      };
-      if (keys[event.key] && credentials(target)) {
-        event.preventDefault();
-        perform(() => send(keys[event.key]));
-      }
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  });
   const openViewer = (ids: string[]) => {
     setViewing(ids);
     setTarget(ids[0] || "");
@@ -371,10 +311,7 @@ function App() {
             ? !!activeSession(d.id)
             : !activeSession(d.id) && !d.locked && d.online)),
   );
-  const chosen = data.devices.find((d) => d.id === target),
-    lease = credentials(target),
-    current = activeSession(target),
-    recording = data.recordings.find((r) => r.deviceId === target);
+  const chosen = data.devices.find((d) => d.id === target);
   const sources: SourceConfig[] = [
     ...data.config.sources,
     ...cards.sources,
@@ -421,8 +358,85 @@ function App() {
     setReason("");
     setReserve({ device, takeover });
   };
+  const openControls = (d: Device, action: FeedAction) => {
+    if (action === "identify")
+      setIdentify({
+        name: d.name,
+        deviceId: d.id,
+        sourceId: d.captureSourceId || undefined,
+      });
+    else setControl({ deviceId: d.id, action });
+  };
+  const feedAction = (source: SourceConfig, intent: FeedAction) => {
+    const device = data.devices.find((d) => d.captureSourceId === source.id);
+    if (intent === "identify") {
+      setIdentify({
+        name: source.name,
+        sourceId: source.id,
+        deviceId: device?.id,
+      });
+      return;
+    }
+    if (device) {
+      openControls(device, intent);
+      return;
+    }
+    perform(async () => {
+      const config = structuredClone(data.config);
+      let name = source.name.slice(0, 64),
+        suffix = 2;
+      while (
+        config.devices.some((d) => d.name.toLowerCase() === name.toLowerCase())
+      )
+        name = `${source.name.slice(0, 54)} (${suffix++})`;
+      const id = crypto.randomUUID();
+      config.devices.push({
+        id,
+        name,
+        platform: "Other",
+        kind: "physical",
+        model: "USB capture",
+        visibility: "local",
+        connection: { type: "capture" },
+        captureSourceId: source.id,
+      });
+      await saveConfig(config);
+      setControl({ deviceId: id, action: intent });
+    });
+  };
+  const deviceActions = (d: Device) => (
+    <FeedActions
+      name={d.name}
+      reserved={Boolean(activeSession(d.id))}
+      recording={data.recordings.some((r) => r.deviceId === d.id)}
+      onAction={(intent) => openControls(d, intent)}
+    />
+  );
+  const controls = (
+    d: Device,
+    intent: FeedAction,
+    optionsOpen: boolean,
+    setOptionsOpen: (open: boolean) => void,
+  ) => (
+    <DeviceControls
+      key={d.id}
+      device={d}
+      data={data}
+      lease={credentials(d.id)}
+      onLease={(value) => setLeases((prev) => ({ ...prev, [d.id]: value }))}
+      refresh={refresh}
+      edit={() => {
+        setControl(null);
+        setEditing(d);
+      }}
+      initialAction={intent}
+      optionsOpen={optionsOpen}
+      setOptionsOpen={setOptionsOpen}
+    />
+  );
   const menu: { name: Tab; icon: ReactNode }[] = [
     { name: "Devices", icon: <Monitor size={18} /> },
+    { name: "Feeds", icon: <Columns2 size={18} /> },
     { name: "Capture Cards", icon: <Usb size={18} /> },
     { name: "Captures", icon: <Camera size={18} /> },
     { name: "History", icon: <History size={18} /> },
@@ -502,6 +516,28 @@ function App() {
             <button onClick={() => setNotice("")}>Dismiss</button>
           </div>
         )}
+        {tab === "Feeds" && (
+          <FeedViewer
+            sources={data.sources}
+            devices={data.devices}
+            renderActions={(source) => (
+              <FeedActions
+                name={source.name}
+                reserved={data.sessions.some(
+                  (session) =>
+                    session.sourceId === source.id &&
+                    session.state !== "closed",
+                )}
+                recording={data.recordings.some(
+                  (r) =>
+                    data.devices.find((d) => d.id === r.deviceId)
+                      ?.captureSourceId === source.id,
+                )}
+                onAction={(intent) => feedAction(source, intent)}
+              />
+            )}
+          />
+        )}
         {tab === "Devices" && !viewing.length && (
           <>
             <div className="live-heading">
@@ -515,6 +551,7 @@ function App() {
               </div>
               <div className="live-actions">
                 <button
+                  className="primary"
                   onClick={() =>
                     perform(async () => {
                       setDiscovery(await action("discover"));
@@ -524,11 +561,11 @@ function App() {
                   disabled={busy}
                 >
                   <RefreshCw size={16} />
-                  Discover
+                  Discover / add devices
                 </button>
-                <button className="primary" onClick={() => setEditing(false)}>
+                <button onClick={() => setEditing(false)}>
                   <Plus size={16} />
-                  Add device
+                  Add manually
                 </button>
               </div>
             </div>
@@ -563,33 +600,101 @@ function App() {
                     }
                   />
                 </label>
-                {(
-                  [
-                    ["platform", "Platform", ["Roku", "Android", "Apple"]],
-                    ["health", "Connection", ["online", "offline"]],
+                <div
+                  className="device-filter-buttons"
+                  role="group"
+                  aria-label="Filter platform"
+                >
+                  {(
                     [
-                      "reservation",
-                      "Availability",
-                      ["free", "reserved", "locked"],
-                    ],
-                    ["kind", "Device type", ["physical", "virtual"]],
-                    ["visibility", "Visibility", ["local", "shared"]],
-                  ] as const
-                ).map(([field, label, options]) => (
-                  <select
-                    aria-label={label}
-                    key={field}
-                    value={filter[field]}
-                    onChange={(e) =>
-                      setFilter({ ...filter, [field]: e.target.value })
-                    }
-                  >
-                    <option value="">All {label.toLowerCase()}</option>
-                    {options.map((o) => (
-                      <option key={o}>{o}</option>
+                      ["", "All platforms"],
+                      ["Apple", "Apple"],
+                      ["Roku", "Roku"],
+                      ["Android", "Android"],
+                      ["Other", "USB only"],
+                    ] as const
+                  ).map(([value, label]) => (
+                    <button
+                      key={value}
+                      type="button"
+                      className={`platform-filter filter-${value.toLowerCase() || "all"}`}
+                      aria-pressed={filter.platform === value}
+                      onClick={() =>
+                        setFilter((prev) => ({
+                          ...prev,
+                          platform: prev.platform === value ? "" : value,
+                        }))
+                      }
+                    >
+                      {label}
+                      <span>
+                        {
+                          data.devices.filter(
+                            (d) => !value || d.platform === value,
+                          ).length
+                        }
+                      </span>
+                    </button>
+                  ))}
+                </div>
+                <div
+                  className="device-filter-buttons kind-filters"
+                  role="group"
+                  aria-label="Filter device type"
+                >
+                  {(
+                    [
+                      ["", "All types"],
+                      ["virtual", "Sim"],
+                      ["physical", "Real"],
+                    ] as const
+                  ).map(([value, label]) => (
+                    <button
+                      key={value}
+                      type="button"
+                      className={`kind-filter filter-${value || "all"}`}
+                      aria-pressed={filter.kind === value}
+                      onClick={() =>
+                        setFilter((prev) => ({
+                          ...prev,
+                          kind: prev.kind === value ? "" : value,
+                        }))
+                      }
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                <details className="advanced-device-filters">
+                  <summary>More filters</summary>
+                  <div>
+                    {(
+                      [
+                        ["health", "Connection", ["online", "offline"]],
+                        [
+                          "reservation",
+                          "Availability",
+                          ["free", "reserved", "locked"],
+                        ],
+                        ["visibility", "Visibility", ["local", "shared"]],
+                      ] as const
+                    ).map(([field, label, options]) => (
+                      <select
+                        aria-label={label}
+                        key={field}
+                        value={filter[field]}
+                        onChange={(e) =>
+                          setFilter({ ...filter, [field]: e.target.value })
+                        }
+                      >
+                        <option value="">All {label.toLowerCase()}</option>
+                        {options.map((o) => (
+                          <option key={o}>{o}</option>
+                        ))}
+                      </select>
                     ))}
-                  </select>
-                ))}
+                  </div>
+                </details>
                 <button
                   onClick={() =>
                     setFilter({
@@ -733,6 +838,7 @@ function App() {
                             {hover === d.id && d.captureSourceId && (
                               <div className="live-hover">
                                 <Preview device={d} />
+                                {deviceActions(d)}
                               </div>
                             )}
                           </td>
@@ -811,6 +917,7 @@ function App() {
                               <button onClick={() => setEditing(d)}>
                                 Edit
                               </button>
+                              {deviceActions(d)}
                               <button
                                 aria-label={`Copy CLI command for ${d.name}`}
                                 onClick={() =>
@@ -891,6 +998,7 @@ function App() {
                         </span>
                       </button>
                       <Preview device={d} />
+                      {deviceActions(d)}
                       {overlay &&
                         data.inputs
                           .filter(
@@ -911,269 +1019,6 @@ function App() {
                     </section>
                   ))}
               </div>
-              {chosen && (
-                <aside className="live-controls">
-                  <h2>Remote control</h2>
-                  <p>
-                    Target: <strong>{chosen.name}</strong>
-                  </p>
-                  <div className="live-session">
-                    <span className="live-label">RESERVATION</span>
-                    {current ? (
-                      <>
-                        <strong>{current.owner}</strong>
-                        <p>{current.reason}</p>
-                        <small>
-                          {current.state} · expires{" "}
-                          {new Date(current.expiresAt).toLocaleTimeString()}
-                        </small>
-                        {lease ? (
-                          <div className="live-actions">
-                            <button
-                              onClick={() =>
-                                perform(() =>
-                                  action(
-                                    "sessions.renew",
-                                    lease,
-                                    "Reservation renewed.",
-                                  ),
-                                )
-                              }
-                            >
-                              Renew
-                            </button>
-                            <button
-                              onClick={() =>
-                                perform(() =>
-                                  action(
-                                    "sessions.release",
-                                    lease,
-                                    "Reservation released.",
-                                  ),
-                                )
-                              }
-                            >
-                              Release
-                            </button>
-                          </div>
-                        ) : (
-                          <button onClick={() => openReserve(chosen, true)}>
-                            Take over…
-                          </button>
-                        )}
-                      </>
-                    ) : (
-                      <>
-                        <p>Reserve to control and capture.</p>
-                        <button
-                          className="primary"
-                          disabled={!chosen.online || chosen.locked || busy}
-                          onClick={() => openReserve(chosen)}
-                        >
-                          Reserve device
-                        </button>
-                      </>
-                    )}
-                  </div>
-                  <div className="live-dpad">
-                    {[
-                      ["Up", <ChevronUp />],
-                      ["Left", <ChevronLeft />],
-                      ["OK", "OK"],
-                      ["Right", <ChevronRight />],
-                      ["Down", <ChevronDown />],
-                    ].map(([key, icon]) => (
-                      <button
-                        key={String(key)}
-                        className={`key-${String(key).toLowerCase()}`}
-                        aria-label={String(key)}
-                        disabled={
-                          !lease || !chosen.capabilities.includes("key") || busy
-                        }
-                        onClick={() => perform(() => send(String(key)))}
-                      >
-                        {icon}
-                      </button>
-                    ))}
-                  </div>
-                  <div className="live-actions live-remote-extra">
-                    {[
-                      ["Back", <CornerUpLeft size={16} />],
-                      ["Home", <Home size={16} />],
-                      ["Play", <Play size={16} />],
-                    ].map(([key, icon]) => (
-                      <button
-                        key={String(key)}
-                        disabled={
-                          !lease || !chosen.capabilities.includes("key") || busy
-                        }
-                        onClick={() => perform(() => send(String(key)))}
-                      >
-                        {icon}
-                        {key}
-                      </button>
-                    ))}
-                  </div>
-                  {!chosen.capabilities.includes("key") && (
-                    <small>
-                      Input unavailable. Check adapter dependencies in Settings.
-                    </small>
-                  )}
-                  <form
-                    className="live-text"
-                    onSubmit={(e) => {
-                      e.preventDefault();
-                      if (lease)
-                        perform(async () => {
-                          await action("remote.input", { ...lease, text });
-                          setText("");
-                        });
-                    }}
-                  >
-                    <input
-                      aria-label="Remote text"
-                      value={text}
-                      onChange={(e) => setText(e.target.value)}
-                      placeholder="Send text to device"
-                    />
-                    <button
-                      disabled={
-                        !lease ||
-                        !chosen.capabilities.includes("text") ||
-                        !text ||
-                        busy
-                      }
-                    >
-                      Send
-                    </button>
-                  </form>
-                  <div className="live-capture-controls">
-                    <h2>Capture</h2>
-                    <label>
-                      Capture file
-                      <select
-                        value={captureMode}
-                        onChange={(e) =>
-                          setCaptureMode(e.target.value as typeof captureMode)
-                        }
-                      >
-                        <option value="clean">Clean source</option>
-                        <option value="annotated">
-                          With keypress overlays
-                        </option>
-                      </select>
-                    </label>
-                    <label className="live-check">
-                      <input
-                        type="checkbox"
-                        checked={overlay}
-                        onChange={(e) => setOverlay(e.target.checked)}
-                      />
-                      Show live keypress overlay
-                    </label>
-                    <button
-                      disabled={
-                        !lease ||
-                        !chosen.capabilities.includes("screenshot") ||
-                        busy
-                      }
-                      onClick={() =>
-                        perform(() =>
-                          action(
-                            "captures.screenshot",
-                            { ...lease, mode: captureMode },
-                            "Screenshot saved to the capture library.",
-                          ),
-                        )
-                      }
-                    >
-                      <Camera size={16} />
-                      Screenshot
-                    </button>
-                    <button
-                      disabled={
-                        !lease ||
-                        !chosen.capabilities.includes("screenshot") ||
-                        busy
-                      }
-                      onClick={() =>
-                        perform(async () => {
-                          const a = await action("captures.screenshot", {
-                            ...lease,
-                            mode: captureMode,
-                            clipboard: true,
-                          });
-                          setNotice(
-                            a.clipboardError
-                              ? `Saved. Clipboard: ${a.clipboardError}`
-                              : "Screenshot saved and copied to the Mac clipboard.",
-                          );
-                        })
-                      }
-                    >
-                      <Copy size={16} />
-                      Screenshot to clipboard
-                    </button>
-                    <button
-                      className={recording ? "danger" : "primary"}
-                      disabled={
-                        !lease ||
-                        !chosen.capabilities.includes("record") ||
-                        busy
-                      }
-                      onClick={() =>
-                        perform(async () => {
-                          const a = await action(
-                            recording ? "recordings.stop" : "recordings.start",
-                            {
-                              ...lease,
-                              ...(!recording ? { mode: captureMode } : {}),
-                            },
-                          );
-                          setNotice(
-                            recording
-                              ? `Recording ${a.status}. ${a.error || a.path}`
-                              : `Recording started. Maximum ${Math.round(a.maxDurationSeconds)} seconds.`,
-                          );
-                        })
-                      }
-                    >
-                      {recording ? (
-                        <Square size={16} />
-                      ) : (
-                        <span className="record-dot" />
-                      )}
-                      {recording ? "Stop recording" : "Start recording"}
-                    </button>
-                    <small>
-                      {recording
-                        ? `Recording for ${duration(Date.now() - recording.startedAt)}. You can close this window.`
-                        : `Saves to ${data.config.settings.folder}`}
-                    </small>
-                  </div>
-                  <div className="live-timeline">
-                    <h2>Input log</h2>
-                    {!data.config.settings.logging ? (
-                      <p>Input logging is off. Text and keys are not stored.</p>
-                    ) : (
-                      data.inputs
-                        .filter((i) => i.deviceId === target)
-                        .slice(-8)
-                        .reverse()
-                        .map((i) => (
-                          <div key={i.id}>
-                            <code>
-                              {i.elapsedMs === null
-                                ? new Date(i.at).toLocaleTimeString()
-                                : `+${(i.elapsedMs / 1000).toFixed(2)}s`}
-                            </code>
-                            <span>{i.key}</span>
-                          </div>
-                        ))
-                    )}
-                  </div>
-                </aside>
-              )}
             </div>
           </>
         )}
@@ -1419,6 +1264,79 @@ function App() {
           <SettingsView data={data} save={saveConfig} busy={busy} />
         )}
       </main>
+      {control && data.devices.find((d) => d.id === control.deviceId) && (
+        <FloatingRemote
+          key={control.deviceId}
+          storageKey={control.deviceId}
+          requestKey={control}
+          title={data.devices.find((d) => d.id === control.deviceId)!.name}
+          initialMenu={
+            control.action !== "remote" ||
+            Boolean(
+              activeSession(control.deviceId) && !credentials(control.deviceId),
+            )
+          }
+          onClose={() => setControl(null)}
+        >
+          {(menu, setMenu) =>
+            controls(
+              data.devices.find((d) => d.id === control.deviceId)!,
+              control.action,
+              menu,
+              setMenu,
+            )
+          }
+        </FloatingRemote>
+      )}
+      {identify && (
+        <Modal
+          title={`Identify · ${identify.name}`}
+          onClose={() => setIdentify(null)}
+        >
+          <div className="identify-preview">
+            {identify.sourceId && (
+              <CapturePreview
+                name={identify.name}
+                endpoint={
+                  data.sources.find((s) => s.id === identify.sourceId)?.kind ===
+                  "native"
+                    ? `/v1/preview/${encodeURIComponent(identify.deviceId || "")}`
+                    : `/v1/source-preview/${encodeURIComponent(identify.sourceId)}`
+                }
+                intervalMs={100}
+              />
+            )}
+            <div className="identify-label">
+              <strong>{identify.name}</strong>
+              <span>
+                {identify.deviceId || "USB feed · no control connection"}
+              </span>
+            </div>
+          </div>
+          <p>
+            This is the local preview for <strong>{identify.name}</strong>.
+          </p>
+          <dl className="identify-details">
+            <dt>Capture input</dt>
+            <dd>
+              {data.sources.find((s) => s.id === identify.sourceId)?.name ||
+                "No capture input"}
+            </dd>
+            <dt>USB identity</dt>
+            <dd>
+              {data.sources.find((s) => s.id === identify.sourceId)?.uniqueId ||
+                "Native screen"}
+            </dd>
+            <dt>Control connection</dt>
+            <dd>
+              {identify.deviceId
+                ? data.devices.find((d) => d.id === identify.deviceId)
+                    ?.connection.type
+                : "Not configured"}
+            </dd>
+          </dl>
+        </Modal>
+      )}
       {reserve && (
         <Modal
           title={reserve.takeover ? "Take over device" : "Reserve device"}
@@ -1518,30 +1436,28 @@ function App() {
           title="Discovered on this Mac"
           onClose={() => setShowDiscovery(false)}
         >
-          <p>Discovery preserves your configured names and capture bindings.</p>
-          <div className="live-discovery">
-            {discovery.devices.map((d) => (
-              <div key={d.id}>
-                <span>
-                  <strong>{d.name}</strong>
-                  <small>
-                    {d.platform} · {d.kind} · {d.model}
-                  </small>
-                </span>
-                <button
-                  disabled={data.devices.some((x) => x.id === d.id)}
-                  onClick={() => {
-                    setEditing(d);
-                    setShowDiscovery(false);
-                  }}
-                >
-                  {data.devices.some((x) => x.id === d.id)
-                    ? "Configured"
-                    : "Register"}
-                </button>
-              </div>
-            ))}
-          </div>
+          <DiscoveryDevices
+            config={data.config}
+            discovery={discovery}
+            add={async (ids) => {
+              const { config, added } = registerDiscoveredDevices(
+                data.config,
+                discovery,
+                ids,
+              );
+              if (added.length) await saveConfig(config);
+              setNotice(
+                added.length
+                  ? `Added ${added.length} ${added.length === 1 ? "device" : "devices"}.`
+                  : "These devices are already configured.",
+              );
+              setShowDiscovery(false);
+            }}
+            configure={(device) => {
+              setEditing(device);
+              setShowDiscovery(false);
+            }}
+          />
           <h3>Capture inputs</h3>
           {discovery.sources
             .filter((s) => s.kind === "usb")
@@ -1687,7 +1603,9 @@ function DeviceEditor({
                     ? { type, udid: address, os }
                     : type === "apple-tv"
                       ? { type, host: address, identifier: identity }
-                      : { type: "apple-device", udid: address };
+                      : type === "capture"
+                        ? { type: "capture" }
+                        : { type: "apple-device", udid: address };
             const native: SourceConfig = {
               id: `native-${id}`,
               name: `${name} native screen`,
@@ -1707,7 +1625,9 @@ function DeviceEditor({
                     ? "Roku"
                     : type === "adb"
                       ? "Android"
-                      : "Apple",
+                      : type === "capture"
+                        ? "Other"
+                        : "Apple",
                 kind:
                   type === "simulator" ||
                   (type === "adb" && address.startsWith("emulator-"))
@@ -1746,6 +1666,9 @@ function DeviceEditor({
               setSource("");
             }}
           >
+            <option value="capture">
+              USB capture only · no remote connection
+            </option>
             <option value="roku">Roku · network ECP</option>
             <option value="adb">Android / Android TV · ADB</option>
             <option value="simulator">Apple simulator · simctl + idb</option>
@@ -1755,18 +1678,20 @@ function DeviceEditor({
             </option>
           </select>
         </label>
-        <label>
-          {type === "roku" || type === "apple-tv"
-            ? "Host address"
-            : type === "adb"
-              ? "ADB serial"
-              : "Device UDID"}
-          <input
-            required
-            value={address}
-            onChange={(e) => setAddress(e.target.value)}
-          />
-        </label>
+        {type !== "capture" && (
+          <label>
+            {type === "roku" || type === "apple-tv"
+              ? "Host address"
+              : type === "adb"
+                ? "ADB serial"
+                : "Device UDID"}
+            <input
+              required
+              value={address}
+              onChange={(e) => setAddress(e.target.value)}
+            />
+          </label>
+        )}
         {(type === "roku" || type === "apple-tv" || type === "adb") && (
           <label>
             Stable{" "}
@@ -1805,7 +1730,11 @@ function DeviceEditor({
         )}
         <label>
           Capture input
-          <select value={source} onChange={(e) => setSource(e.target.value)}>
+          <select
+            required={type === "capture"}
+            value={source}
+            onChange={(e) => setSource(e.target.value)}
+          >
             <option value="">None · remote only</option>
             {["adb", "simulator"].includes(type) && (
               <option value="native">Native screen</option>

@@ -30,7 +30,7 @@ async def main():
   value=sys.argv[4]
   if op=='text':await device.keyboard.text_append(value)
   else:
-   keys={'Up':'up','Down':'down','Left':'left','Right':'right','OK':'select','Select':'select','Back':'menu','Menu':'menu','Home':'home','Play':'play_pause','Play / pause':'play_pause','VolumeUp':'volume_up','VolumeDown':'volume_down'}
+   keys={'Up':'up','Down':'down','Left':'left','Right':'right','OK':'select','Select':'select','Back':'menu','Menu':'menu','Special':'menu','Rewind':'skip_backward','Replay':'skip_backward','FastForward':'skip_forward','Home':'home','Play':'play_pause','Play / pause':'play_pause','VolumeUp':'volume_up','VolumeDown':'volume_down'}
    if value not in keys:raise RuntimeError('Unsupported Apple TV key')
    await getattr(device.remote_control,keys[value])()
   print(json.dumps(dict(ok=True)))

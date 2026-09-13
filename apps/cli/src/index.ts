@@ -27,6 +27,7 @@ import { root } from "../../../packages/adapters/src";
 import path from "node:path";
 import { lifecycle } from "./lifecycle";
 import { pick, parseSelector } from "./selection";
+import { selectFeeds, feedQuery } from "./feeds";
 const help = `Device Deck · local Mac device manager
 Usage: devdeck <command> [options]
 
@@ -35,6 +36,9 @@ Usage: devdeck <command> [options]
   install | uninstall          Enable/remove the login service
   ui | tui | mcp               Open the dashboard, terminal UI or MCP server
   discover                     Find connected targets and capture cards
+  feeds                        List capture feeds and stable IDs
+  view [--source NAME_OR_ID]    Open a browser feed; Left/Right switches feeds
+       [--sources A,B,C] [--mux] [--browser] [--json]
   devices [filters]            List configured devices
   sources | sessions | captures | history
   reports [--range day|week|month|custom] [--start YYYY-MM-DD --end YYYY-MM-DD]
@@ -52,7 +56,7 @@ Usage: devdeck <command> [options]
   takeover [filters] --owner NAME --reason TEXT --yes
   call OPERATION JSON          Every shared API operation, including metadata
 
-Filters: --device NAME_OR_ID --platform Roku|Android|Apple --name TEXT
+Filters: --device NAME_OR_ID --platform Roku|Android|Apple|Other --name TEXT
          --state free|reserved|online|offline|locked --capabilities key,record
 Options: --json --ttl MINUTES --mode clean|annotated
 
@@ -82,9 +86,11 @@ const optionTypes: Record<string, { type: "string" | "boolean" }> =
       "range",
       "start",
       "end",
+      "source",
+      "sources",
     ].map((k) => [k, { type: "string" }]),
   );
-for (const key of ["json", "help", "clipboard", "yes"])
+for (const key of ["json", "help", "clipboard", "yes", "mux", "browser"])
   optionTypes[key] = { type: "boolean" };
 try {
   const { values: v, positionals: p } = parseArgs({
@@ -128,6 +134,92 @@ try {
       const url = await browserUrl();
       spawn("/usr/bin/open", [url], { stdio: "ignore" });
       result = "Opened local dashboard.";
+    } else if (command === "feeds" || command === "view") {
+      const cards = await callOperation("capture-cards.list");
+      if (command === "feeds") {
+        if (v.json) result = cards;
+        else {
+          console.table(
+            cards.sources.map((s: any) => ({
+              name: s.name,
+              id: s.id,
+              hardware: s.uniqueId,
+              status: s.status,
+            })),
+          );
+          for (const diagnostic of cards.diagnostics) console.error(diagnostic);
+        }
+      } else {
+        if (v.source && v.sources)
+          throw new DeckError(
+            "arguments",
+            "Use --source or --sources, not both.",
+            400,
+          );
+        const current = await callOperation("config.get");
+        let requested = String(v.source || v.sources || "") || undefined;
+        if (Object.values(selector).some((value) => value !== undefined)) {
+          if (requested)
+            throw new DeckError(
+              "arguments",
+              "Choose device filters or source selectors.",
+              400,
+            );
+          const inventory: Snapshot = await callOperation("inventory");
+          const devices = matchDevices(
+            inventory.devices,
+            inventory.sessions,
+            selector,
+          );
+          requested = devices
+            .map((d) => d.captureSourceId)
+            .filter(Boolean)
+            .join(",");
+          if (!requested)
+            throw new DeckError(
+              "arguments",
+              "Matching devices have no USB capture feeds.",
+              400,
+            );
+        }
+        const registered = cards.sources.filter((s: any) =>
+          current.config.sources.some((c: any) => c.id === s.id),
+        );
+        const feeds = selectFeeds(
+          requested || !registered.length ? cards.sources : registered,
+          requested,
+        );
+        const config = structuredClone(current.config);
+        for (const s of feeds)
+          if (!config.sources.some((c: any) => c.id === s.id))
+            config.sources.push({
+              id: s.id,
+              name: s.name,
+              kind: s.kind,
+              uniqueId: s.uniqueId,
+            });
+        if (config.sources.length !== current.config.sources.length)
+          await callOperation("config.save", {
+            config,
+            revision: current.revision,
+          });
+        const url = await browserUrl(
+          feedQuery(
+            feeds.map((s) => s.id),
+            Boolean(v.mux),
+          ),
+        );
+        if (v.json)
+          result = {
+            url,
+            layout: v.mux ? "grid" : "single",
+            feeds: feeds.map((s) => ({ id: s.id, name: s.name })),
+          };
+        else {
+          spawn("/usr/bin/open", [url], { stdio: "ignore" });
+          result = `Opened ${feeds.length} feed${feeds.length === 1 ? "" : "s"} in ${v.mux ? "split-screen" : "single-feed"} view. Left/Right: switch · G: grid · F: fullscreen.`;
+        }
+      }
     } else if (command === "mcp" || command === "tui") {
       await import(
         command === "mcp"

@@ -106,8 +106,14 @@ export class CaptureEngine {
     }
     return stream;
   }
-  async preview(d: DeviceConfig, s: SourceConfig, interval = 750) {
-    const key = s.kind === "usb" ? s.uniqueId! : d.id;
+  async preview(d: DeviceConfig | null, s: SourceConfig, interval = 750) {
+    if (s.kind !== "usb" && !d)
+      fail(
+        "source-missing",
+        "A native screen needs its configured device.",
+        404,
+      );
+    const key = s.kind === "usb" ? s.uniqueId! : d!.id;
     const frame = this.frames.get(key);
     if (frame && Date.now() - frame.at < interval) return frame.data;
     let pending = this.pending.get(key);
@@ -116,7 +122,7 @@ export class CaptureEngine {
         const data =
           s.kind === "usb"
             ? await this.usb(s).frame()
-            : await this.adapters.screenshot(d);
+            : await this.adapters.screenshot(d!);
         if (!(
           (data[0] === 137 && data.subarray(1, 4).toString() === "PNG") ||
           (data[0] === 255 && data[1] === 216)

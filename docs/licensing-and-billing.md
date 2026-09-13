@@ -4,6 +4,8 @@ This candidate is unconfigured Free. No real Lemon Squeezy checkout, Keygen acti
 
 ## Provisional product policy
 
+For development with real hardware, the repository-only `scripts/service-local.ts` entry point injects an explicitly labelled active Pro mock. Start it with the repository-root `./devdeck start` wrapper or `npm run service:local`; its default profile is `work/local-deck/`. This mock never contacts Keygen or Lemon Squeezy and is excluded from customer bundles. The production daemon still uses the real license manager described below. USB feed observation, including the grid, does not reserve devices and is available on Free too.
+
 | Capability                                                                       | Free                                                                      | Pro or issuer-provided trial |
 | -------------------------------------------------------------------------------- | ------------------------------------------------------------------------- | ---------------------------- |
 | Inventory, discovery, input, basic capture, capture library, exports and reports | Available through every interface                                         | Available                    |

@@ -18,6 +18,8 @@
     "qa": "node scripts/qa.mjs",
     "test": "node --import tsx --test apps/daemon/src/*.test.ts apps/billing/src/*.test.ts apps/cli/src/*.test.ts packages/*/src/*.test.ts",
     "service": "node --import tsx apps/daemon/src/index.ts",
+    "install:dev-cli": "node scripts/install-dev-cli.mjs",
+    "service:local": "node --import tsx scripts/service-local.ts",
     "cli": "node --import tsx apps/cli/src/index.ts",
     "mcp": "node --import tsx packages/mcp/src/index.ts",
     "preview": "vite preview apps/website --outDir ../../dist --host 127.0.0.1 --port 5173 --strictPort",

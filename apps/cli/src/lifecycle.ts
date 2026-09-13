@@ -18,7 +18,7 @@ const plist = path.join(
 const label = `gui/${process.getuid!()}/com.tantawowa.device-deck`;
 const escape = (s: string) =>
   s.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
-export async function lifecycle(command: string) {
+export async function lifecycle(command: string, launchArgs?: string[]) {
   const directory = dataDirectory(),
     entry = path.join(root, "build/daemon.mjs");
   await mkdir(directory, { recursive: true, mode: 0o700 });
@@ -28,7 +28,7 @@ export async function lifecycle(command: string) {
       return "Device Deck is already running.";
     } catch {}
     const log = await open(path.join(directory, "daemon.log"), "a", 0o600);
-    const child = spawn(process.execPath, [entry], {
+    const child = spawn(process.execPath, launchArgs || [entry], {
       detached: true,
       stdio: ["ignore", log.fd, log.fd],
       env: process.env,

@@ -1,3 +1,4 @@
+import { androidKeys, rokuKeys, hidKeys } from "../../core/src/remote";
 import {
   mergeCaptureCards,
   type DetectedCard,
@@ -31,54 +32,6 @@ export const helper = path.join(root, "build/native/deck-camera");
 const uid = (prefix: string, value: string) =>
   `${prefix}-${createHash("sha256").update(value).digest("hex").slice(0, 20)}`;
 const shellQuote = (s: string) => `'${s.replaceAll("'", "'\\''")}'`;
-const androidKeys: Record<string, string> = {
-  Up: "DPAD_UP",
-  Down: "DPAD_DOWN",
-  Left: "DPAD_LEFT",
-  Right: "DPAD_RIGHT",
-  OK: "DPAD_CENTER",
-  Select: "DPAD_CENTER",
-  Back: "BACK",
-  Home: "HOME",
-  Menu: "MENU",
-  Play: "MEDIA_PLAY_PAUSE",
-  "Play / pause": "MEDIA_PLAY_PAUSE",
-  Backspace: "DEL",
-  VolumeUp: "VOLUME_UP",
-  VolumeDown: "VOLUME_DOWN",
-};
-const rokuKeys: Record<string, string> = {
-  ...Object.fromEntries(
-    [
-      "Up",
-      "Down",
-      "Left",
-      "Right",
-      "Back",
-      "Home",
-      "Play",
-      "Backspace",
-      "VolumeUp",
-      "VolumeDown",
-    ].map((k) => [k, k]),
-  ),
-  OK: "Select",
-  Select: "Select",
-  Menu: "Info",
-  "Play / pause": "Play",
-};
-const hidKeys: Record<string, string> = {
-  Up: "82",
-  Down: "81",
-  Left: "80",
-  Right: "79",
-  OK: "40",
-  Select: "40",
-  Back: "41",
-  Backspace: "42",
-  Play: "44",
-  "Play / pause": "44",
-};
 export type Discovery = {
   devices: DeviceConfig[];
   sources: SourceConfig[];
@@ -349,6 +302,18 @@ export class Adapters {
     };
     const c = d.connection;
     try {
+      if (c.type === "capture") {
+        const source = this.getConfig().sources.find(
+          (s) => s.id === d.captureSourceId,
+        );
+        result.online = Boolean(
+          source &&
+          (await this.inspectSources([source]))[0]?.status === "connected",
+        );
+        result.healthDetail = result.online
+          ? "USB capture connected · configure a control connection for remote input"
+          : "Capture card disconnected";
+      }
       if (c.type === "adb") {
         await this.verifyIdentity(d);
         const { stdout } = await run(this.tool("adb"), [
@@ -544,6 +509,8 @@ export class Adapters {
           `http://${c.host}:8060/keypress/${encodeURIComponent(key)}`,
           {
             method: "POST",
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            body: "",
             signal: AbortSignal.timeout(5000),
             redirect: "error",
           },

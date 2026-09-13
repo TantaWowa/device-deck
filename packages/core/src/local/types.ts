@@ -18,11 +18,12 @@ export const deviceSchema = z
       .max(128)
       .regex(/^[\w.-]+$/),
     name: z.string().trim().min(1).max(64),
-    platform: z.enum(["Roku", "Android", "Apple"]),
+    platform: z.enum(["Roku", "Android", "Apple", "Other"]),
     kind: z.enum(["physical", "virtual"]),
     model: z.string().max(256).default(""),
     visibility: z.enum(["local", "shared"]).default("local"),
     connection: z.discriminatedUnion("type", [
+      z.object({ type: z.literal("capture") }),
       z.object({
         type: z.literal("roku"),
         host: z
@@ -199,7 +200,7 @@ export type Snapshot = {
 export const selectorSchema = z
   .object({
     device: z.string().optional(),
-    platform: z.enum(["Roku", "Android", "Apple"]).optional(),
+    platform: z.enum(["Roku", "Android", "Apple", "Other"]).optional(),
     name: z.string().optional(),
     state: z
       .enum(["free", "reserved", "online", "offline", "locked"])

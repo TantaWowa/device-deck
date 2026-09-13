@@ -117,6 +117,7 @@ Read routes:
 
 - `GET /v1/health`: implementation version, PID and dependency diagnostics.
 - `GET /v1/preview/DEVICE_ID`: current PNG/JPEG from the configured source. This authenticated, read-only observation may share another session's stream; it does not grant control.
+- `GET /v1/source-preview/SOURCE_ID`: current JPEG from a registered USB capture card, including an unassigned card. Requires the same local authentication. A bound card retains its device's maintenance and closing-session checks. The Feeds viewer polls this endpoint at up to 10 fps; there is no audio or reservation requirement for observation.
 - `GET /v1/artifacts/ID/file`: original capture or annotated export, with byte-range support for video.
 - `GET /v1/artifacts/ID/clean`: clean original when an annotated export exists.
 - `GET /v1/artifacts/ID/log`: JSON manifest with identity, outcome and recording-relative input timestamps.
@@ -150,3 +151,5 @@ Omit the environment override to use the default Application Support directory. 
 5. Call `sessions_release`. A subsequent command with that credential must return a stale-lease error.
 
 MCP uses the same validation and ownership boundary as HTTP, CLI, TUI and web. Disconnecting it does not end a valid session or recording.
+
+Capture-only devices use `platform: "Other"`, `connection: {"type":"capture"}`, and a required USB `captureSourceId`. They use the normal session and capture operations but expose no remote input capabilities. Browser authentication cookies are scoped by name to the listening port, allowing multiple local profiles to remain open together.

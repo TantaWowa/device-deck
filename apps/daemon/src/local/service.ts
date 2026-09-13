@@ -157,7 +157,10 @@ export class DeckService {
           await this.queue(device.id).run(() =>
             this.capture.closeSource(source),
           );
-        else await this.capture.closeSource(source);
+        else
+          await this.queue(`source:${source.id}`).run(() =>
+            this.capture.closeSource(source),
+          );
       }
     } catch (e) {
       this.changingConfig = false;
@@ -611,7 +614,10 @@ export class DeckService {
       return fn(current);
     });
   }
-  async preview(deviceId: string) {
+  async preview(
+    deviceId: string,
+    interval = this.config.config.settings.previewIntervalMs,
+  ) {
     const d = this.device(deviceId);
     return this.queue(d.id).run(async () => {
       if (this.changingConfig)
@@ -632,11 +638,36 @@ export class DeckService {
         (s) => s.id === d.captureSourceId,
       );
       if (!source) fail("source-missing", "No capture input configured.", 404);
-      return this.capture.preview(
-        d,
-        source,
-        this.config.config.settings.previewIntervalMs,
+      return this.capture.preview(d, source, interval);
+    });
+  }
+  async previewSource(sourceId: string) {
+    const source = this.config.config.sources.find((s) => s.id === sourceId);
+    if (!source || source.kind !== "usb")
+      fail(
+        "source-missing",
+        "Register this USB capture card before viewing it.",
+        404,
       );
+    const device = this.config.config.devices.find(
+      (d) => d.captureSourceId === source.id,
+    );
+    // Bound cards keep the same maintenance and release rules as device previews.
+    if (device) return this.preview(device.id, 100);
+    return this.queue(`source:${source.id}`).run(async () => {
+      if (this.changingConfig || this.shuttingDown)
+        fail(
+          "configuration-changing",
+          "Capture configuration is being updated.",
+          409,
+        );
+      if (this.config.config.sources.find((s) => s.id === sourceId) !== source)
+        fail(
+          "configuration-changing",
+          "Capture configuration changed. Retry this feed.",
+          409,
+        );
+      return this.capture.preview(null, source, 100);
     });
   }
   private artifact(

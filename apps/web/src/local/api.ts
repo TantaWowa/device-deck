@@ -13,7 +13,7 @@ export async function api(operation: Operation, args: unknown = {}) {
 export async function bootstrap() {
   const ticket = new URLSearchParams(location.hash.slice(1)).get("ticket");
   if (ticket) {
-    history.replaceState(null, "", location.pathname);
+    history.replaceState(null, "", location.pathname + location.search);
     const r = await fetch("/v1/bootstrap", {
       method: "POST",
       headers: { "Content-Type": "application/json" },

@@ -55,9 +55,11 @@ export function createService(
       return;
     }
     const apiToken = req.headers.authorization?.replace(/^Bearer /, "") || "";
+    const cookieName = `deck_${(server.address() as { port: number }).port}`;
     const cookie =
-      /(?:^|;\s*)deck=([A-Za-z0-9_-]+)/.exec(req.headers.cookie || "")?.[1] ||
-      "";
+      new RegExp(`(?:^|;\\s*)${cookieName}=([A-Za-z0-9_-]+)`).exec(
+        req.headers.cookie || "",
+      )?.[1] || "";
     const native = equal(apiToken, token),
       browser = (browsers.get(cookie) || 0) > Date.now();
     const json = async () => {
@@ -92,7 +94,7 @@ export function createService(
         browsers.set(credential, Date.now() + 24 * 60 * 60000);
         res.setHeader(
           "Set-Cookie",
-          `deck=${credential}; HttpOnly; SameSite=Strict; Path=/; Max-Age=86400`,
+          `${cookieName}=${credential}; HttpOnly; SameSite=Strict; Path=/; Max-Age=86400`,
         );
         reply(200, { ok: true });
         return;
@@ -155,6 +157,21 @@ export function createService(
             200,
             await deck.execute(operation as Operation, await json(), origin),
           );
+          return;
+        }
+        if (
+          req.method === "GET" &&
+          url.pathname.startsWith("/v1/source-preview/")
+        ) {
+          const data = await deck.previewSource(
+            decodeURIComponent(
+              url.pathname.slice("/v1/source-preview/".length),
+            ),
+          );
+          res.writeHead(200, {
+            "Content-Type": data[0] === 137 ? "image/png" : "image/jpeg",
+          });
+          res.end(data);
           return;
         }
         if (req.method === "GET" && url.pathname.startsWith("/v1/preview/")) {
