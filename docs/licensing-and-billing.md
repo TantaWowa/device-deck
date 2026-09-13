@@ -1,5 +1,7 @@
 # Licensing and billing foundation, version 0.4.0
 
+The [proposed install and update regime](install-and-update-plan.md) recommends a public Free download, a signed Mac installer and Homebrew cask, with Keygen activation for Pro. It describes the next release direction; the protected installer scaffold below is still the current implementation.
+
 This candidate is unconfigured Free. No real Lemon Squeezy checkout, Keygen activation, owner license, protected download, npm publication or public billing endpoint has been provisioned or exercised. The installed 0.3.0 review application and its inventory/captures remain separate and unchanged.
 
 ## Provisional product policy
