@@ -1,0 +1,6 @@
+{$BILLING_DOMAIN} {
+  # Operator commands use an SSH tunnel to the loopback port, never public routing.
+  @admin path /admin/*
+  respond @admin 404
+  reverse_proxy billing:8080
+}

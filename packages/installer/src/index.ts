@@ -23,17 +23,24 @@ const manifestSchema = z
     version: z.string().regex(/^\d+\.\d+\.\d+(?:-[a-z0-9.-]+)?$/),
     platform: z.literal("darwin"),
     arch: z.enum(["arm64", "x64"]),
-    filename: z.string().regex(/^device-deck-[A-Za-z0-9.-]+\.tar\.gz$/),
+    filename: z.string().regex(/^device-deck-[A-Za-z0-9.-]+\.(?:tar\.gz|pkg)$/),
+    format: z.enum(["tar.gz", "pkg"]).optional(),
+    mode: z.enum(["live", "test"]).optional(),
+    channel: z.enum(["beta", "stable"]).optional(),
+    signing: z.enum(["ad-hoc", "developer-id-notarized"]).optional(),
+    minimumOS: z.string().regex(/^\d+\.\d+(?:\.\d+)?$/).optional(),
     sha256: z.string().regex(/^[a-f0-9]{64}$/),
     bytes: z
       .number()
       .int()
       .positive()
-      .max(300 * 1024 * 1024),
+      .max(2 * 1024 * 1024 * 1024),
     issued: z.string().datetime(),
     expires: z.string().datetime(),
   })
-  .strict();
+  .strict()
+  .refine(m => !m.filename.endsWith(".pkg") || (m.format === "pkg" && m.mode && m.channel && m.signing && m.minimumOS), "Mac package metadata is incomplete")
+  .refine(m => m.format !== "pkg" || m.filename.endsWith(".pkg"), "Package format does not match filename");
 export type Manifest = z.infer<typeof manifestSchema>;
 export function verifyManifest(
   envelope: unknown,
@@ -90,18 +97,18 @@ export function verifyArchive(bytes: Buffer, manifest: Manifest) {
 }
 export async function download(
   manifest: Manifest,
-  key: string,
+  key?: string,
   transport: typeof fetch = fetch,
 ) {
-  if (!key.trim() || /[\r\n]/.test(key))
-    throw new Error("An issuer-provided download license is required");
+  if (key !== undefined && (!key.trim() || /[\r\n]/.test(key)))
+    throw new Error("Invalid download license");
   const response = await transport(
     `https://api.keygen.sh/v1/accounts/${encodeURIComponent(manifest.accountId)}/artifacts/${encodeURIComponent(manifest.artifactId)}?product=${encodeURIComponent(manifest.productId)}`,
     {
       redirect: "error",
       signal: AbortSignal.timeout(15000),
       headers: {
-        Authorization: `License ${key}`,
+        ...(key ? { Authorization: `License ${key}` } : {}),
         Accept: "application/vnd.api+json",
         Prefer: "no-redirect",
       },
@@ -116,7 +123,6 @@ export async function download(
     data.id !== manifest.artifactId ||
     data.attributes?.filename !== manifest.filename ||
     data.attributes?.filesize !== manifest.bytes ||
-    data.relationships?.product?.data?.id !== manifest.productId ||
     data.relationships?.release?.data?.id !== manifest.releaseId
   )
     throw new Error(
@@ -130,7 +136,9 @@ export async function download(
     url.port ||
     !(
       url.hostname.endsWith(".amazonaws.com") ||
-      url.hostname.endsWith(".keygen.sh")
+      url.hostname.endsWith(".keygen.sh") ||
+      url.hostname ===
+        "keygen-dist.c3c9112df8df715f42d1162cdce5dba1.r2.cloudflarestorage.com"
     )
   )
     throw new Error("Untrusted artifact storage redirect");
@@ -162,6 +170,7 @@ export async function install(
   transport: typeof fetch = fetch,
 ) {
   const manifest = verifyManifest(envelope, trust);
+  if (manifest.filename.endsWith(".pkg")) throw new Error("Use devdeck update download for Mac installers. This archive installer cannot apply a .pkg.");
   if (manifest.platform !== process.platform || manifest.arch !== process.arch)
     throw new Error(
       "This signed release is for another platform or architecture",

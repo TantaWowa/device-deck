@@ -1,8 +1,12 @@
-# Licensing and billing foundation, version 0.4.0
+# Licensing and billing, version 0.5.0-beta.1
 
-This candidate is unconfigured Free. No real Lemon Squeezy checkout, Keygen activation, owner license, protected download, npm publication or public billing endpoint has been provisioned or exercised. The installed 0.3.0 review application and its inventory/captures remain separate and unchanged.
+Device Deck has separate live and test Keygen products, with Pro and trial policies and compiled public trust. Real TEST activation, signed machine checkout verification, refresh and deactivation have passed on the build Mac in an isolated profile. A normal complimentary owner license has been issued; customer builds use the same verification path.
 
-## Provisional product policy
+The team Mac installer and scoped GitHub release credentials are configured. Paid checkout still needs the chosen Lemon Squeezy store/variant, server credentials and HTTPS deployment, followed by provider test-mode acceptance. See [team rollout](team-rollout.md), [Mac packaging](macos-distribution.md) and [billing deployment](../apps/billing/README.md).
+
+## Product policy
+
+For development with real hardware, the repository-only `scripts/service-local.ts` entry point injects an explicitly labelled active Pro mock. Start it with the repository-root `./devdeck start` wrapper or `npm run service:local`; its default profile is `work/local-deck/`. This mock never contacts Keygen or Lemon Squeezy and is excluded from customer bundles. The production daemon still uses the real license manager described below. USB feed observation, including the grid, does not reserve devices and is available on Free too.
 
 | Capability                                                                       | Free                                                                      | Pro or issuer-provided trial |
 | -------------------------------------------------------------------------------- | ------------------------------------------------------------------------- | ---------------------------- |
@@ -17,19 +21,9 @@ The dashboard has License & Upgrade and a reminder dismissible for seven days. T
 
 ## Keygen trust and verification
 
-Keygen is the sole license authority. Lemon Squeezy subscription state never reaches the app as an entitlement flag. `packages/licensing/src/trust.ts` contains the release-owned public trust configuration, currently `null`. Populate it through a reviewed source change and rebuild:
+Keygen is the sole license authority. Lemon Squeezy subscription state never reaches the app as an entitlement flag. `config/releases/keygen.json` holds reviewed public product/policy IDs and the account Ed25519 public key. `packages/licensing/src/trust.ts` compiles the selected identity into each release. Build with `npm run build:local -- --mode test` or `--mode live`; runtime environment/configuration cannot change the trust anchors. `npm run package:mac` defaults to TEST team builds; `--release` selects LIVE and requires Developer ID signing and notarization.
 
-```ts
-{
-  mode: "test", // Use a separate reviewed live release and provider product for live billing.
-  accountId: "KEYGEN_ACCOUNT_UUID",
-  productId: "DEVICE_DECK_PRODUCT_UUID",
-  publicKey: "64_HEX_CHAR_ACCOUNT_ED25519_PUBLIC_KEY",
-  proPolicyId: "DEVICE_DECK_PRO_POLICY_UUID",
-  trialPolicyId: "OPTIONAL_DEVICE_DECK_TRIAL_POLICY_UUID",
-  checkoutUrl: "https://YOUR_STORE.lemonsqueezy.com/buy/YOUR_CHECKOUT_ID"
-}
-```
+`npm run release:keygen` previews the idempotent account setup; `-- --apply` provisions only Device Deck resources within the existing plan. Existing Hosanna products are not changed. Current usage is four of five products: Hosanna UI Source, hosanna-transpiler, Device Deck, and Device Deck Test.
 
 Never use Hosanna's product or an issuer/admin token in the app. A complimentary owner license is a normal Keygen Pro license with the same required fields and features as a customer's license. Issue it explicitly; do not exempt an owner name or machine. The same protected application accepts both.
 
@@ -46,7 +40,7 @@ Machine checkout requests `aes-256-gcm+ed25519`, includes the license and its en
 
 The app refreshes every six hours, retries transient failure after five minutes, and never extends offline access beyond signed expiry. An authoritative rejection removes Pro immediately for new operations. License keys and signed proof are stored in the private profile's `license.json`, mode 0600, and never returned in inventory/status. Clock high-water checks and a monotonic running clock prevent an in-process clock rollback extending access. A user who controls their Mac can still patch code or restore system/state snapshots; this is not a trusted execution environment.
 
-These choices follow Keygen's [offline certificate contract](https://keygen.sh/docs/api/cryptography/), [machine checkout API](https://keygen.sh/docs/api/machines/#machines-actions-check-out), and [scoped license validation](https://keygen.sh/docs/api/licenses/#licenses-actions-validate-key). Account trust anchors are compiled into the app, following the provider's guidance. Provider activation and certificate shape still require real sandbox verification before release.
+These choices follow Keygen's [offline certificate contract](https://keygen.sh/docs/api/cryptography/), [machine checkout API](https://keygen.sh/docs/api/machines/#machines-actions-check-out), and [scoped license validation](https://keygen.sh/docs/api/licenses/#licenses-actions-validate-key). Account trust anchors are compiled into the app, following the provider's guidance. The real TEST provider activation and encrypted checkout shape have been verified; billing lifecycle tests against Lemon Squeezy remain a separate acceptance step.
 
 ```sh
 ./devdeck license status --json
@@ -57,72 +51,40 @@ These choices follow Keygen's [offline certificate contract](https://keygen.sh/d
 
 HTTP operations are `license.status`, `license.activate`, `license.refresh` and `license.deactivate`. MCP exposes their underscore names. The TUI shows the tier and has a License status view. The dashboard can activate, refresh and deactivate. Use a private key file with the CLI so the license does not enter shell history or process arguments.
 
-## Server-side Lemon Squeezy bridge
+## Complimentary team licenses
 
-`apps/billing` is a separate operator service, excluded from customer bundles. Hosted checkout is a reviewed Lemon Squeezy URL. The current service reconciles explicitly registered licenses; it does not create or email license keys. Unmapped subscription events remain durably queued as `awaiting-issuer`. An operator must issue the genuine Keygen license, register its subscription binding and deliver the key securely. Automated issuance/delivery and Free-download onboarding remain service work.
+Create an ignored private members file and preview issuance:
 
-Leave Lemon Squeezy native license-key generation disabled for this product. Keygen is the only license issuer; enabling both could email customers an incompatible Lemon Squeezy key while their Keygen license is still awaiting issuance.
-
-The worker verifies HMAC-SHA256 over the exact raw webhook bytes, checks store/product/variant/test mode, persists a body digest and subscription ID, then reconciles in one worker against fresh subscription API data. It never trusts a webhook's expiry alone. Duplicate deliveries are idempotent, stale provider versions cannot overwrite newer ledger state, failed provider calls retry with backoff, and an hourly reconciliation also covers registered subscriptions. Only configured lifecycle events are accepted. Payment-invoice events and automatic refund/chargeback handling are outside this slice; issuer suspension remains the operator control for those cases.
-
-| Authoritative subscription state | Keygen expiry decision                                                                                                     |
-| -------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| Active                           | Current cycle end, `renews_at`; this slice supports monthly/annual terms up to 400 days                                    |
-| Cancelled                        | `ends_at`, retaining access through the paid period                                                                        |
-| Past due / unpaid                | Last confirmed paid-through time from the durable ledger; a retry date grants no new time                                  |
-| Expired                          | The elapsed `ends_at`                                                                                                      |
-| On trial                         | Explicitly registered trial license through `trial_ends_at`                                                                |
-| Paused, void                     | Retain confirmed paid-through time without extension                                                                       |
-| Paused, free                     | Explicit provider-side complimentary access, refreshed in grants of at most one day, retaining any later paid-through time |
-
-The worker can convert a registered trial license to only the pinned Pro policy. It first verifies the target's `KEEP_EXPIRY`, writes the authoritative expiry, then changes policy. Retries repeat the same bounded operations. It never clears an operator suspension. The provider documents [cancellation, dunning and pause semantics](https://docs.lemonsqueezy.com/api/subscriptions/the-subscription-object), [raw webhook signatures](https://docs.lemonsqueezy.com/help/webhooks/signing-requests), and Keygen's [policy transfer behavior](https://keygen.sh/docs/api/policies/).
-
-Create a private server JSON file with this exact shape, using real IDs after provisioning:
-
-```json
-{
-  "storeId": 1,
-  "productId": 2,
-  "variantId": 3,
-  "testMode": true,
-  "keygenAccountId": "KEYGEN_ACCOUNT_UUID",
-  "keygenProductId": "DEVICE_DECK_PRODUCT_UUID",
-  "keygenProPolicyId": "DEVICE_DECK_PRO_POLICY_UUID",
-  "keygenTrialPolicyId": "DEVICE_DECK_TRIAL_POLICY_UUID",
-  "bindings": [
-    {
-      "subscriptionId": "LEMON_SUBSCRIPTION_ID",
-      "licenseId": "KEYGEN_LICENSE_UUID"
-    }
-  ]
-}
+```sh
+npm run release:team-license -- --members work/release-secrets/team.json --mode test
+npm run release:team-license -- --members work/release-secrets/team.json --mode test --apply
 ```
 
-Each registered license must have metadata `lemonSubscriptionId` as a string, `lemonTestMode` as a boolean, and `deviceDeckMode` as `test` or `live`. All must match the operator configuration. Each license and subscription may occur in only one binding. Use the same compatible product and policies as the app.
+The file contains an array of `{ "email": "person@example.com", "firstName": "Person", "lastName": "Name" }`. The default grant is 60 days of Pro on one Mac. The script reuses a campaign license and never silently extends expiry, replaces a held license, or sends email. Keys and delivery records are saved with owner-only permissions under ignored `work/release-secrets/team/`. Share each person's own key privately. Test keys cannot activate live builds.
 
-Required server-only environment variables are `DEVICE_DECK_BILLING_HOME`, `DEVICE_DECK_BILLING_CONFIG`, `DEVICE_DECK_LEMON_TOKEN`, `DEVICE_DECK_ISSUER_TOKEN` and `DEVICE_DECK_WEBHOOK_SECRET`. Optional `DEVICE_DECK_BILLING_PORT` defaults to 8080. The issuer token needs only the configured product's license/policy reads, expiry updates and license policy transfer permission. Neither token nor webhook secret belongs in the desktop package or npm installer.
+## Lemon Squeezy billing service
 
-`npm run billing:serve` binds loopback. A future deployment needs TLS ingress for `POST /webhooks/lemon-squeezy` and durable private storage. Subscribe to `subscription_created`, `subscription_updated`, `subscription_cancelled`, `subscription_resumed`, `subscription_expired`, `subscription_paused` and `subscription_unpaused`. Return 200 only after storing the authenticated delivery. Do not enable this public endpoint until provisioning and sandbox tests are approved.
+`apps/billing` is an operator service excluded from desktop bundles. It now creates or reuses the scoped Keygen customer and license, recovers ambiguous issuance failures, reconciles subscriptions, and provides expiring browser license retrieval. It verifies raw webhook signatures and checks the configured store, product, variant and test/live mode before processing events. Fresh provider API data controls expiry; a webhook does not independently grant access.
 
-A PID/token lock prevents two workers. After a crash, `npm run billing:recover-lock -- /absolute/billing-home` removes only a verified dead owner's lock and refuses a live PID. If ownership cannot be parsed or a recovery was interrupted, inspect the private lock records before manual cleanup; the worker never kills a process to recover. Preserve `billing.sqlite` and its ledger across restarts.
+Renewals, cancellations, trial conversion, payment failures and expiry are reconciled against the durable ledger. Refund checks are limited to the matching order/subscription invoices; partial refunds require review. Access holds are sticky until an authenticated operator explicitly releases them. Lemon Squeezy has no documented chargeback webhook in the implemented event set, so chargeback handling is an explicit operator hold/release workflow, not a claimed automatic feed.
 
-## Private distribution
+Leave Lemon Squeezy native license-key generation disabled while Keygen issues Device Deck keys. No customer email is sent by this implementation; checkout return pages and expiring operator-generated retrieval links deliver the matching license securely.
 
-The release targets Node 24, minifies the four JavaScript entry points and emits no source maps. It retains compiled `deck-camera`, the required `apple-tv.py` runtime bridge and third-party notices. Swift source and its compiler plist are excluded. This is a bundled JavaScript application, not a proven source-free executable. The read-only Hosanna reference supplied packaging concepts; its archived pkg/Node 18 toolchain and validation shortcuts were not copied.
+See [the billing runbook](../apps/billing/README.md) for exact environment variables, test/live configuration, Docker/Caddy deployment, webhook events, preflight, retry/hold/retrieval commands and backup/recovery. A SQLite transaction lock prevents multiple workers and releases automatically after process death, including container restarts. Keep each mode's database, credentials and signing/retrieval secrets separate.
 
-`packages/installer` scaffolds a private npm launcher with no source files in its npm payload. It authenticates protected Keygen artifact downloads, checks signed release identity, size and SHA-256, rejects unsafe extraction paths/links and installs into a version-specific app directory. The download authorization does not grant Pro. A separately pinned release signing key authenticates metadata; it is independent of Keygen's account signing key. Neither trust key can be replaced using runtime config or environment variables.
+Local automated tests cover HTTP authorization, browser Origin/cookie handling, idempotent issuance and retries, trial/payment transitions, scoped refunds, persistent holds and crash recovery. Real Lemon checkout and production HTTPS deployment await the operator's store and hosting choices.
 
-The installer is intentionally unconfigured and marked `private: true`. No publication occurred. New users need a Free/trial download-license issuance route before it can be advertised as anonymously installable. The local app continues to require no account/login screen. Installer metadata freshness gates new downloads; already-installed apps remain launchable after metadata expiry. The daemon controls paid feature expiry.
+## Application distribution
 
-Minification and private artifact delivery deter casual inspection and make republishing less convenient. They do not prevent a determined user from inspecting or patching local code. Full Device Deck executable packaging, Developer ID signing and notarization remain unproven. A separate temporary Node 24 packager probe proved SQLite, Ed25519 and child processes only; it did not prove this application's ESM imports, helpers or daemon lifecycle.
+The Mac installer contains a stable app identity, private pinned Node runtime, minified JavaScript, native capture helper, web assets and third-party notices. It excludes development mocks, source maps, account admin tokens, private release keys, user profiles and capture data. JavaScript bundling does not make the program impossible to inspect.
 
-## Real sandbox completion checklist
+The TEST Keygen product uses license-gated distribution. The LIVE product uses public distribution so people can install Free before activating Pro. [Release publishing](release-publishing.md) signs immutable package identity, hash, size and expiry with the separate release key. The CLI and menu-bar updater check those signatures against compiled trust. Downloads are staged; replacement is explicit and the installer refuses to replace a running app.
 
-1. Confirm the Lemon Squeezy store and test subscription product/variant. Configure hosted checkout and lifecycle webhooks, leaving native Lemon Squeezy license-key generation disabled.
-2. Provision a dedicated Keygen product, matching Pro/trial policies, features and finite licenses. Pin its public trust settings and mode in source, then rebuild the same protected app for all testers.
-3. Run the bridge with real server credentials and persistent storage behind an approved test endpoint. Complete a genuine test checkout, issue/register/deliver its Keygen license, and activate it in an isolated profile.
-4. Exercise renewal, failed payment, cancellation through paid-through date, expiry, trial conversion, deactivation and bounded offline use against real providers. Confirm signed checkout document shape and permissions.
-5. Issue a genuine complimentary Pro license for the owner. Only then consider upgrading the existing review daemon, after checking its active work. Do not replace its data.
-6. Complete automatic issuance/delivery, Free-download onboarding and refund/chargeback operations. Create signed release metadata and test an authenticated Keygen download before approving npm/Keygen publication.
+`packages/installer` retains the older protected archive/npm launcher for compatibility. It remains private and unpublished; the supported delivery route is the Mac `.pkg`. Homebrew casks can be generated from verified signed public manifests with `npm run release:cask`; no public cask or npm package is advertised as published yet.
 
-No item above is represented as already passed. Local tests use injected providers and ephemeral signing keys only in test harnesses; customer bundles contain neither.
+## Remaining market acceptance
+
+1. Install Developer ID Application/Installer identities and configure notarization; build and independently verify the public package.
+2. Confirm Camera permission attribution on a clean Mac, three simultaneous feeds, real recording, pairing, upgrade deferral and uninstall preserving data. The isolated staged-app proof does not replace these checks.
+3. Complete a real Lemon test checkout, license retrieval/activation, renewal, failure, cancellation, refund and operator hold/release against the deployed service.
+4. Verify the signed public download and generated Homebrew cask, then publish the reviewed stable release and tap.

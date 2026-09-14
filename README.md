@@ -1,12 +1,16 @@
 # Device Deck
 
-Version 0.4.0 adds an unconfigured Free licensing candidate with a Keygen entitlement boundary and a server-side Lemon Squeezy reconciliation foundation. See [licensing, configuration and remaining sandbox work](docs/licensing-and-billing.md). The existing 0.3.0 review installation remains separate.
+Version 0.5.0-beta.1 adds simulator launch/close controls, a Mac application and team installer, real Device Deck Keygen activation, verified update downloads, and automated purchase-to-license issuance. Start with [team deployment](docs/team-rollout.md), [Mac packaging](docs/macos-distribution.md), and [licensing and billing](docs/licensing-and-billing.md).
 
 A local Mac workspace for connected TV devices and simulators. The daemon owns reservations, remote input, capture processes and files. The web app, CLI, terminal UI and MCP use the same authenticated operations.
 
 The public website includes a separate simulated demo. It never connects to the local daemon. The local app has no sample devices and needs no account login.
 
-## Run the local app
+## Install the Mac application
+
+Use the team `.pkg` from the release operator, then open `/Applications/Device Deck.app`. It includes Node and the native helper. Run `devdeck version`, `devdeck doctor`, `devdeck ui`, or `devdeck tui`; `devdeck service install` enables launch at login. Recording and USB screenshots currently need `brew install ffmpeg`. Team builds use TEST licenses and an unsigned installer; signed/notarized public builds use LIVE licenses. See [installation and update details](docs/macos-distribution.md).
+
+## Build from source
 
 Requires macOS 14 or later, Node 24 or later, and Xcode command line tools to build the capture helper. The downloadable package already contains that helper for its named architecture.
 
@@ -36,8 +40,40 @@ Reports offer Day, Week, Month and inclusive custom date ranges. The same range 
 
 ## First device session
 
-1. Open the local dashboard and select **Discover**.
-2. Register one target, give it a unique friendly name and choose its capture source. Roku and physical Apple TV input use the network. Their video needs an explicitly paired USB capture card.
+The Devices list has Apple, Roku, Android and USB-only filter buttons, plus Sim / Real buttons. Click an active filter again to clear it; less common filters are under **More filters**.
+
+### Feed controls and compact remotes
+
+Every feed and device row has Identify, Record, Screenshot, Reserve and Remote actions. Identify labels the local preview and shows the capture card's stable identity. Record and Screenshot open quick capture settings; an available device can be reserved and captured with one button.
+
+Remote opens a small floating panel over the workspace. Drag its title bar anywhere, resize its lower-right corner, and keep watching the feeds underneath. Its position and size are remembered per device in that browser. The menu contains reservations, capture settings, device configuration and remote style. The first key or text sent to an available device reserves it using the menu's owner and reason. An occupied device requires an explicit takeover; stopping or ending an active recording saves the file first.
+
+Enable **Keyboard input** to send arrows, Enter, Space, B (Back), H (Home), R (Rewind), F (Forward), P (Replay) and S (Special). Escape exits keyboard mode. While keyboard input is off, the feed viewer keeps its navigation shortcuts. Use the text field for text entry.
+
+Roku, Fire TV, Android TV, Apple TV, Samsung and LG visual styles are available. Keys follow the device's configured adapter; a style does not add a control connection. Samsung and LG network adapters are not implemented. Fire TV control requires authorized ADB. USB inputs without a target get a capture-only device on first use of a session action, so screenshot and recording work without network control. Edit that device to add its control connection later.
+
+### Watch capture feeds
+
+Open **Feeds** to watch registered USB inputs without reserving a device. Choose inputs using the checkboxes, then select **Split screen** or **Single feed**. Left/Right switches the selected feed, 1–9 opens a feed, G toggles the grid and F toggles fullscreen. These keys browse pictures; use the device viewer for remote input. The URL retains the layout and selected cards across reloads.
+
+```sh
+./devdeck feeds                         # Names, connection state and stable IDs
+./devdeck view --mux                    # All connected registered USB feeds
+./devdeck view --sources ugreen-1,ugreen-2,usb-video --mux
+./devdeck view                         # One picture, Left/Right through the feeds
+./devdeck view --source ugreen-1        # Just one named card or stable ID
+./devdeck view --device 'Roku Ultra'    # That device's paired USB feed
+./devdeck view --mux --json             # Return a one-use browser URL without opening it
+```
+
+`--browser` is accepted explicitly; browser viewing is the default. Source names must match uniquely, so use IDs when multiple cards have the same name. `--sources` accepts a comma-separated list and preserves its order. A selected disconnected card remains visible as disconnected. Viewing newly detected cards registers their stable hardware IDs without assigning a TV. With no selection, configured USB cards are preferred; if none are configured, connected external inputs are selected, which can include USB webcams.
+
+The feed viewer refreshes at up to 10 fps with silent video. It shares each card's native stream with previews and recordings. Actual refresh rate depends on the Mac, USB bandwidth and HDMI signal. A connected card can still output a black picture or a “No Signal” slate when its HDMI source is sleeping or disconnected. Bound cards retain device maintenance and session-release checks.
+
+### Control a device
+
+1. Open Devices and select **Discover / add devices**. Select several devices and choose **Add selected**, or use **Add all** to register every new device that is ready. Already configured devices are skipped.
+2. Devices use their discovered names, with numbers added for duplicates, and native capture screens are connected automatically. Edit individual names or USB capture bindings afterward as needed. Roku and physical Apple TV input use the network; their video needs an explicitly paired USB capture card.
 3. Open the viewer and reserve the device with an owner label and a reason.
 4. Send supported keys or text, take a screenshot or start recording.
 5. Stop recording, open the resulting file in Captures, and release the device.
@@ -50,17 +86,26 @@ The CLI picker offers the same workflow:
 ./devdeck tui
 ```
 
+The TUI uses a fixed terminal screen with **Devices, Feeds, Captures, Sessions, History, Reports, Settings, and License** menus. Use **1–8** to switch views, **Tab** to move between the menu and items, and **↑/↓** or **J/K** to select. **Enter** opens the selected item's actions; each view shows its action keys along the bottom. **PgUp/PgDn** and **Home/End** move through long lists. It fits an 80×24 terminal and adds a side detail pane in wider windows.
+
+In Devices, **O** launches or closes the selected supported simulator; the web device row has the same controls. Active reservations and recordings must be finished before closing it. See [simulator lifecycle details](docs/simulator-controls.md).
+
+In Devices, **F** chooses platform and Sim/Real filters, **/** searches, and **D** discovers devices. Discovery supports **Space** to select, **A** for all available devices, and **Enter** to add them together. In Feeds, select sources with **Space** and press **G** for a browser split screen, or **W** for one feed.
+
+**C** opens a device remote, **R** reserves it, **S** takes a screenshot, and **V** starts or stops recording. Inside the remote, arrows and **Enter** control the device; **B** is Back, **H** is Home, **Space** is Play/Pause, **[ / ]** seek, **P** replays, **\*** sends Special, and **T** opens text entry. **Esc** returns to the workspace while keeping your reservation. **Q** asks to release this TUI's reservations and save their recordings before quitting. Taking over another client's session requires confirmation. Forced termination leaves reservations to expire at their configured TTL.
+
 For scripts, `reserve --json` returns a session ID and secret lease token. Every control/capture command requires both. See [CLI, API and MCP](docs/api.md) for complete examples.
 
 ## Platform adapters
 
-| Target                                 | Input                               | Preview / screenshot / recording | Setup                                                        |
-| -------------------------------------- | ----------------------------------- | -------------------------------- | ------------------------------------------------------------ |
-| Roku                                   | ECP keys and Unicode text           | Explicit USB input               | Network ECP must permit control; stable Roku serial required |
-| Android, Android TV, Fire TV, emulator | ADB keys, tap, printable ASCII text | Native ADB or explicit USB input | ADB authorization; configurable server port                  |
-| iOS and tvOS simulator                 | idb keys, tap and text              | Native simctl                    | Booted simulator, Xcode; idb for input                       |
-| Physical Apple TV                      | Companion keys and text             | Explicit USB input               | pyatv and PIN pairing                                        |
-| Other physical Apple devices           | Discovery only                      | No native adapter                | No unsupported operation is advertised                       |
+| Target                                 | Input                               | Preview / screenshot / recording   | Setup                                                        |
+| -------------------------------------- | ----------------------------------- | ---------------------------------- | ------------------------------------------------------------ |
+| Roku                                   | ECP keys and Unicode text           | Explicit USB input                 | Network ECP must permit control; stable Roku serial required |
+| Android, Android TV, Fire TV, emulator | ADB keys, tap, printable ASCII text | Native ADB or explicit USB input   | ADB authorization; configurable server port                  |
+| iOS and tvOS simulator                 | idb keys, tap and text              | Native simctl                      | Booted simulator, Xcode; idb for input                       |
+| USB capture only                       | No remote input                     | USB preview, screenshot, recording | Stable capture card identity                                 |
+| Physical Apple TV                      | Companion keys and text             | Explicit USB input                 | pyatv and PIN pairing                                        |
+| Other physical Apple devices           | Discovery only                      | No native adapter                  | No unsupported operation is advertised                       |
 
 Native Android recordings stop at 175 seconds, below screenrecord's 180-second limit. Other sources use the configured limit. Preview refreshes about once a second and is labelled accordingly. USB preview and recording share one capture-helper stream selected by stable AVFoundation unique ID, never enumeration index. Capture video is silent in this release.
 
@@ -114,6 +159,22 @@ The source adaptation map is in [source provenance](docs/source-provenance.md). 
 
 ## Develop and validate
 
+For hardware development with an explicitly labelled local Pro mock:
+
+```sh
+npm ci
+npm run build:local
+npm run install:dev-cli   # Install devdeck in ~/.local/bin
+./devdeck start
+./devdeck license status --json
+./devdeck view --mux
+./devdeck stop
+```
+
+The repository-root `./devdeck` wrapper uses the ignored `work/local-deck/` profile and starts `scripts/service-local.ts` with real adapters and an explicitly labelled, active Pro mock. `npm run service:local` runs that same daemon in the foreground. Each development start resets the mock to active; it makes no Keygen or Lemon Squeezy calls. After `npm run install:dev-cli`, use `devdeck` from any directory with `~/.local/bin` on your PATH. `./devdeck` also works from the checkout. `DEVICE_DECK_HOME` can select another development profile.
+
+The normal `node build/devdeck.mjs` launcher and packaged releases continue using the real license manager and the standard user profile. The development mock is not part of their bundles. The repository wrapper is for local start/stop, not login-service installation. macOS Camera permission must be enabled for the application that launches the capture helper; when launched from Codex, macOS may list that application as “ChatGPT.” Hardware IDs for cards without serial numbers can change when moved to another USB port; rediscover and confirm the picture before rebinding.
+
 ```sh
 npm run check
 npm test
@@ -125,6 +186,6 @@ npm run dev             # Marketing site on 5173
 npm run dev:app         # Public demo on 5174
 ```
 
-The static Firebase preview remains in the existing `tantawowa-device-deck` project. Only `dist/` is hosted. Never deploy the local `build/`, runtime directory, capture files or private endpoint credentials to Firebase. Billing and cloud services are outside this release.
+The static Firebase preview remains in the existing `tantawowa-device-deck` project. Only `dist/` is hosted. Never deploy the local `build/`, runtime directory, capture files or private endpoint credentials to Firebase. The separate [billing service](apps/billing/README.md) has its own deployment and secrets.
 
 Copyright 2026 TantaWowa. All rights reserved. Dependency licenses are included in the release's `THIRD_PARTY_NOTICES.txt`.

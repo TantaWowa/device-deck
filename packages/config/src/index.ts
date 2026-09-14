@@ -1,14 +1,10 @@
+import { deviceIdentity, sourceIdentity } from "../../core/src/local/identity";
+export { deviceIdentity, sourceIdentity } from "../../core/src/local/identity";
 import { readFile, mkdir, rename, chmod, open, unlink } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import { createHash, randomUUID } from "node:crypto";
-import {
-  configSchema,
-  type Config,
-  type DeviceConfig,
-  type SourceConfig,
-  fail,
-} from "../../core/src/local/types";
+import { configSchema, type Config, fail } from "../../core/src/local/types";
 export const expand = (p: string, base: string) =>
   path.resolve(
     base,
@@ -34,30 +30,14 @@ export async function atomicWrite(file: string, data: string | Buffer) {
     throw error;
   }
 }
-export function deviceIdentity(d: DeviceConfig) {
-  const c = d.connection;
-  switch (c.type) {
-    case "adb":
-      return `adb:${c.hardwareId || c.serial}`;
-    case "roku":
-      return `roku:${c.serial}`;
-    case "simulator":
-      return `simulator:${c.udid.toLowerCase()}`;
-    case "apple-tv":
-      return `apple-tv:${c.identifier}`;
-    case "apple-device":
-      return `apple-device:${c.udid}`;
-  }
-}
-export const sourceIdentity = (s: SourceConfig) =>
-  s.kind === "usb" ? `usb:${s.uniqueId}` : `native:${s.deviceId}`;
 export function validateConfig(value: unknown) {
   const c = configSchema.parse(value);
   const ids = new Set<string>(),
     physicalSources = new Set<string>(),
     names = new Set<string>(),
     bindings = new Set<string>(),
-    locators = new Set<string>();
+    locators = new Set<string>(),
+    emulatorTransports = new Map<string, string | undefined>();
   for (const s of c.sources) {
     if (ids.has(s.id))
       fail("invalid-config", "Capture source IDs must be unique.");
@@ -78,6 +58,40 @@ export function validateConfig(value: unknown) {
   if (deviceIds.size !== c.devices.length)
     fail("invalid-config", "Device IDs must be unique.");
   for (const d of c.devices) {
+    if (
+      d.connection.type === "adb" &&
+      /^emulator-\d+$/.test(d.connection.serial)
+    ) {
+      const transport = `${d.connection.port}:${d.connection.serial}`;
+      if (
+        emulatorTransports.has(transport) &&
+        (!emulatorTransports.get(transport) || !d.connection.avdName)
+      )
+        fail(
+          "invalid-config",
+          "An emulator ADB transport cannot be registered twice without distinct AVD names.",
+        );
+      emulatorTransports.set(transport, d.connection.avdName);
+    }
+    if (
+      d.connection.type === "adb" &&
+      d.connection.avdName &&
+      (d.kind !== "virtual" ||
+        d.platform !== "Android" ||
+        d.connection.hardwareId)
+    )
+      fail(
+        "invalid-config",
+        "An AVD name is only valid for Android virtual devices without a physical hardware serial.",
+      );
+    if (
+      d.connection.type === "capture" &&
+      !c.sources.some((s) => s.id === d.captureSourceId && s.kind === "usb")
+    )
+      fail(
+        "invalid-config",
+        "Capture-only devices require a USB capture input.",
+      );
     if (
       d.connection.type === "adb" &&
       d.connection.serial.includes(":") &&

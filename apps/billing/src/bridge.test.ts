@@ -235,3 +235,16 @@ test("billing lock rejects live owner recovery and permits restart after a verif
     await rm(directory, { recursive: true, force: true });
   }
 });
+test("cancelled trials retain the trial policy until an active paid subscription is observed", () => {
+  const s = subscription();
+  s.attributes.status = "on_trial";
+  s.attributes.trial_ends_at = new Date(now + 86400000).toISOString();
+  const trial = desiredAccess(s, undefined, now);
+  assert.equal(trial.trial, true);
+  s.attributes.status = "cancelled";
+  s.attributes.ends_at = s.attributes.trial_ends_at;
+  const cancelled = desiredAccess(s, trial, now);
+  assert.equal(cancelled.trial, true);
+  s.attributes.status = "active";
+  assert.equal(desiredAccess(s, cancelled, now).trial, false);
+});

@@ -27,14 +27,25 @@ import { root } from "../../../packages/adapters/src";
 import path from "node:path";
 import { lifecycle } from "./lifecycle";
 import { pick, parseSelector } from "./selection";
+import { selectFeeds, feedQuery } from "./feeds";
+import { checkMacUpdates, compareVersions, downloadMacUpdate } from "../../../packages/installer/src/mac-update";
+import { releaseMode } from "../../../packages/licensing/src/trust";
+import { version } from "../../../packages/core/src/version";
 const help = `Device Deck · local Mac device manager
 Usage: devdeck <command> [options]
 
   init                         Create a local config file
   start | stop | status | logs  Run and inspect the daemon
   install | uninstall          Enable/remove the login service
+  service <action>             Explicit start/stop/status/logs/install/uninstall
+  version | doctor             Inspect installed version and capture readiness
+  update check|download        Find/download a verified Mac installer
+       [--channel beta|stable] [--key-file FILE] [--output DIRECTORY]
   ui | tui | mcp               Open the dashboard, terminal UI or MCP server
   discover                     Find connected targets and capture cards
+  feeds                        List capture feeds and stable IDs
+  view [--source NAME_OR_ID]    Open a browser feed; Left/Right switches feeds
+       [--sources A,B,C] [--mux] [--browser] [--json]
   devices [filters]            List configured devices
   sources | sessions | captures | history
   reports [--range day|week|month|custom] [--start YYYY-MM-DD --end YYYY-MM-DD]
@@ -52,7 +63,7 @@ Usage: devdeck <command> [options]
   takeover [filters] --owner NAME --reason TEXT --yes
   call OPERATION JSON          Every shared API operation, including metadata
 
-Filters: --device NAME_OR_ID --platform Roku|Android|Apple --name TEXT
+Filters: --device NAME_OR_ID --platform Roku|Android|Apple|Other --name TEXT
          --state free|reserved|online|offline|locked --capabilities key,record
 Options: --json --ttl MINUTES --mode clean|annotated
 
@@ -82,16 +93,22 @@ const optionTypes: Record<string, { type: "string" | "boolean" }> =
       "range",
       "start",
       "end",
+      "source",
+      "sources",
+      "channel",
+      "key-file",
+      "output",
     ].map((k) => [k, { type: "string" }]),
   );
-for (const key of ["json", "help", "clipboard", "yes"])
+for (const key of ["json", "help", "clipboard", "yes", "mux", "browser", "version"])
   optionTypes[key] = { type: "boolean" };
 try {
   const { values: v, positionals: p } = parseArgs({
     allowPositionals: true,
     options: optionTypes,
   });
-  const command = p[0];
+  const command = v.version ? "version" : p[0] === "service" ? (p[1] || "status") : p[0];
+  if (p[0] === "service" && !["start", "stop", "status", "logs", "install", "uninstall"].includes(command)) throw new DeckError("arguments", "Use service start, stop, status, logs, install or uninstall.", 400);
   if (!command || v.help) {
     console.log(help);
   } else {
@@ -115,7 +132,35 @@ try {
       return String(v.reason);
     };
     let result: unknown;
-    if (command === "status") result = await callService("health");
+    if (command === "version") result = { version, mode: releaseMode, platform: process.platform, arch: process.arch };
+    else if (command === "doctor") {
+      let metadata: unknown;
+      try { metadata = JSON.parse(await readFile(path.join(root, "build/build-metadata.json"), "utf8")); } catch {}
+      try {
+        const inventory: Snapshot = await callOperation("inventory");
+        result = { version, mode: releaseMode, build: metadata, service: "running", license: inventory.license, diagnostics: inventory.diagnostics, devices: inventory.devices.length, sources: inventory.sources.length };
+      } catch (error) {
+        result = { version, mode: releaseMode, build: metadata, service: "unavailable", message: (error as Error).message, next: "Open Device Deck.app or run devdeck service start, then run devdeck doctor again." };
+        process.exitCode = 1;
+      }
+    } else if (command === "update") {
+      const action = p[1] || "check";
+      if (!["check", "download"].includes(action) || (v.channel && !["beta", "stable"].includes(String(v.channel)))) throw new DeckError("arguments", "Use update check|download with --channel beta|stable.", 400);
+      let key: string | undefined;
+      if (v["key-file"]) key = (await readFile(String(v["key-file"]), "utf8")).trim();
+      else {
+        try { key = JSON.parse(await readFile(path.join(dataDirectory(), "license.json"), "utf8")).key; }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw new Error("Saved license cannot be read. Use --key-file with a private license file."); }
+      }
+      const release = await checkMacUpdates({ key, ...(v.channel ? { channel: String(v.channel) as "beta" | "stable" } : {}) });
+      if (!release) result = { currentVersion: version, available: false, message: "No verified package is available for this release channel and Mac." };
+      else if (action === "check") result = { currentVersion: version, available: compareVersions(release.manifest.version, version) > 0, release: release.manifest };
+      else {
+        if (compareVersions(release.manifest.version, version) < 0) throw new Error("The available package is older than this version. Automatic downgrade is not supported.");
+        const file = await downloadMacUpdate(release, path.resolve(String(v.output || path.join(dataDirectory(), "updates"))), key);
+        result = { file, version: release.manifest.version, signing: release.manifest.signing, next: "Finish reservations and recordings, quit Device Deck, then open this installer. Homebrew users should upgrade through Homebrew." };
+      }
+    } else if (command === "status") result = await callService("health");
     else if (
       ["start", "stop", "install", "uninstall", "logs"].includes(command)
     )
@@ -128,6 +173,92 @@ try {
       const url = await browserUrl();
       spawn("/usr/bin/open", [url], { stdio: "ignore" });
       result = "Opened local dashboard.";
+    } else if (command === "feeds" || command === "view") {
+      const cards = await callOperation("capture-cards.list");
+      if (command === "feeds") {
+        if (v.json) result = cards;
+        else {
+          console.table(
+            cards.sources.map((s: any) => ({
+              name: s.name,
+              id: s.id,
+              hardware: s.uniqueId,
+              status: s.status,
+            })),
+          );
+          for (const diagnostic of cards.diagnostics) console.error(diagnostic);
+        }
+      } else {
+        if (v.source && v.sources)
+          throw new DeckError(
+            "arguments",
+            "Use --source or --sources, not both.",
+            400,
+          );
+        const current = await callOperation("config.get");
+        let requested = String(v.source || v.sources || "") || undefined;
+        if (Object.values(selector).some((value) => value !== undefined)) {
+          if (requested)
+            throw new DeckError(
+              "arguments",
+              "Choose device filters or source selectors.",
+              400,
+            );
+          const inventory: Snapshot = await callOperation("inventory");
+          const devices = matchDevices(
+            inventory.devices,
+            inventory.sessions,
+            selector,
+          );
+          requested = devices
+            .map((d) => d.captureSourceId)
+            .filter(Boolean)
+            .join(",");
+          if (!requested)
+            throw new DeckError(
+              "arguments",
+              "Matching devices have no USB capture feeds.",
+              400,
+            );
+        }
+        const registered = cards.sources.filter((s: any) =>
+          current.config.sources.some((c: any) => c.id === s.id),
+        );
+        const feeds = selectFeeds(
+          requested || !registered.length ? cards.sources : registered,
+          requested,
+        );
+        const config = structuredClone(current.config);
+        for (const s of feeds)
+          if (!config.sources.some((c: any) => c.id === s.id))
+            config.sources.push({
+              id: s.id,
+              name: s.name,
+              kind: s.kind,
+              uniqueId: s.uniqueId,
+            });
+        if (config.sources.length !== current.config.sources.length)
+          await callOperation("config.save", {
+            config,
+            revision: current.revision,
+          });
+        const url = await browserUrl(
+          feedQuery(
+            feeds.map((s) => s.id),
+            Boolean(v.mux),
+          ),
+        );
+        if (v.json)
+          result = {
+            url,
+            layout: v.mux ? "grid" : "single",
+            feeds: feeds.map((s) => ({ id: s.id, name: s.name })),
+          };
+        else {
+          spawn("/usr/bin/open", [url], { stdio: "ignore" });
+          result = `Opened ${feeds.length} feed${feeds.length === 1 ? "" : "s"} in ${v.mux ? "split-screen" : "single-feed"} view. Left/Right: switch · G: grid · F: fullscreen.`;
+        }
+      }
     } else if (command === "mcp" || command === "tui") {
       await import(
         command === "mcp"

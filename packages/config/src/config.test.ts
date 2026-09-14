@@ -72,3 +72,97 @@ test("duplicate USB identities and physical devices across hosts or ADB ports ar
     /hardware identity/,
   );
 });
+
+test("AVD names are persistent virtual identities; physical targets and duplicate AVD or legacy transports are rejected", () => {
+  const c = validateConfig({
+    schemaVersion: 1,
+    settings: { folder: "./captures" },
+  });
+  const d = {
+    id: "a",
+    name: "A",
+    platform: "Android",
+    kind: "virtual",
+    connection: {
+      type: "adb",
+      serial: "emulator-5554",
+      port: 5037,
+      avdName: "TV_35",
+    },
+  };
+  assert.throws(
+    () => validateConfig({ ...c, devices: [{ ...d, kind: "physical" }] }),
+    /only valid for Android virtual/,
+  );
+  assert.throws(
+    () =>
+      validateConfig({
+        ...c,
+        devices: [
+          { ...d, connection: { ...d.connection, hardwareId: "physical" } },
+        ],
+      }),
+    /only valid for Android virtual/,
+  );
+  assert.throws(
+    () =>
+      validateConfig({
+        ...c,
+        devices: [
+          d,
+          {
+            ...d,
+            id: "b",
+            name: "B",
+            connection: {
+              ...d.connection,
+              serial: "emulator-5556",
+              port: 5038,
+            },
+          },
+        ],
+      }),
+    /hardware identity/,
+  );
+  assert.throws(
+    () =>
+      validateConfig({
+        ...c,
+        devices: [
+          d,
+          {
+            ...d,
+            id: "b",
+            name: "B",
+            connection: { type: "adb", serial: "emulator-5554", port: 5037 },
+          },
+        ],
+      }),
+    /ADB transport cannot be registered twice/,
+  );
+  assert.throws(() =>
+    validateConfig({
+      ...c,
+      devices: [
+        { ...d, connection: { ...d.connection, avdName: "-wipe-data" } },
+      ],
+    }),
+  );
+  assert.equal(
+    validateConfig({
+      ...c,
+      tools: { emulator: "/sdk/emulator/emulator" },
+      devices: [
+        d,
+        {
+          ...d,
+          id: "b",
+          name: "B",
+          connection: { ...d.connection, avdName: "Pixel_35" },
+        },
+      ],
+    }).devices.length,
+    2,
+    "Distinct AVDs may reuse a previous transport serial",
+  );
+});

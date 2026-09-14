@@ -17,6 +17,7 @@ import {
   type ProcessHandle,
 } from "../../adapters/src/process";
 export type RecordingHandle = {
+  device?: DeviceConfig;
   id: string;
   deviceId: string;
   path: string;
@@ -106,8 +107,14 @@ export class CaptureEngine {
     }
     return stream;
   }
-  async preview(d: DeviceConfig, s: SourceConfig, interval = 750) {
-    const key = s.kind === "usb" ? s.uniqueId! : d.id;
+  async preview(d: DeviceConfig | null, s: SourceConfig, interval = 750) {
+    if (s.kind !== "usb" && !d)
+      fail(
+        "source-missing",
+        "A native screen needs its configured device.",
+        404,
+      );
+    const key = s.kind === "usb" ? s.uniqueId! : d!.id;
     const frame = this.frames.get(key);
     if (frame && Date.now() - frame.at < interval) return frame.data;
     let pending = this.pending.get(key);
@@ -116,7 +123,7 @@ export class CaptureEngine {
         const data =
           s.kind === "usb"
             ? await this.usb(s).frame()
-            : await this.adapters.screenshot(d);
+            : await this.adapters.screenshot(d!);
         if (!(
           (data[0] === 137 && data.subarray(1, 4).toString() === "PNG") ||
           (data[0] === 255 && data[1] === 216)
@@ -163,12 +170,13 @@ export class CaptureEngine {
     file: string,
     _maxMinutes: number,
     onWorker?: (worker: {
+      device?: DeviceConfig;
       pid?: number;
       remotePid?: string;
       remotePath?: string;
     }) => void,
   ): Promise<RecordingHandle> {
-    await this.adapters.verifyIdentity(d);
+    d = await this.adapters.verifyIdentity(d);
     await mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
     let handle: ProcessHandle,
       detach: (() => void) | undefined,
@@ -210,7 +218,7 @@ export class CaptureEngine {
         "+faststart",
         file,
       ]);
-      onWorker?.({ pid: handle.child.pid });
+      onWorker?.({ pid: handle.child.pid, device: d });
       handle.child.stdin.write(first);
       const frame = (b: Buffer) => {
         if (
@@ -248,7 +256,7 @@ export class CaptureEngine {
         ...(d.connection.os === "tvos" ? ["--display=external"] : []),
         file,
       ]);
-      onWorker?.({ pid: handle.child.pid });
+      onWorker?.({ pid: handle.child.pid, device: d });
       await ready(handle, /Recording started/i, 30000);
       startedAt = Date.now();
       startedMono = performance.now();
@@ -259,7 +267,7 @@ export class CaptureEngine {
         "shell",
         `screenrecord --time-limit 180 ${remotePath} & child=$!; echo DEVICE_DECK_PID:$child; wait $child`,
       ]);
-      onWorker?.({ pid: handle.child.pid, remotePath });
+      onWorker?.({ pid: handle.child.pid, remotePath, device: d });
       await ready(handle);
       remotePid = /DEVICE_DECK_PID:(\d+)/.exec(handle.output())?.[1];
       if (!remotePid) {
@@ -270,10 +278,11 @@ export class CaptureEngine {
           502,
         );
       }
-      onWorker?.({ pid: handle.child.pid, remotePid, remotePath });
+      onWorker?.({ pid: handle.child.pid, remotePid, remotePath, device: d });
       const pid = remotePid,
         remote = remotePath;
       finishNative = async () => {
+        await this.adapters.verifyCaptureTransport(d);
         // Verify both executable and this recording's UUID path before signalling a remote PID.
         try {
           const cmd = (
@@ -314,11 +323,13 @@ export class CaptureEngine {
           clearTimeout(timer);
           if (!handle.exited()) await stop(handle);
         }
+        await this.adapters.verifyCaptureTransport(d);
         await run(
           this.adapters.tool("adb"),
           [...this.adapters.adb(d), "pull", remote, file],
           30000,
         );
+        await this.adapters.verifyCaptureTransport(d);
         await run(this.adapters.tool("adb"), [
           ...this.adapters.adb(d),
           "shell",
@@ -343,6 +354,7 @@ export class CaptureEngine {
       | undefined;
     return {
       id,
+      device: d,
       deviceId: d.id,
       path: file,
       startedAt,

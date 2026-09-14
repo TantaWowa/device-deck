@@ -1,8 +1,9 @@
+import { version } from "../../core/src/version";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { callOperation, callService, endpoint } from "../../core/src/client";
 import { operations, type Operation } from "../../core/src/local/types";
-const server = new McpServer({ name: "device-deck", version: "0.4.0" });
+const server = new McpServer({ name: "device-deck", version });
 const descriptions: Partial<Record<Operation, string>> = {
   "license.status":
     "Read the daemon's verified Free, trial or Pro entitlement state. Never returns the license key.",
@@ -20,6 +21,8 @@ const descriptions: Partial<Record<Operation, string>> = {
     "Read real configured devices, capabilities, reservations, capture files and diagnostics. No seeded devices.",
   discover:
     "Read connected target and USB identities. Discovery does not automatically register or reserve targets.",
+  "devices.simulator":
+    "Launch or close one configured Apple iOS/tvOS simulator or Android AVD by device ID. Android launch requires a persistent avdName; a running legacy emulator serial can close once its AVD identity is verified. Close requires confirmed=true. Active or closing reservations and recordings must be released and finalized first; this never takes over a session or quits other simulators.",
   "sessions.reserve":
     "Atomically reserve one device selected by name, ID or capabilities. Return the session and secret leaseToken. Keep this token for subsequent operations; owner is only a display label.",
   "sessions.release":

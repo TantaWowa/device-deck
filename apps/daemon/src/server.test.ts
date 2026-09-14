@@ -1,5 +1,6 @@
 import test from "node:test";
 import { licensedManager } from "../../../tests/licensing";
+import { LocalDevelopmentLicense } from "../../../scripts/local-license";
 import assert from "node:assert/strict";
 import http from "node:http";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -63,6 +64,12 @@ class TestAdapters extends Adapters {
   }
 }
 class TestCapture extends CaptureEngine {
+  verifiedDevice?: DeviceConfig;
+  previewed: string[] = [];
+  async preview(_device: DeviceConfig | null, source: { id: string }) {
+    this.previewed.push(source.id);
+    return Buffer.from([255, 216, 255, 217]);
+  }
   resolveStop?: () => void;
   starts = 0;
   stops = 0;
@@ -79,6 +86,7 @@ class TestCapture extends CaptureEngine {
     this.disconnected = (r) => endedResolve(r);
     return {
       id,
+      device: this.verifiedDevice,
       deviceId: d.id,
       path: file,
       startedAt: Date.now(),
@@ -151,6 +159,303 @@ const reserve = (deck: DeckService, device = "one") =>
     owner: "same label",
     reason: "test",
   }) as Promise<{ session: { id: string }; leaseToken: string }>;
+async function useSimulator(deck: DeckService) {
+  const c = structuredClone(deck.config.config);
+  c.devices[0].platform = "Apple";
+  c.devices[0].connection = {
+    type: "simulator",
+    os: "tvos",
+    udid: "F4B9CA01-BA57-40A0-984D-38B7F91AB8A1",
+  };
+  await deck.execute("config.save", {
+    config: c,
+    revision: deck.config.revision,
+  });
+}
+test("simulator lifecycle refuses occupied/recording devices and requires close confirmation", async () => {
+  const { deck, adapters, capture, cleanup } = await setup();
+  const actions: string[] = [];
+  adapters.simulator = async (d, action) => {
+    actions.push(action);
+    return {
+      deviceId: d.id,
+      action,
+      state: action === "close" ? "shutdown" : "booted",
+      changed: true,
+    };
+  };
+  try {
+    await useSimulator(deck);
+    await assert.rejects(
+      deck.execute("devices.simulator", { deviceId: "one", action: "close" }),
+      /Confirm before closing/,
+    );
+    await assert.rejects(
+      deck.execute("devices.simulator", { deviceId: "two", action: "launch" }),
+      /Apple iOS\/tvOS simulators/,
+    );
+    const reserved = await reserve(deck),
+      lease = {
+        sessionId: reserved.session.id,
+        leaseToken: reserved.leaseToken,
+      };
+    await deck.execute("recordings.start", lease);
+    await assert.rejects(
+      deck.execute("devices.simulator", {
+        deviceId: "one",
+        action: "close",
+        confirmed: true,
+      }),
+      /Reserved by same label/,
+    );
+    await assert.rejects(
+      deck.execute("devices.simulator", { deviceId: "one", action: "launch" }),
+      /Reserved by same label/,
+    );
+    assert.equal(capture.stops, 0);
+    assert.deepEqual(actions, []);
+    capture.resolveStop = () => {};
+    await deck.execute("sessions.release", lease);
+    assert.equal(capture.stops, 1);
+    await deck.execute("devices.simulator", {
+      deviceId: "one",
+      action: "close",
+      confirmed: true,
+    });
+    assert.deepEqual(actions, ["close"]);
+    assert.equal(
+      deck.store.events().filter((e) => e.action === "simulator-close").length,
+      1,
+    );
+  } finally {
+    await cleanup();
+  }
+});
+test("simulator transitions keep inventory responsive, block reservation/config races and unlock after failure", async () => {
+  const { deck, adapters, cleanup } = await setup();
+  let started!: () => void, finish!: () => void;
+  const entered = new Promise<void>((r) => (started = r)),
+    gate = new Promise<void>((r) => (finish = r));
+  adapters.simulator = async () => {
+    started();
+    await gate;
+    throw new Error("Boot failed");
+  };
+  try {
+    await useSimulator(deck);
+    const launching = deck.execute("devices.simulator", {
+      deviceId: "one",
+      action: "launch",
+    });
+    const rejected = assert.rejects(launching, /Boot failed/);
+    await entered;
+    const during = await deck.snapshot();
+    assert.equal(during.devices[0].simulatorState, "starting");
+    assert.equal(during.devices[0].locked, true);
+    await assert.rejects(reserve(deck), /locked/i);
+    const c = structuredClone(deck.config.config);
+    c.devices[0].name = "Changed while booting";
+    await assert.rejects(
+      deck.execute("config.save", {
+        config: c,
+        revision: deck.config.revision,
+      }),
+      /Wait for simulator/,
+    );
+    const changedTools = structuredClone(deck.config.config);
+    changedTools.tools.emulator = "/different-sdk/emulator";
+    await assert.rejects(
+      deck.execute("config.save", {
+        config: changedTools,
+        revision: deck.config.revision,
+      }),
+      /wait for simulator.*adapter executables/,
+    );
+    finish();
+    await rejected;
+    assert.equal((await deck.snapshot()).devices[0].locked, false);
+    await reserve(deck);
+  } finally {
+    finish();
+    await cleanup();
+  }
+});
+test("Android lifecycle persists a verified AVD identity and current serial before acting; reservations prevent even preflight", async () => {
+  const { deck, adapters, cleanup } = await setup();
+  const observed: DeviceConfig[] = [];
+  let preflights = 0;
+  adapters.verifyIdentity = async (d) => d;
+  adapters.prepareSimulator = async (d) => {
+    preflights++;
+    assert.equal(d.connection.type, "adb");
+    return {
+      ...d,
+      connection: {
+        type: "adb",
+        serial: preflights === 1 ? "emulator-5554" : "emulator-5560",
+        port: 5037,
+        avdName: "TV_35",
+      },
+    };
+  };
+  adapters.simulator = async (d, action) => {
+    observed.push(d);
+    assert.deepEqual(
+      deck.config.config.devices[0].connection,
+      d.connection,
+      "Persistent identity precedes any emulator mutation",
+    );
+    return {
+      deviceId: d.id,
+      action,
+      state: action === "close" ? "shutdown" : "booted",
+      changed: true,
+    };
+  };
+  try {
+    const c = structuredClone(deck.config.config);
+    c.devices[0].connection = {
+      type: "adb",
+      serial: "emulator-5554",
+      port: 5037,
+    };
+    await deck.execute("config.save", {
+      config: c,
+      revision: deck.config.revision,
+    });
+    const prior = deck.config.revision;
+    await deck.execute("devices.simulator", {
+      deviceId: "one",
+      action: "launch",
+    });
+    assert.notEqual(deck.config.revision, prior);
+    assert.equal(
+      observed[0].connection.type === "adb" && observed[0].connection.avdName,
+      "TV_35",
+    );
+    assert.equal(deck.config.config.devices[0].captureSourceId, "screen-one");
+    assert.equal(deck.store.lockReason("one"), undefined);
+    const reserved = await reserve(deck);
+    await assert.rejects(
+      deck.execute("devices.simulator", {
+        deviceId: "one",
+        action: "close",
+        confirmed: true,
+      }),
+      /Reserved by/,
+    );
+    assert.equal(preflights, 1);
+    await deck.execute("sessions.release", {
+      sessionId: reserved.session.id,
+      leaseToken: reserved.leaseToken,
+    });
+    await deck.execute("devices.simulator", {
+      deviceId: "one",
+      action: "close",
+      confirmed: true,
+    });
+    assert.equal(
+      observed[1].connection.type === "adb" && observed[1].connection.serial,
+      "emulator-5560",
+    );
+  } finally {
+    await cleanup();
+  }
+});
+
+test("Android reservations persist the verified AVD and reject registered aliases before issuing any second lease", async () => {
+  const { deck, adapters, cleanup } = await setup();
+  adapters.verifyIdentity = async (d) => ({
+    ...d,
+    connection: {
+      type: "adb",
+      serial: "emulator-5554",
+      port: 5037,
+      avdName: "TV_35",
+    },
+  });
+  try {
+    const c = structuredClone(deck.config.config);
+    c.devices[0].connection = {
+      type: "adb",
+      serial: "emulator-5554",
+      port: 5037,
+    };
+    c.devices[1].connection = {
+      type: "adb",
+      serial: "emulator-5556",
+      port: 5037,
+      avdName: "TV_35",
+    };
+    await deck.execute("config.save", {
+      config: c,
+      revision: deck.config.revision,
+    });
+    await assert.rejects(reserve(deck, "one"), /hardware identity/);
+    assert.equal(deck.store.sessions().length, 0);
+    c.devices[1].connection = {
+      type: "adb",
+      serial: "another-device",
+      port: 5037,
+    };
+    await deck.execute("config.save", {
+      config: c,
+      revision: deck.config.revision,
+    });
+    const reserved = await reserve(deck, "one");
+    assert.equal(
+      deck.config.config.devices[0].connection.type === "adb" &&
+        deck.config.config.devices[0].connection.avdName,
+      "TV_35",
+    );
+    await deck.execute("sessions.release", {
+      sessionId: reserved.session.id,
+      leaseToken: reserved.leaseToken,
+    });
+  } finally {
+    await cleanup();
+  }
+});
+
+test("recorder recovery stores the capture engine's verified AVD target instead of its unresolved configuration", async () => {
+  const { deck, capture, cleanup } = await setup();
+  try {
+    capture.verifiedDevice = {
+      ...deck.config.config.devices[0],
+      connection: {
+        type: "adb",
+        serial: "emulator-5560",
+        avdName: "TV_35",
+        port: 5037,
+      },
+    };
+    const reserved = await reserve(deck);
+    const lease = {
+      sessionId: reserved.session.id,
+      leaseToken: reserved.leaseToken,
+    };
+    await deck.execute("recordings.start", lease);
+    assert.deepEqual(deck.store.workers()[0].device, capture.verifiedDevice);
+    capture.resolveStop = () => {};
+    await deck.execute("sessions.release", lease);
+    assert.equal(deck.store.workers().length, 0);
+  } finally {
+    await cleanup();
+  }
+});
+
+test("the explicit local development mock starts active and can reset without provider calls", async () => {
+  const mock = new LocalDevelopmentLicense();
+  await mock.init();
+  assert.equal(mock.status().tier, "pro");
+  assert.equal(mock.status().maxSessions, null);
+  assert.match(mock.status().message, /activation mock/);
+  assert.equal((await mock.deactivate()).tier, "free");
+  assert.equal((await mock.refresh()).maxSessions, 1);
+  assert.equal((await mock.activate("local")).tier, "pro");
+  assert.equal(new LocalDevelopmentLicense().status().state, "active");
+  mock.close();
+});
 test("Free admits at most one session when different-device requests race, preserving collisions and clean capture", async () => {
   const { deck, capture, cleanup } = await setup(true);
   try {
@@ -425,6 +730,73 @@ test("authenticated HTTP and browser bootstrap reject origins, unknown hosts, mi
   }
 });
 
+test("direct USB previews share bound-device locks and need HTTP authentication", async () => {
+  const { deck, capture, cleanup } = await setup(true);
+  const config = structuredClone(deck.config.config);
+  config.sources.push({
+    id: "usb-free",
+    name: "Unassigned",
+    kind: "usb",
+    uniqueId: "physical-free",
+  });
+  config.sources.push({
+    id: "usb-bound",
+    name: "Assigned",
+    kind: "usb",
+    uniqueId: "physical-bound",
+  });
+  config.devices[0].captureSourceId = "usb-bound";
+  await deck.execute("config.save", { config, revision: deck.config.revision });
+  const token = "b".repeat(64),
+    server = createService(deck, token, "/tmp/no-web");
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+  try {
+    assert.equal(
+      (await fetch(base + "/v1/source-preview/usb-free")).status,
+      401,
+    );
+    const response = await fetch(base + "/v1/source-preview/usb-free", {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("content-type"), "image/jpeg");
+    assert.equal(response.headers.get("cache-control"), "no-store");
+    assert.deepEqual(
+      Buffer.from(await response.arrayBuffer()),
+      Buffer.from([255, 216, 255, 217]),
+    );
+    await reserve(deck);
+    await Promise.all([
+      deck.previewSource("usb-bound"),
+      deck.previewSource("usb-free"),
+    ]);
+    assert.ok(capture.previewed.includes("usb-bound"));
+    await assert.rejects(deck.previewSource("screen-two"), /USB capture card/);
+    await assert.rejects(
+      deck.previewSource("not-configured"),
+      /USB capture card/,
+    );
+    const session = deck.store.sessions().find((s) => s.deviceId === "one")!;
+    session.state = "closing";
+    deck.store.putSession(session);
+    await assert.rejects(deck.previewSource("usb-bound"), /being released/);
+    session.state = "closed";
+    deck.store.putSession(session);
+    await deck.execute("devices.bulk", {
+      ids: ["one"],
+      action: "lock",
+      reason: "maintenance",
+    });
+    await assert.rejects(deck.previewSource("usb-bound"), /locked/);
+    await deck.previewSource("usb-free");
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>((r) => server.close(() => r()));
+    await cleanup();
+  }
+});
+
 test("renewal, expiry and takeover invalidate credentials while preserving ownership history", async () => {
   const { deck, capture, cleanup } = await setup();
   capture.resolveStop = () => {};
@@ -641,6 +1013,120 @@ test("Capture Cards assignment uses revision-checked config and rejects both sid
       sessionId: target.session.id,
       leaseToken: target.leaseToken,
     });
+  } finally {
+    await cleanup();
+  }
+});
+
+test("browser credentials coexist across local instances without overwriting another port's login", async () => {
+  const { deck, cleanup } = await setup();
+  const token = "c".repeat(64);
+  const servers = [
+    createService(deck, token, "/tmp/no-web"),
+    createService(deck, token, "/tmp/no-web"),
+  ];
+  try {
+    await Promise.all(
+      servers.map(
+        (server) => new Promise<void>((r) => server.listen(0, "127.0.0.1", r)),
+      ),
+    );
+    const bases = servers.map(
+      (server) =>
+        `http://127.0.0.1:${(server.address() as { port: number }).port}`,
+    );
+    const cookies = await Promise.all(
+      bases.map(async (base) => {
+        const { ticket } = await fetch(base + "/v1/browser-ticket", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: "{}",
+        }).then((r) => r.json());
+        const response = await fetch(base + "/v1/bootstrap", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ticket }),
+        });
+        return response.headers.get("set-cookie")!.split(";")[0];
+      }),
+    );
+    assert.notEqual(cookies[0].split("=")[0], cookies[1].split("=")[0]);
+    for (const [index, base] of bases.entries()) {
+      assert.equal(
+        (
+          await fetch(base + "/v1/health", {
+            headers: { Cookie: cookies.join("; ") },
+          })
+        ).status,
+        200,
+      );
+      assert.equal(
+        (
+          await fetch(base + "/v1/health", {
+            headers: { Cookie: cookies[1 - index] },
+          })
+        ).status,
+        401,
+      );
+    }
+  } finally {
+    await Promise.all(
+      servers.map((server) => {
+        server.closeAllConnections();
+        return new Promise<void>((r) => server.close(() => r()));
+      }),
+    );
+    await cleanup();
+  }
+});
+
+test("capture-only USB devices can reserve and record while source bindings remain exclusive", async () => {
+  const { deck, capture, cleanup } = await setup();
+  try {
+    const config = structuredClone(deck.config.config);
+    config.sources.push({
+      id: "usb-only",
+      name: "Fire capture",
+      kind: "usb",
+      uniqueId: "usb-fire",
+    });
+    config.devices.push({
+      id: "fire-feed",
+      name: "Fire feed",
+      platform: "Other",
+      kind: "physical",
+      model: "USB capture",
+      visibility: "local",
+      connection: { type: "capture" },
+      captureSourceId: "usb-only",
+    });
+    await deck.execute("config.save", {
+      config,
+      revision: deck.config.revision,
+    });
+    const reserved = await reserve(deck, "fire-feed");
+    const credentials = {
+      sessionId: reserved.session.id,
+      leaseToken: reserved.leaseToken,
+    };
+    await deck.execute("recordings.start", { ...credentials, mode: "clean" });
+    assert.equal(capture.starts, 1);
+    await assert.rejects(reserve(deck, "fire-feed"), /reserved/);
+    const broken = structuredClone(config);
+    broken.devices.find((d) => d.id === "fire-feed")!.captureSourceId = null;
+    await assert.rejects(
+      deck.execute("config.save", {
+        config: broken,
+        revision: deck.config.revision,
+      }),
+      /require a USB/,
+    );
+    capture.resolveStop = () => {};
+    await deck.execute("sessions.release", credentials);
+    assert.equal(capture.stops, 1);
   } finally {
     await cleanup();
   }

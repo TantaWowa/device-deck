@@ -18,11 +18,12 @@ export const deviceSchema = z
       .max(128)
       .regex(/^[\w.-]+$/),
     name: z.string().trim().min(1).max(64),
-    platform: z.enum(["Roku", "Android", "Apple"]),
+    platform: z.enum(["Roku", "Android", "Apple", "Other"]),
     kind: z.enum(["physical", "virtual"]),
     model: z.string().max(256).default(""),
     visibility: z.enum(["local", "shared"]).default("local"),
     connection: z.discriminatedUnion("type", [
+      z.object({ type: z.literal("capture") }),
       z.object({
         type: z.literal("roku"),
         host: z
@@ -36,6 +37,11 @@ export const deviceSchema = z
         type: z.literal("adb"),
         serial: z.string().min(1).max(256),
         hardwareId: z.string().min(1).max(256).optional(),
+        avdName: z
+          .string()
+          .max(256)
+          .regex(/^[A-Za-z0-9_][A-Za-z0-9_.-]*$/)
+          .optional(),
         port: z.number().int().min(1).max(65535).default(5037),
       }),
       z.object({
@@ -92,6 +98,7 @@ export const configSchema = z
     tools: z
       .object({
         adb: z.string().optional(),
+        emulator: z.string().optional(),
         ffmpeg: z.string().optional(),
         ffprobe: z.string().optional(),
         idb: z.string().optional(),
@@ -111,12 +118,24 @@ export const configSchema = z
   .strict();
 export type Config = z.infer<typeof configSchema>;
 export type Device = DeviceConfig & {
+  simulatorState?:
+    "booted" | "shutdown" | "starting" | "stopping" | "unavailable";
   online: boolean;
   healthDetail: string;
   locked: boolean;
   lockReason?: string;
   capabilities: Capability[];
 };
+export const supportsSimulatorLifecycle = (d: DeviceConfig) =>
+  d.kind === "virtual" &&
+  (d.connection.type === "simulator" ||
+    (d.connection.type === "adb" &&
+      Boolean(
+        d.connection.avdName || /^emulator-\d+$/.test(d.connection.serial),
+      )));
+export const canLaunchSimulator = (d: DeviceConfig) =>
+  supportsSimulatorLifecycle(d) &&
+  (d.connection.type !== "adb" || Boolean(d.connection.avdName));
 export type Source = SourceConfig & {
   status: "connected" | "missing";
   detail?: string;
@@ -199,7 +218,7 @@ export type Snapshot = {
 export const selectorSchema = z
   .object({
     device: z.string().optional(),
-    platform: z.enum(["Roku", "Android", "Apple"]).optional(),
+    platform: z.enum(["Roku", "Android", "Apple", "Other"]).optional(),
     name: z.string().optional(),
     state: z
       .enum(["free", "reserved", "online", "offline", "locked"])
@@ -255,6 +274,13 @@ export const operations = {
       ids: z.array(z.string()).min(1).max(100),
       action: z.enum(["lock", "unlock", "restart"]),
       reason: z.string().trim().min(1),
+    })
+    .strict(),
+  "devices.simulator": z
+    .object({
+      deviceId: z.string().min(1),
+      action: z.enum(["launch", "close"]),
+      confirmed: z.literal(true).optional(),
     })
     .strict(),
   "pairing.start": z.object(leaseFields).strict(),
