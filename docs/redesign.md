@@ -34,4 +34,4 @@ Run `npm run check`, `npm test`, `npm run build`, and `PLAYWRIGHT_CHANNEL=chrome
 
 The model suite covers combined filters, eligibility, source conflicts, add/edit validation, owner restrictions, expiry, input targeting and elapsed time, source failures, capture editing/removal/undo, settings persistence, recording interruptions and fixed recording metadata. Browser QA covers the corresponding UI flows, actual clipboard PNG writing, the download fallback, navigation, native dialog dismissal, marketing links/assets and overflow at 390, 768 and 1440 pixels.
 
-Public marketing screenshots are actual renders of the revised prototype. They are flat, contain no private device addresses and retain the simulation labels.
+The original screenshots for this milestone came from the revised prototype. The website now uses current Mac app screenshots generated with fictional data; see [the screenshot refresh workflow](delivery.md#images). The separate public interactive demo still implements this earlier milestone.

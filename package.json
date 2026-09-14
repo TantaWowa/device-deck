@@ -16,6 +16,7 @@
     "build": "vite build apps/website --outDir ../../dist --emptyOutDir && vite build apps/web --base=/demo/ --outDir ../../dist/demo --emptyOutDir",
     "check": "tsc --noEmit",
     "qa": "node scripts/qa.mjs",
+    "screenshots:website": "node scripts/marketing-screenshots.mjs",
     "test": "node --import tsx --test apps/daemon/src/*.test.ts apps/billing/src/*.test.ts apps/cli/src/*.test.ts apps/tui/src/*.test.ts packages/*/src/*.test.ts",
     "service": "node --import tsx apps/daemon/src/index.ts",
     "install:dev-cli": "node scripts/install-dev-cli.mjs",

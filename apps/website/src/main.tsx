@@ -25,10 +25,64 @@ function App() {
   const [tab, setTab] = useState("CLI");
   const [copied, setCopied] = useState(false);
   const examples: Record<string, string> = {
-    CLI: '# Illustrative remote workflow\ndevdeck remote --device "Desk Roku"\n\n# No target? An interactive picker.\ndevdeck remote --platform Roku --state free\n\n# Scriptable selectors, no prompts\ndevdeck remote --platform Android --name "Pixel*" \\\n  --state free --key Home --json\n\n# Proposed Mac clipboard capture\ndevdeck screenshot --device "Desk Roku" --clipboard',
-    MCP: '// Illustrative agent workflow\ndevices.list({ platform: "Roku", state: "free" })\nsessions.reserve({\n  deviceId: "roku-desk",\n  owner: "Agent",\n  reason: "Navigation regression"\n})\nremote.key({ sessionId: "…", key: "Home" })\ncaptures.screenshot({ sessionId: "…" })\nsessions.release({ sessionId: "…" })',
-    API: '# Illustrative local API\nPOST /v1/sessions\n{\n  "deviceId": "roku-desk",\n  "owner": "You",\n  "reason": "Browse screen review"\n}\n\nPOST /v1/sessions/:id/input\n{ "key": "Home" }\n\nPOST /v1/sessions/:id/captures',
-    JSON: '{\n  "schemaVersion": 1,\n  "devices": [{\n    "id": "roku-desk",\n    "name": "Desk Roku",\n    "captureSourceId": "cam-link",\n    "visibility": "local"\n  }],\n  "capture": {\n    "outputDirectory": "~/Movies/Device Deck"\n  }\n}',
+    CLI: `# Open the local Mac dashboard
+devdeck ui
+
+# Watch USB feeds together, or browse with Left/Right
+devdeck view --mux
+devdeck view
+
+# Filter configured devices for scripts
+devdeck devices --platform Roku --state free --json
+
+# Open a terminal remote for a configured device
+devdeck remote --device "Desk Roku" --reason "Check playback"
+
+# Or use the fixed-screen terminal workspace
+devdeck tui`,
+    MCP: `// MCP tool calls; use your configured device name
+inventory({})
+sessions_reserve({
+  selector: { device: "Desk Roku" },
+  owner: "Agent",
+  reason: "Check playback"
+})
+
+// Use session.id and leaseToken returned above
+remote_input({
+  sessionId: "SESSION_ID",
+  leaseToken: "LEASE_TOKEN",
+  key: "Home"
+})
+sessions_release({
+  sessionId: "SESSION_ID",
+  leaseToken: "LEASE_TOKEN"
+})`,
+    API: `POST /v1/operations/sessions.reserve
+Authorization: Bearer LOCAL_API_TOKEN
+Content-Type: application/json
+
+{
+  "selector": { "device": "Desk Roku" },
+  "owner": "Agent",
+  "reason": "Check playback",
+  "ttlMinutes": 15
+}
+
+# The response contains session.id and leaseToken.
+# Use both for remote.input, captures.screenshot
+# and sessions.release at /v1/operations/NAME.`,
+    JSON: `{
+  "schemaVersion": 1,
+  "devices": [],
+  "sources": [],
+  "settings": {
+    "folder": "~/Movies/Device Deck",
+    "owner": "You",
+    "captureMode": "clean",
+    "logging": true
+  }
+}`,
   };
   return (
     <>
@@ -49,7 +103,7 @@ function App() {
           ))}
         </nav>
         <a className="button small primary header-demo" href={demo}>
-          Open interactive demo <ArrowRight size={14} />
+          Open browser demo <ArrowRight size={14} />
         </a>
         <button
           className="menu-button"
@@ -76,14 +130,15 @@ function App() {
           </p>
           <div className="hero-actions">
             <a className="button primary" href={demo}>
-              Explore the interactive demo <ArrowRight size={17} />
+              Explore demo <ArrowRight size={17} />
             </a>
             <a className="button" href="#workspace">
               See the workspace
             </a>
           </div>
           <p className="preview-note">
-            Product preview · simulated hardware · no login
+            Browser demo uses the earlier UI; screenshots show the current Mac
+            beta.
           </p>
           <div className="hero-screenshot">
             <div className="window-bar">
@@ -95,26 +150,27 @@ function App() {
               <span>
                 <Monitor size={12} /> Device Deck / My Mac workspace
               </span>
-              <span className="window-tag">INTERACTIVE PROTOTYPE</span>
+              <span className="window-tag">CURRENT MAC APP</span>
             </div>
             <a
-              href={demo}
-              aria-label="Open the devices table in the interactive demo"
+              href="/assets/devices-current.png"
+              aria-label="View current Devices screenshot full size"
             >
               <img
-                src="/assets/dashboard-preview.webp"
-                alt="Actual rendered Device Deck preview: a readable light devices table with friendly names, platform, health, reservation, owner, capture input and visibility"
+                src="/assets/devices-current.png"
+                width={1500}
+                height={1000}
+                alt="Current Device Deck Devices list with platform and Sim/Real filters, simulator controls and capture actions, shown with fictional demo data"
                 fetchPriority="high"
               />
             </a>
           </div>
           <div className="screenshot-caption">
             <span>
-              Actual prototype screen. All devices, owners and USB sources are
-              samples.
+              Current Mac app · fictional demo devices, owners and feeds.
             </span>
-            <a href={demo}>
-              Try the table <ArrowRight size={13} />
+            <a href="/assets/devices-current.png">
+              View full-size screenshot <ArrowRight size={13} />
             </a>
           </div>
         </section>
@@ -145,27 +201,27 @@ function App() {
               <Monitor />
               <h3>Find the right device</h3>
               <p>
-                Combine search, platform, health, reserved or free, maintenance,
-                physical or virtual, and local or shared filters. Save views you
-                use often.
+                Use bright Apple, Roku, Android and USB-only buttons, plus Sim /
+                Real toggles. Search by name, save a view, or open More
+                filters for health, reservations and maintenance.
               </p>
             </article>
             <article>
               <Usb />
               <h3>Pair the right input</h3>
               <p>
-                Choose a capture card from a simulated host discovery list.
-                Native emulator screens need no USB card. Conflicting bindings
-                are called out.
+                Discover devices and add several at once with Add selected or
+                Add all. Bind USB cards to their targets; supported native
+                simulator and emulator screens need no capture card.
               </p>
             </article>
             <article>
               <LockKeyhole />
               <h3>Keep ownership visible</h3>
               <p>
-                See owner and reason in the table. Select rows for eligible bulk
-                lock, unlock or restart. Releasing a session and unlocking
-                maintenance are distinct actions.
+                See owner and reason alongside each device. Launch or close
+                supported simulators from the list. Active sessions and
+                recordings must finish before a simulator closes.
               </p>
             </article>
           </div>
@@ -203,75 +259,102 @@ function App() {
                 </h2>
               </div>
               <p>
-                Open a device from the table and see its input source, ownership
-                and capture controls together. Hover, focus or tap Preview for a
-                quick look before opening a session.
+                Open a remote from any feed or device row. Drag the compact
+                panel beside or over the picture, resize it to fit, and keep the
+                device in view while you work.
               </p>
             </div>
             <div className="viewer-showcase">
-              <a href="/demo/#viewer/roku-desk">
+              <a
+                href="/assets/remote-current.png"
+                aria-label="View current compact remote screenshot full size"
+              >
                 <img
-                  src="/assets/session-preview.webp"
-                  alt="Actual Device Deck focused viewer with fictional TV image, remote control, session ownership and input timeline"
+                  src="/assets/remote-current.png"
+                  width={1500}
+                  height={1000}
+                  alt="Current Device Deck feed with a compact floating remote, text entry and keyboard input controls, shown with a fictional sample feed"
                   loading="lazy"
                 />
+              </a>
+            </div>
+            <div className="screenshot-caption">
+              <span>
+                Current Mac app · compact remote over a fictional sample feed.
+              </span>
+              <a href="/assets/remote-current.png">
+                View full-size screenshot <ArrowRight size={13} />
               </a>
             </div>
             <div className="feature-grid compact-features">
               <article>
                 <Keyboard />
-                <h3>Make every press visible</h3>
+                <h3>Keep the controls close</h3>
                 <p>
-                  Optional keypress overlay and input logging tie commands to
-                  device, session and recording elapsed time. Export the
-                  simulated log as JSON.
+                  Direction and playback buttons, text entry and Keyboard input
+                  stay on the remote. Its menu holds session details, capture
+                  settings and platform styles. Position and size are remembered.
                 </p>
               </article>
               <article>
                 <Camera />
-                <h3>Choose clean or annotated</h3>
+                <h3>Capture from every feed</h3>
                 <p>
-                  Review screenshot and recording flows with an optional key
-                  overlay. Copy a labelled sample PNG to your browser clipboard,
-                  or download it if copying is unavailable.
+                  Identify, Record, Screenshot, Reserve and Remote appear on
+                  every feed and device row. Quick capture settings can reserve
+                  an available device and save its image or start recording.
                 </p>
               </article>
               <article>
                 <LayoutGrid />
-                <h3>Control the selected tile</h3>
+                <h3>Respect the current session</h3>
                 <p>
-                  Open selected devices as a grid. One highlighted tile receives
-                  remote commands. Its session, capture controls and input
-                  timeline follow your selection.
+                  Occupied devices require an explicit takeover. Ending a
+                  session or taking it over finalizes its recording before
+                  another user takes control.
                 </p>
               </article>
             </div>
             <div className="multi-showcase">
               <div>
-                <div className="eyebrow">MULTI-DEVICE VIEW</div>
+                <div className="eyebrow">USB SPLIT SCREEN</div>
                 <h3>
                   Several screens.
                   <br />
-                  One explicit target.
+                  One workspace.
                 </h3>
                 <p>
-                  Compare physical devices and simulators side by side. Switch
-                  the active device with a click, tap or keyboard focus.
+                  Watch selected USB capture inputs side by side, or browse one
+                  feed at a time with Left/Right. Open the compact remote for a
+                  connected target when you want to control it.
                 </p>
                 <a
                   className="text-link"
                   href="/demo/#multi/roku-desk,apple-sim,pixel-emulator,android-tv"
                 >
-                  Explore the grid <ArrowRight size={16} />
+                  Explore demo grid <ArrowRight size={16} />
                 </a>
               </div>
-              <a href="/demo/#multi/roku-desk,apple-sim,pixel-emulator,android-tv">
-                <img
-                  src="/assets/multi-preview.webp"
-                  alt="Actual multi-device prototype showing four separate device tiles and a single control target"
-                  loading="lazy"
-                />
-              </a>
+              <div className="multi-image">
+                <a
+                  href="/assets/feeds-current.png"
+                  aria-label="View current USB split-screen screenshot full size"
+                >
+                  <img
+                    src="/assets/feeds-current.png"
+                    width={1500}
+                    height={1000}
+                    alt="Current Device Deck USB split-screen feeds with capture actions on every tile, shown with fictional sample feeds"
+                    loading="lazy"
+                  />
+                </a>
+                <div className="screenshot-caption">
+                  <span>Current Mac app · fictional sample USB feeds.</span>
+                  <a href="/assets/feeds-current.png">
+                    View full-size screenshot <ArrowRight size={13} />
+                  </a>
+                </div>
+              </div>
             </div>
           </div>
         </section>
@@ -296,8 +379,8 @@ function App() {
                 <b>Agents</b>
               </div>
               <p>
-                Proposed local output. This website remembers the setting but
-                cannot write to that Mac folder.
+                The installed Mac app saves here. The earlier browser prototype
+                uses sample captures and cannot write to this folder.
               </p>
             </div>
             <div className="local-copy">
@@ -310,17 +393,17 @@ function App() {
               <h3>Set it once on this Mac.</h3>
               <p>
                 Choose the folder, naming pattern, clipboard behavior and
-                evidence defaults. Browser demo settings persist locally, with
-                Reset demo always available.
+                evidence defaults in Settings. The web app, CLI, TUI and agents
+                share the same local configuration.
               </p>
               <h3>See how devices were used.</h3>
               <p>
                 Usage history tracks owners, reasons, locks, restarts and
-                captures. The reporting screen explores seeded reserved time,
-                contention and capture failures.
+                captures. Reports show actual reservations, capture outcomes
+                and contention for the day, week, month or a custom date range.
               </p>
               <a className="text-link" href="/demo/#captures">
-                Open the capture library <ArrowRight size={16} />
+                Explore demo capture library <ArrowRight size={16} />
               </a>
             </div>
           </div>
@@ -335,9 +418,9 @@ function App() {
                 Use your own workflow.
               </h2>
               <p>
-                The intended local service gives humans and agents the same
-                inventory, reservations, input controls and capture library. It
-                works independently of a specific app framework or job runner.
+                The local service gives humans and agents the same inventory,
+                reservations, input controls and capture library. It works
+                independently of a specific app framework or job runner.
               </p>
               <ul>
                 <li>
@@ -353,21 +436,22 @@ function App() {
                   ambiguous match are explicit errors.
                 </li>
                 <li>
-                  <Check /> No accounts. Human, agent and job names are owner
-                  labels.
+                  <Check /> No account login. Human, agent and job names are
+                  owner labels; session credentials protect control.
                 </li>
               </ul>
               <p className="cli-note">
-                Examples are illustrative. The present CLI and MCP implement
-                health and empty inventory only. The browser does not execute
-                the proposed macOS clipboard command.
+                Supported by the installed Mac beta. Replace sample device
+                names with your own. HTTP uses the local endpoint and API token;
+                control and capture require the reservation’s session ID and
+                lease token. The earlier browser prototype is separate.
               </p>
             </div>
             <div className="code-window">
               <div className="code-header">
                 <Terminal size={15} />
                 <span>Client workflow</span>
-                <b>ILLUSTRATIVE</b>
+                <b>MAC BETA</b>
               </div>
               <div
                 className="code-tabs"
@@ -410,20 +494,21 @@ function App() {
           <div className="section-intro">
             <div className="eyebrow">DEVELOPMENT STATUS</div>
             <h2>
-              A working product preview.
+              A working Mac beta.
               <br />
-              Hardware comes next.
+              Ready for team testing.
             </h2>
             <p>
-              You can explore the complete interaction design today. The screens
-              use clearly labelled samples and never connect to your local
-              devices.
+              Get the Mac installer through your team’s release operator.
+              These screenshots show the current app with fictional demo data.
+              The earlier interactive prototype runs in your browser and never
+              connects to your local devices.
             </p>
           </div>
           <div className="status-grid">
             <article>
-              <span className="status-label">WORKING IN THE BROWSER</span>
-              <h3>Try the workspace</h3>
+              <span className="status-label">EARLIER BROWSER PROTOTYPE</span>
+              <h3>Explore with sample devices</h3>
               <ul>
                 <li>Device table, combined filters and saved views</li>
                 <li>Add/edit, source validation and bulk action simulation</li>
@@ -434,23 +519,25 @@ function App() {
               </ul>
             </article>
             <article>
-              <span className="status-label planned">FUTURE LOCAL APP</span>
-              <h3>Connect real hardware</h3>
+              <span className="status-label planned">
+                AVAILABLE IN THE MAC BETA
+              </span>
+              <h3>Work with real hardware</h3>
               <ul>
-                <li>Real device and capture-card discovery</li>
-                <li>Capability-specific remote input adapters</li>
-                <li>Live preview and playable recordings</li>
+                <li>Device discovery with Add selected and Add all</li>
+                <li>Compact remotes with text and keyboard input</li>
+                <li>USB split screen, screenshots and silent recordings</li>
                 <li>Durable exclusive reservations across clients</li>
                 <li>Shared Mac folder and native clipboard helper</li>
-                <li>Local service installation and packaging</li>
+                <li>Mac installer, CLI, TUI and simulator launch/close</li>
               </ul>
             </article>
           </div>
           <p className="status-footnote">
-            Initial scope is one Mac with your own devices and emulators.
-            Local/shared visibility is represented in the design; multi-host
-            coordination is future work. Discovering physical Apple hardware
-            does not establish remote-control support.
+            Current scope is one Mac. Recording requires FFmpeg; simulator and
+            remote support depend on the platform tools and pairing. Public
+            checkout and signed public installers are still in preparation.
+            Multi-host coordination is future work.
           </p>
         </section>
         <section className="closing">
@@ -461,18 +548,18 @@ function App() {
                 <br />
                 Start a session.
               </h2>
-              <p>Explore the revised workspace on desktop or mobile.</p>
+              <p>Explore the earlier browser prototype with simulated devices.</p>
             </div>
             <a className="button primary" href={demo}>
-              Open interactive demo <ArrowRight size={17} />
+              Open browser demo <ArrowRight size={17} />
             </a>
           </div>
         </section>
       </main>
       <footer className="wrap">
         <Brand />
-        <p>Device Deck is a TantaWowa product preview.</p>
-        <span>Local by design · no login · no cloud file storage</span>
+        <p>Device Deck is a TantaWowa Mac app, currently in team beta.</p>
+        <span>Local by design · no account login · no cloud file storage</span>
       </footer>
     </>
   );
