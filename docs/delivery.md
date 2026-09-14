@@ -18,7 +18,7 @@ Delivered 11 September 2026. The product name and repository name were available
 - Preview channel: `product-preview`
 - Preview URL: https://tantawowa-device-deck--product-preview-83xolv2t.web.app
 - Interactive app: https://tantawowa-device-deck--product-preview-83xolv2t.web.app/demo/
-- Preview expiry: 11 October 2026, as returned by Firebase
+- Preview expiry: 14 October 2026 at 09:17 UTC, as returned by Firebase
 - Billing: `billingEnabled: false`, no billing account attached
 
 The source repository is private. Firebase Hosting previews are accessible to anyone holding the URL. No live-channel release was made. No analytics, functions, database, storage bucket, payment system, or user account backend was added.
@@ -45,7 +45,11 @@ The readable workspace revision passes 13 model/service tests and 16 browser acc
 
 ## Images
 
-The website's `dashboard-preview.webp`, `session-preview.webp` and `multi-preview.webp` were captured from the actual prototype. The sample landscape is original generated artwork. The site explicitly labels these images as product previews and the embedded TV app as fictional. There are no customer logos, testimonials, private device locators, or copied app screens.
+The marketing images now come from the current Mac app's web UI: `devices-current.png`, `remote-current.png` and `feeds-current.png`. They show the platform and Sim/Real filter buttons, compact floating remote and three-input split screen. The screenshot script supplies fictional devices and labelled sample feeds; it does not connect to the local daemon or capture hardware. The sample landscape is original generated artwork.
+
+Run `PLAYWRIGHT_CHANNEL=chrome npm run screenshots:website` after changing the local Devices, Feeds or remote components. It builds the current local UI separately from the older public `/demo/` prototype, captures the three assets, and checks the relevant controls and images. Review the output visually before deploying. The website identifies these as current app screenshots with sample data and labels the separate interactive prototype accordingly.
+
+The 14 September 2026 refresh passed the screenshot generator's image, layout and fixture-isolation checks, TypeScript checking, the production website/demo build and all 16 existing browser acceptance checks. The generator writes its browser version, source commit and screenshot details to ignored `work/marketing-screenshots/report.json`; browser evidence for this refresh is in ignored `outputs/website-refresh/`.
 
 ## Refresh the preview
 
@@ -53,6 +57,7 @@ The website's `dashboard-preview.webp`, `session-preview.webp` and `multi-previe
 npm ci
 npm run check
 npm test
+PLAYWRIGHT_CHANNEL=chrome npm run screenshots:website
 npm run build
 npx firebase-tools hosting:channel:deploy product-preview --project tantawowa-device-deck --expires 30d
 ```
