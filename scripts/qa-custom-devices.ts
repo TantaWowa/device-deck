@@ -150,6 +150,44 @@ try {
       },
       captureSourceId: "saved-roku",
     },
+    {
+      id: "iphone-sim",
+      name: "iPhone 16 simulator",
+      platform: "Apple",
+      kind: "virtual",
+      model: "iPhone 16",
+      visibility: "local",
+      connection: {
+        type: "simulator",
+        os: "ios",
+        udid: "11111111-1111-4111-8111-111111111111",
+      },
+      captureSourceId: null,
+    },
+    {
+      id: "pixel",
+      name: "Pixel 9",
+      platform: "Android",
+      kind: "physical",
+      model: "Pixel 9 phone",
+      visibility: "local",
+      connection: { type: "adb", serial: "FIXTURE-PIXEL", port: 5037 },
+      captureSourceId: null,
+    },
+    {
+      id: "tv-sim",
+      name: "Apple TV simulator",
+      platform: "Apple",
+      kind: "virtual",
+      model: "tvOS",
+      visibility: "local",
+      connection: {
+        type: "simulator",
+        os: "tvos",
+        udid: "22222222-2222-4222-8222-222222222222",
+      },
+      captureSourceId: null,
+    },
   ];
   await deck.execute("config.save", {
     config: initial,
@@ -216,18 +254,103 @@ try {
   await page.getByRole("heading", { name: "Devices", exact: true }).waitFor();
   await nav("Capture Cards");
   const fresh = card("Fixture HDMI");
-  await fresh.getByRole("combobox").selectOption("custom:");
-  await fresh.getByRole("textbox").fill("  Mac mini  ");
+  const dialog = page.getByRole("dialog");
+  const trigger = (name: string) =>
+    card(name).getByRole("button", {
+      name: `Assigned device for ${name}`,
+      exact: true,
+    });
+  const filter = (group: string, name: string) =>
+    dialog
+      .getByRole("group", { name: group, exact: true })
+      .getByRole("button", { name, exact: true })
+      .click();
+  const options = () => dialog.locator(".device-picker-option");
+  for (const row of await page.locator(".capture-card").all()) {
+    const bounds = await row.boundingBox();
+    assert(
+      bounds && bounds.height <= 110,
+      "Desktop capture cards must be compact single rows",
+    );
+  }
   await page.screenshot({
-    path: path.join(output, "custom-name-desktop.png"),
+    path: path.join(output, "capture-rows-desktop.png"),
     fullPage: true,
   });
-  await fresh
+  await trigger("Fixture HDMI").click();
+  await expect(
+    dialog.getByRole("textbox", { name: "Search devices", exact: true }),
+  ).toBeFocused();
+  await page.screenshot({ path: path.join(output, "device-picker-desktop.png") });
+  await filter("Family", "Android");
+  await filter("Class", "Phone");
+  await filter("Type", "Physical");
+  await dialog
+    .getByRole("textbox", { name: "Search devices", exact: true })
+    .fill(" PIXEL ");
+  await expect(options()).toHaveCount(1);
+  await expect(options()).toContainText("Pixel 9");
+  await dialog
+    .getByRole("button", { name: "Reset filters", exact: true })
+    .click();
+  await filter("Family", "Apple");
+  await filter("Class", "Phone");
+  await filter("Type", "Simulator");
+  await expect(options()).toHaveCount(1);
+  await expect(options()).toContainText("iPhone 16 simulator");
+  await filter("Class", "TV");
+  await expect(options()).toHaveCount(1);
+  await expect(options()).toContainText("Apple TV simulator");
+  await dialog
+    .getByRole("textbox", { name: "Search devices", exact: true })
+    .fill("missing device");
+  await expect(
+    dialog.getByText("No matching devices", { exact: true }),
+  ).toBeVisible();
+  await dialog
+    .getByRole("button", { name: "Reset filters", exact: true })
+    .click();
+  await expect(options().filter({ hasText: "Fixture Roku" })).toBeDisabled();
+  await expect(options().filter({ hasText: "Fixture Roku" })).toContainText(
+    "already has a capture input",
+  );
+  await dialog
+    .getByRole("textbox", { name: "Search devices", exact: true })
+    .fill("Pixel");
+  await dialog
+    .getByRole("textbox", { name: "Search devices", exact: true })
+    .press("ArrowDown");
+  await expect(options()).toBeFocused();
+  await options().press("Enter");
+  await expect(dialog).toHaveCount(0);
+  await expect(trigger("Fixture HDMI")).toContainText("Pixel 9");
+  await expect(trigger("Fixture HDMI")).toHaveAccessibleDescription("Pixel 9");
+  await expect(trigger("Fixture HDMI")).toBeFocused();
+  await trigger("Fixture HDMI").click();
+  await dialog.getByRole("button", { name: "Unassign", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  assert.equal(
+    deck.config.config.devices.find((device) => device.id === "pixel")
+      ?.captureSourceId,
+    null,
+  );
+  await expect(trigger("Fixture HDMI")).toContainText("Choose a device");
+  checks.push(
+    "Combined family/class/type/text filters, empty state, conflicts, keyboard assignment, unassign and focus return",
+  );
+  await trigger("Fixture HDMI").click();
+  await filter("Family", "Other");
+  await dialog
+    .getByRole("textbox", { name: "Custom device name", exact: true })
+    .fill("  Mac mini  ");
+  await page.screenshot({
+    path: path.join(output, "custom-name-desktop.png"),
+    fullPage: false,
+  });
+  await dialog
     .getByRole("button", { name: "Create & assign", exact: true })
     .click();
-  await expect(
-    fresh.getByRole("button", { name: "Mac mini →", exact: true }),
-  ).toBeVisible();
+  await expect(trigger("Fixture HDMI")).toContainText("Mac mini");
   const mac = deck.config.config.devices.find(
     (device) => device.name === "Mac mini",
   );
@@ -247,7 +370,7 @@ try {
   await expect(
     page.getByRole("button", { name: "Discover / refresh", exact: true }),
   ).toBeEnabled();
-  await expect(fresh.getByRole("combobox")).toHaveValue(mac.id);
+  await expect(trigger("Fixture HDMI")).toContainText("Mac mini");
   await nav("Devices");
   await expect(
     page.getByRole("combobox", {
@@ -263,25 +386,27 @@ try {
 
   await nav("Capture Cards");
   const auto = card("Fixture USB video");
-  await auto.getByRole("combobox").selectOption("custom:");
-  await expect(auto.getByRole("textbox")).toHaveValue("Auto feed");
+  await trigger("Fixture USB video").click();
+  await filter("Family", "Other");
+  const customName = dialog.getByRole("textbox", {
+    name: "Custom device name",
+    exact: true,
+  });
+  await expect(customName).toHaveValue("Auto feed");
   const unchanged = JSON.stringify(deck.config.config);
-  await auto.getByRole("textbox").fill("   ");
+  await customName.fill("   ");
   await expect(
-    auto.getByRole("button", { name: "Save device name", exact: true }),
+    dialog.getByRole("button", { name: "Save name", exact: true }),
   ).toBeDisabled();
-  await auto.getByRole("textbox").fill("MAC MINI");
-  await auto
-    .getByRole("button", { name: "Save device name", exact: true })
-    .click();
-  await expect(auto.getByRole("alert")).toContainText("already exists");
+  await customName.fill("MAC MINI");
+  await dialog.getByRole("button", { name: "Save name", exact: true }).click();
+  await expect(dialog.getByRole("alert")).toContainText("already exists");
   assert.equal(JSON.stringify(deck.config.config), unchanged);
-  await auto.getByRole("textbox").fill("Studio Mac mini");
-  await auto
-    .getByRole("button", { name: "Save device name", exact: true })
-    .click();
-  await expect(auto.getByRole("combobox")).toHaveValue("auto-feed");
-  assert.equal(deck.config.config.devices.length, 3);
+  await customName.fill("Studio Mac mini");
+  await dialog.getByRole("button", { name: "Save name", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(trigger("Fixture USB video")).toContainText("Studio Mac mini");
+  assert.equal(deck.config.config.devices.length, initial.devices.length + 1);
   assert.equal(
     deck.config.config.devices.find((device) => device.id === "auto-feed")
       ?.name,
@@ -300,6 +425,31 @@ try {
     "Blank and duplicate names cannot mutate config; rename preserves device ID and history",
   );
 
+  await trigger("Fixture USB video").click();
+  await filter("Family", "Other");
+  await customName.fill("An outdated draft");
+  const renamedElsewhere = structuredClone(deck.config.config);
+  renamedElsewhere.devices.find((device) => device.id === "auto-feed")!.name =
+    "Team Mac mini";
+  await deck.execute("config.save", {
+    config: renamedElsewhere,
+    revision: deck.config.revision,
+  });
+  await expect(dialog).toHaveCount(0, { timeout: 10000 });
+  await expect(trigger("Fixture USB video")).toBeFocused();
+  await expect(trigger("Fixture USB video")).toHaveAccessibleDescription(
+    "Team Mac mini",
+  );
+  await trigger("Fixture USB video").click();
+  await filter("Family", "Other");
+  await expect(customName).toHaveValue("Team Mac mini");
+  await customName.fill("Studio Mac mini");
+  await dialog.getByRole("button", { name: "Save name", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  checks.push(
+    "External assignment changes close stale drafts and current values are accessible",
+  );
+
   const held = z
     .object({ session: z.object({ id: z.string() }), leaseToken: z.string() })
     .parse(
@@ -311,7 +461,15 @@ try {
     );
   await page.reload();
   await nav("Capture Cards");
-  await expect(card("Fixture Roku input").getByRole("combobox")).toBeDisabled();
+  await trigger("Fixture Roku input").click();
+  await expect(dialog.getByRole("status")).toContainText("Release the device");
+  for (const option of await options().all())
+    await expect(option).toBeDisabled();
+  await filter("Family", "Other");
+  await expect(
+    dialog.getByRole("textbox", { name: "Custom device name", exact: true }),
+  ).toBeDisabled();
+  await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
   const before = JSON.stringify(deck.config.config);
   const source = deck.config.config.sources.find(
     (item) => item.id === "saved-roku",
@@ -335,8 +493,24 @@ try {
 
   await page.reload();
   await nav("Capture Cards");
-  await auto.getByRole("combobox").selectOption("custom:");
   await page.setViewportSize({ width: 390, height: 844 });
+  await page.screenshot({
+    path: path.join(output, "capture-rows-mobile.png"),
+    fullPage: true,
+  });
+  await trigger("Fixture USB video").click();
+  await filter("Family", "Other");
+  await expect(
+    dialog.getByRole("textbox", { name: "Custom device name", exact: true }),
+  ).toBeVisible();
+  const dialogBounds = await dialog.boundingBox();
+  assert(
+    dialogBounds &&
+      dialogBounds.x >= 0 &&
+      dialogBounds.y >= 0 &&
+      dialogBounds.x + dialogBounds.width <= 390 &&
+      dialogBounds.y + dialogBounds.height <= 844,
+  );
   assert.equal(
     await page.evaluate(
       () => document.documentElement.scrollWidth > innerWidth,
@@ -345,11 +519,19 @@ try {
   );
   await page.screenshot({
     path: path.join(output, "custom-name-mobile.png"),
-    fullPage: true,
+    fullPage: false,
   });
-  await auto.getByRole("button", { name: "Cancel", exact: true }).click();
-  await expect(auto.getByRole("combobox")).toHaveValue("auto-feed");
-  checks.push("Custom form fits mobile; Cancel restores assigned device");
+  await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(trigger("Fixture USB video")).toContainText("Studio Mac mini");
+  await trigger("Fixture USB video").click();
+  await dialog.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  await expect(trigger("Fixture USB video")).toBeFocused();
+  await page.getByText("Details", { exact: true }).first().click();
+  await expect(fresh.locator(".hardware-id")).toBeVisible();
+  checks.push(
+    "Compact rows and picker fit mobile; Details, Cancel, Escape and focus restoration work",
+  );
   assert.deepEqual(errors, []);
   await writeFile(
     path.join(output, "report.json"),
