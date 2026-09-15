@@ -1,9 +1,18 @@
 import { FloatingRemote } from "./FloatingRemote";
+import { AnchoredPopover } from "./AnchoredPopover";
+import type { PopupAnchor } from "./anchored-popup";
 import { DeviceControls } from "./DeviceControls";
 import { SimulatorControls } from "./SimulatorControls";
 import { FeedActions, type FeedAction } from "./FeedActions";
 import { DiscoveryDevices } from "./DiscoveryDevices";
 import { registerDiscoveredDevices } from "../../../../packages/core/src/discovery";
+import {
+  deviceConnectionLabel,
+  deviceAvailabilityLabel,
+  sortTableDevices,
+  type DeviceSort,
+  type DeviceSortColumn,
+} from "../../../../packages/core/src/device-table";
 import { CapturePreview } from "./CapturePreview";
 import { FeedViewer } from "./FeedViewer";
 import { Reports } from "../components/Reports";
@@ -40,6 +49,9 @@ import {
   Columns2,
   Lock,
   Unlock,
+  ArrowUpDown,
+  ArrowUp,
+  ArrowDown,
 } from "lucide-react";
 import { Brand } from "../../../../packages/ui/src";
 import type {
@@ -110,15 +122,50 @@ function Preview({
     />
   );
 }
+function DeviceFilterGroup({
+  label,
+  ariaLabel,
+  value,
+  options,
+  onChange,
+}: {
+  label: string;
+  ariaLabel: string;
+  value: string;
+  options: readonly (readonly [string, string, number?])[];
+  onChange: (value: string) => void;
+}) {
+  return (
+    <div className="device-filter-group" role="group" aria-label={ariaLabel}>
+      <span className="device-filter-label">{label}</span>
+      <div className="device-filter-buttons">
+        {options.map(([option, text, count]) => (
+          <button
+            key={option}
+            type="button"
+            className={`filter-${option.toLowerCase() || "all"}`}
+            aria-pressed={value === option}
+            onClick={() => onChange(value === option ? "" : option)}
+          >
+            {text}
+            {count !== undefined && <span>{count}</span>}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
 function App() {
   const [control, setControl] = useState<{
     deviceId: string;
     action: FeedAction;
+    anchor: PopupAnchor;
   } | null>(null);
   const [identify, setIdentify] = useState<{
     name: string;
     sourceId?: string;
     deviceId?: string;
+    anchor: PopupAnchor;
   } | null>(null);
   const [cards, setCards] = useState<{
     sources: (SourceConfig & {
@@ -166,6 +213,10 @@ function App() {
     [viewing, setViewing] = useState<string[]>([]),
     [target, setTarget] = useState(""),
     [hover, setHover] = useState("");
+  const [deviceSort, setDeviceSort] = useState<DeviceSort>({
+    column: "device",
+    direction: "ascending",
+  });
   const [leases, setLeases] = useState<Record<string, Lease>>(() => {
     try {
       return JSON.parse(localStorage.getItem("deck-local-leases") || "{}");
@@ -298,12 +349,10 @@ function App() {
         </pre>
       </main>
     );
-  const devices = data.devices.filter(
+  const filteredDevices = data.devices.filter(
     (d) =>
       (!filter.search ||
-        `${d.name} ${d.model}`
-          .toLowerCase()
-          .includes(filter.search.toLowerCase())) &&
+        d.name.toLowerCase().includes(filter.search.trim().toLowerCase())) &&
       (!filter.platform || d.platform === filter.platform) &&
       (!filter.health || (filter.health === "online" ? d.online : !d.online)) &&
       (!filter.kind || d.kind === filter.kind) &&
@@ -336,6 +385,37 @@ function App() {
       uniqueId,
       deviceId,
     }));
+  const devices = sortTableDevices(
+    filteredDevices,
+    deviceSort,
+    sources,
+    data.sessions,
+  );
+  const sortHeader = (column: DeviceSortColumn, label: string) => {
+    const active = deviceSort.column === column;
+    const direction = active ? deviceSort.direction : "none";
+    const next = direction === "ascending" ? "descending" : "ascending";
+    const Icon =
+      direction === "ascending"
+        ? ArrowUp
+        : direction === "descending"
+          ? ArrowDown
+          : ArrowUpDown;
+    return (
+      <th scope="col" aria-sort={direction}>
+        <button
+          type="button"
+          className="device-sort-button"
+          aria-label={`Sort by ${label}`}
+          title={`Sort ${label.toLowerCase()} ${next}`}
+          onClick={() => setDeviceSort({ column, direction: next })}
+        >
+          {label}
+          <Icon size={13} aria-hidden="true" />
+        </button>
+      </th>
+    );
+  };
   const changeSource = (d: Device, id: string) => {
     const config = structuredClone(data.config);
     config.devices = config.devices.map((x) =>
@@ -362,30 +442,40 @@ function App() {
     setReason("");
     setReserve({ device, takeover });
   };
-  const openControls = (d: Device, action: FeedAction) => {
+  const openControls = (d: Device, action: FeedAction, anchor: PopupAnchor) => {
+    if (action === "identify") setControl(null);
+    else setIdentify(null);
     if (action === "identify")
       setIdentify({
         name: d.name,
         deviceId: d.id,
         sourceId: d.captureSourceId || undefined,
+        anchor,
       });
-    else setControl({ deviceId: d.id, action });
+    else setControl({ deviceId: d.id, action, anchor });
   };
-  const feedAction = (source: SourceConfig, intent: FeedAction) => {
+  const feedAction = (
+    source: SourceConfig,
+    intent: FeedAction,
+    anchor: PopupAnchor,
+  ) => {
     const device = data.devices.find((d) => d.captureSourceId === source.id);
     if (intent === "identify") {
+      setControl(null);
       setIdentify({
         name: source.name,
         sourceId: source.id,
         deviceId: device?.id,
+        anchor,
       });
       return;
     }
     if (device) {
-      openControls(device, intent);
+      openControls(device, intent, anchor);
       return;
     }
     perform(async () => {
+      setIdentify(null);
       const config = structuredClone(data.config);
       let name = source.name.slice(0, 64),
         suffix = 2;
@@ -405,7 +495,7 @@ function App() {
         captureSourceId: source.id,
       });
       await saveConfig(config);
-      setControl({ deviceId: id, action: intent });
+      setControl({ deviceId: id, action: intent, anchor });
     });
   };
   const deviceActions = (d: Device) => (
@@ -413,7 +503,7 @@ function App() {
       name={d.name}
       reserved={Boolean(activeSession(d.id))}
       recording={data.recordings.some((r) => r.deviceId === d.id)}
-      onAction={(intent) => openControls(d, intent)}
+      onAction={(intent, anchor) => openControls(d, intent, anchor)}
     />
   );
   const controls = (
@@ -537,7 +627,9 @@ function App() {
                     data.devices.find((d) => d.id === r.deviceId)
                       ?.captureSourceId === source.id,
                 )}
-                onAction={(intent) => feedAction(source, intent)}
+                onAction={(intent, anchor) =>
+                  feedAction(source, intent, anchor)
+                }
               />
             )}
           />
@@ -592,127 +684,111 @@ function App() {
               </span>
             </div>
             <div className="live-panel">
-              <div className="live-filters">
-                <label className="live-search">
-                  <Search size={17} />
-                  <input
-                    aria-label="Search devices"
-                    placeholder="Search devices…"
-                    value={filter.search}
-                    onChange={(e) =>
-                      setFilter({ ...filter, search: e.target.value })
-                    }
-                  />
-                </label>
-                <div
-                  className="device-filter-buttons"
-                  role="group"
-                  aria-label="Filter platform"
-                >
-                  {(
-                    [
+              <div className="live-filters device-table-filters">
+                <div className="device-filter-primary">
+                  <DeviceFilterGroup
+                    label="Platform"
+                    ariaLabel="Filter platform"
+                    value={filter.platform}
+                    options={[
                       ["", "All platforms"],
                       ["Apple", "Apple"],
                       ["Roku", "Roku"],
                       ["Android", "Android"],
-                      ["Other", "USB only"],
-                    ] as const
-                  ).map(([value, label]) => (
-                    <button
-                      key={value}
-                      type="button"
-                      className={`platform-filter filter-${value.toLowerCase() || "all"}`}
-                      aria-pressed={filter.platform === value}
-                      onClick={() =>
-                        setFilter((prev) => ({
-                          ...prev,
-                          platform: prev.platform === value ? "" : value,
-                        }))
-                      }
-                    >
-                      {label}
-                      <span>
-                        {
-                          data.devices.filter(
-                            (d) => !value || d.platform === value,
-                          ).length
-                        }
-                      </span>
-                    </button>
-                  ))}
-                </div>
-                <div
-                  className="device-filter-buttons kind-filters"
-                  role="group"
-                  aria-label="Filter device type"
-                >
-                  {(
-                    [
+                      ["Other", "Other"],
+                    ].map(([value, label]) => [
+                      value,
+                      label,
+                      data.devices.filter((d) => !value || d.platform === value)
+                        .length,
+                    ])}
+                    onChange={(platform) =>
+                      setFilter((prev) => ({ ...prev, platform }))
+                    }
+                  />
+                  <DeviceFilterGroup
+                    label="Type"
+                    ariaLabel="Filter device type"
+                    value={filter.kind}
+                    options={[
                       ["", "All types"],
                       ["virtual", "Sim"],
                       ["physical", "Real"],
-                    ] as const
-                  ).map(([value, label]) => (
-                    <button
-                      key={value}
-                      type="button"
-                      className={`kind-filter filter-${value || "all"}`}
-                      aria-pressed={filter.kind === value}
-                      onClick={() =>
-                        setFilter((prev) => ({
-                          ...prev,
-                          kind: prev.kind === value ? "" : value,
-                        }))
+                    ]}
+                    onChange={(kind) =>
+                      setFilter((prev) => ({ ...prev, kind }))
+                    }
+                  />
+                  <label className="live-search device-name-search">
+                    <Search size={16} aria-hidden="true" />
+                    <input
+                      type="search"
+                      aria-label="Search devices"
+                      placeholder="Search by name…"
+                      value={filter.search}
+                      onChange={(e) =>
+                        setFilter({ ...filter, search: e.target.value })
                       }
-                    >
-                      {label}
-                    </button>
-                  ))}
+                    />
+                  </label>
                 </div>
-                <details className="advanced-device-filters">
-                  <summary>More filters</summary>
-                  <div>
-                    {(
-                      [
-                        ["health", "Connection", ["online", "offline"]],
-                        [
-                          "reservation",
-                          "Availability",
-                          ["free", "reserved", "locked"],
-                        ],
-                        ["visibility", "Visibility", ["local", "shared"]],
-                      ] as const
-                    ).map(([field, label, options]) => (
-                      <select
-                        aria-label={label}
-                        key={field}
-                        value={filter[field]}
-                        onChange={(e) =>
-                          setFilter({ ...filter, [field]: e.target.value })
-                        }
-                      >
-                        <option value="">All {label.toLowerCase()}</option>
-                        {options.map((o) => (
-                          <option key={o}>{o}</option>
-                        ))}
-                      </select>
-                    ))}
-                  </div>
-                </details>
-                <button
-                  onClick={() =>
-                    setFilter({
-                      search: "",
-                      platform: "",
-                      health: "",
-                      reservation: "",
-                      kind: "",
-                      visibility: "",
-                    })
-                  }
-                >
-                  Reset
-                </button>
+                <div className="device-filter-secondary">
+                  <DeviceFilterGroup
+                    label="Connection"
+                    ariaLabel="Filter connection"
+                    value={filter.health}
+                    options={[
+                      ["", "All"],
+                      ["online", "Online"],
+                      ["offline", "Offline"],
+                    ]}
+                    onChange={(health) =>
+                      setFilter((prev) => ({ ...prev, health }))
+                    }
+                  />
+                  <DeviceFilterGroup
+                    label="Availability"
+                    ariaLabel="Filter availability"
+                    value={filter.reservation}
+                    options={[
+                      ["", "All"],
+                      ["free", "Available"],
+                      ["reserved", "Reserved"],
+                      ["locked", "Locked"],
+                    ]}
+                    onChange={(reservation) =>
+                      setFilter((prev) => ({ ...prev, reservation }))
+                    }
+                  />
+                  <DeviceFilterGroup
+                    label="Visibility"
+                    ariaLabel="Filter visibility"
+                    value={filter.visibility}
+                    options={[
+                      ["", "All"],
+                      ["local", "Local"],
+                      ["shared", "Shared"],
+                    ]}
+                    onChange={(visibility) =>
+                      setFilter((prev) => ({ ...prev, visibility }))
+                    }
+                  />
+                  <button
+                    className="device-filter-reset"
+                    onClick={() =>
+                      setFilter({
+                        search: "",
+                        platform: "",
+                        health: "",
+                        reservation: "",
+                        kind: "",
+                        visibility: "",
+                      })
+                    }
+                  >
+                    Reset
+                  </button>
+                </div>
               </div>
               <div className="live-subtoolbar">
                 <span>
@@ -793,11 +869,11 @@ function App() {
                           }
                         />
                       </th>
-                      <th>Device</th>
-                      <th>Connection</th>
-                      <th>Reservation / reason</th>
-                      <th>Capture input</th>
-                      <th>Visibility</th>
+                      {sortHeader("device", "Device")}
+                      {sortHeader("connection", "Connection")}
+                      {sortHeader("reservation", "Reservation / reason")}
+                      {sortHeader("capture", "Capture input")}
+                      {sortHeader("visibility", "Visibility")}
                       <th>Actions</th>
                     </tr>
                   </thead>
@@ -850,15 +926,7 @@ function App() {
                             <span
                               className={`live-status ${d.online ? "green" : ""}`}
                             >
-                              {d.simulatorState === "starting"
-                                ? "Launching…"
-                                : d.simulatorState === "stopping"
-                                  ? "Closing…"
-                                  : d.simulatorState === "shutdown"
-                                    ? "Stopped"
-                                    : d.online
-                                      ? "Online"
-                                      : "Offline"}
+                              {deviceConnectionLabel(d)}
                             </span>
                             {d.locked && (
                               <span className="live-status amber">
@@ -881,11 +949,7 @@ function App() {
                               </>
                             ) : (
                               <span className="live-muted">
-                                {d.locked
-                                  ? "Locked"
-                                  : d.online
-                                    ? "Available"
-                                    : "Unavailable"}
+                                {deviceAvailabilityLabel(d)}
                               </span>
                             )}
                           </td>
@@ -931,10 +995,11 @@ function App() {
                                   (r) => r.deviceId === d.id,
                                 )}
                                 refresh={refresh}
-                                manageSession={() =>
+                                manageSession={(anchor) =>
                                   setControl({
                                     deviceId: d.id,
                                     action: "reserve",
+                                    anchor,
                                   })
                                 }
                               />
@@ -1312,6 +1377,7 @@ function App() {
           key={control.deviceId}
           storageKey={control.deviceId}
           requestKey={control}
+          anchor={control.anchor}
           title={data.devices.find((d) => d.id === control.deviceId)!.name}
           initialMenu={
             control.action !== "remote" ||
@@ -1332,8 +1398,9 @@ function App() {
         </FloatingRemote>
       )}
       {identify && (
-        <Modal
+        <AnchoredPopover
           title={`Identify · ${identify.name}`}
+          anchor={identify.anchor}
           onClose={() => setIdentify(null)}
         >
           <div className="identify-preview">
@@ -1378,7 +1445,7 @@ function App() {
                 : "Not configured"}
             </dd>
           </dl>
-        </Modal>
+        </AnchoredPopover>
       )}
       {reserve && (
         <Modal
@@ -1715,9 +1782,7 @@ function DeviceEditor({
               setSource("");
             }}
           >
-            <option value="capture">
-              Custom / HDMI device · capture only
-            </option>
+            <option value="capture">Custom / HDMI device · capture only</option>
             <option value="roku">Roku · network ECP</option>
             <option value="adb">Android / Android TV · ADB</option>
             <option value="simulator">Apple simulator · simctl + idb</option>

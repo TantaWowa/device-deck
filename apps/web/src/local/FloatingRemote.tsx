@@ -1,17 +1,22 @@
 import React, { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { GripVertical, Menu, X } from "lucide-react";
+import { clampPopup } from "../../../../packages/ui/src/popup-position";
+import { useAnchoredPopup, type PopupAnchor } from "./anchored-popup";
+import "./anchored-popup.css";
 export function FloatingRemote({
   title,
   initialMenu = false,
   storageKey,
   requestKey,
+  anchor,
   onClose,
   children,
 }: {
   title: string;
   storageKey: string;
   requestKey: object;
+  anchor?: PopupAnchor | null;
   initialMenu?: boolean;
   onClose: () => void;
   children: (
@@ -20,8 +25,6 @@ export function FloatingRemote({
   ) => React.ReactNode;
 }) {
   const saved = useRef<{
-    x?: number;
-    y?: number;
     width?: number;
     height?: number;
   }>({});
@@ -41,39 +44,55 @@ export function FloatingRemote({
       Math.min(innerHeight, Number(saved.current.height) || 302),
     ),
   }));
-  const panel = useRef<HTMLDivElement>(null);
   const [menu, setMenu] = useState(initialMenu);
-  const [host, setHost] = useState<Element>(
-    document.fullscreenElement || document.body,
-  );
-  const [position, setPosition] = useState(() => ({
-    x: Math.max(
-      0,
-      Math.min(
-        Number(saved.current.x ?? innerWidth - 320),
-        innerWidth - size.width,
-      ),
-    ),
-    y: Math.max(
-      0,
-      Math.min(Number(saved.current.y ?? 120), innerHeight - size.height),
-    ),
-  }));
+  const { panel, host, position, setPosition, detach } = useAnchoredPopup({
+    anchor,
+    requestKey,
+    fallbackSize: size,
+  });
   const drag = useRef<{
     x: number;
     y: number;
     left: number;
     top: number;
   } | null>(null);
+  const close = useRef(onClose);
+  close.current = onClose;
+  useEffect(() => {
+    const previous = document.activeElement;
+    panel.current
+      ?.querySelector<HTMLButtonElement>('[aria-label="Close remote"]')
+      ?.focus({ preventScroll: true });
+    // The remote's window capture listener gets Escape first to release keyboard input.
+    const keydown = (event: KeyboardEvent) => {
+      if (
+        event.key !== "Escape" ||
+        event.defaultPrevented ||
+        document.querySelector("dialog[open],.anchored-popover")
+      )
+        return;
+      event.preventDefault();
+      close.current();
+    };
+    document.addEventListener("keydown", keydown);
+    return () => {
+      document.removeEventListener("keydown", keydown);
+      const target = anchor?.element.isConnected ? anchor.element : previous;
+      if (target instanceof HTMLElement && target.isConnected)
+        target.focus({ preventScroll: true });
+    };
+  }, [anchor, requestKey, host]);
   useEffect(() => {
     setMenu(initialMenu);
   }, [initialMenu, requestKey]);
   useEffect(() => {
-    localStorage.setItem(
-      `deck-remote-position-${storageKey}`,
-      JSON.stringify({ ...position, ...size }),
-    );
-  }, [position, size, storageKey]);
+    try {
+      localStorage.setItem(
+        `deck-remote-position-${storageKey}`,
+        JSON.stringify(size),
+      );
+    } catch {}
+  }, [size, storageKey]);
   useEffect(() => {
     const observer = new ResizeObserver(() => {
       if (!panel.current) return;
@@ -87,43 +106,12 @@ export function FloatingRemote({
     if (panel.current) observer.observe(panel.current);
     return () => observer.disconnect();
   }, [host]);
-  useEffect(() => {
-    const fit = () =>
-      setPosition((p) => ({
-        x: Math.max(
-          0,
-          Math.min(
-            p.x,
-            innerWidth -
-              Math.min(panel.current?.offsetWidth || 300, innerWidth),
-          ),
-        ),
-        y: Math.max(
-          0,
-          Math.min(
-            p.y,
-            innerHeight -
-              Math.min(panel.current?.offsetHeight || 330, innerHeight),
-          ),
-        ),
-      }));
-    const fullscreen = () => {
-      setHost(document.fullscreenElement || document.body);
-      fit();
-    };
-    window.addEventListener("resize", fit);
-    document.addEventListener("fullscreenchange", fullscreen);
-    return () => {
-      window.removeEventListener("resize", fit);
-      document.removeEventListener("fullscreenchange", fullscreen);
-    };
-  }, []);
   return createPortal(
     <div
       ref={panel}
       role="region"
       aria-label={`Remote for ${title}`}
-      className={`floating-remote ${menu ? "options-open" : ""}`}
+      className={`floating-remote anchored-remote ${menu ? "options-open" : ""}`}
       style={{
         left: position.x,
         top: position.y,
@@ -136,6 +124,7 @@ export function FloatingRemote({
         onPointerDown={(e) => {
           if ((e.target as HTMLElement).closest("button")) return;
           e.preventDefault();
+          detach();
           e.currentTarget.setPointerCapture(e.pointerId);
           drag.current = {
             x: e.clientX,
@@ -146,22 +135,19 @@ export function FloatingRemote({
         }}
         onPointerMove={(e) => {
           if (!drag.current) return;
-          setPosition({
-            x: Math.max(
-              0,
-              Math.min(
-                innerWidth - (panel.current?.offsetWidth || 300),
-                drag.current.left + e.clientX - drag.current.x,
-              ),
+          setPosition(
+            clampPopup(
+              {
+                x: drag.current.left + e.clientX - drag.current.x,
+                y: drag.current.top + e.clientY - drag.current.y,
+              },
+              {
+                width: panel.current?.offsetWidth || size.width,
+                height: panel.current?.offsetHeight || size.height,
+              },
+              { width: innerWidth, height: innerHeight },
             ),
-            y: Math.max(
-              0,
-              Math.min(
-                innerHeight - (panel.current?.offsetHeight || 330),
-                drag.current.top + e.clientY - drag.current.y,
-              ),
-            ),
-          });
+          );
         }}
         onPointerUp={(e) => {
           drag.current = null;

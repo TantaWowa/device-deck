@@ -1,5 +1,6 @@
 import React from "react";
 import { ScanLine, Camera, Circle, Square, Lock, Gamepad2 } from "lucide-react";
+import { popupAnchor, type PopupAnchor } from "./anchored-popup";
 export type FeedAction =
   "identify" | "record" | "screenshot" | "reserve" | "remote";
 export function FeedActions({
@@ -11,7 +12,7 @@ export function FeedActions({
   name: string;
   recording?: boolean;
   reserved?: boolean;
-  onAction: (action: FeedAction) => void;
+  onAction: (action: FeedAction, anchor: PopupAnchor) => void;
 }) {
   return (
     <div className="feed-actions" aria-label={`Controls for ${name}`}>
@@ -33,7 +34,7 @@ export function FeedActions({
           type="button"
           className={id === "record" && recording ? "is-recording" : ""}
           aria-label={`${label} · ${name}`}
-          onClick={() => onAction(id)}
+          onClick={(event) => onAction(id, popupAnchor(event.currentTarget))}
         >
           {icon}
           <span>{label}</span>

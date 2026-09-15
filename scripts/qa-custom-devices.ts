@@ -13,6 +13,7 @@ import path from "node:path";
 import { build } from "vite";
 import { z } from "zod";
 import { chromium, expect, type Browser } from "@playwright/test";
+import { exerciseDeviceTable } from "./qa-device-table";
 import { DeckService } from "../apps/daemon/src/local/service";
 import { createService } from "../apps/daemon/src/server";
 import { Adapters } from "../packages/adapters/src";
@@ -59,7 +60,7 @@ class FixtureAdapters extends Adapters {
   async inspect(device: DeviceConfig): Promise<Device> {
     return {
       ...device,
-      online: true,
+      online: device.id !== "iphone-sim",
       locked: false,
       healthDetail: "Isolated fixture",
       capabilities: [],
@@ -180,7 +181,7 @@ try {
       platform: "Apple",
       kind: "virtual",
       model: "tvOS",
-      visibility: "local",
+      visibility: "shared",
       connection: {
         type: "simulator",
         os: "tvos",
@@ -252,6 +253,7 @@ try {
     page.getByRole("article", { name, exact: true });
   await page.goto(`${base}/#ticket=${ticket}`);
   await page.getByRole("heading", { name: "Devices", exact: true }).waitFor();
+  checks.push(...(await exerciseDeviceTable(page, output, base)));
   await nav("Capture Cards");
   const fresh = card("Fixture HDMI");
   const dialog = page.getByRole("dialog");
@@ -281,7 +283,9 @@ try {
   await expect(
     dialog.getByRole("textbox", { name: "Search devices", exact: true }),
   ).toBeFocused();
-  await page.screenshot({ path: path.join(output, "device-picker-desktop.png") });
+  await page.screenshot({
+    path: path.join(output, "device-picker-desktop.png"),
+  });
   await filter("Family", "Android");
   await filter("Class", "Phone");
   await filter("Type", "Physical");

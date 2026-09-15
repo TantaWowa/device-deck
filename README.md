@@ -42,13 +42,13 @@ Capture Cards uses compact rows with a single **Assigned device** button. Its po
 
 ## First device session
 
-The Devices list has Apple, Roku, Android and USB-only filter buttons, plus Sim / Real buttons. Click an active filter again to clear it; less common filters are under **More filters**.
+The Devices list keeps platform, Sim / Real, connection, availability and visibility filter buttons visible beside a compact name search. Click an active filter again to clear it. Click a data-column heading to sort ascending, then click again to reverse the order; selected devices stay selected when the order changes.
 
 ### Feed controls and compact remotes
 
 Every feed and device row has Identify, Record, Screenshot, Reserve and Remote actions. Identify labels the local preview and shows the capture card's stable identity. Record and Screenshot open quick capture settings; an available device can be reserved and captured with one button.
 
-Remote opens a small floating panel over the workspace. Drag its title bar anywhere, resize its lower-right corner, and keep watching the feeds underneath. Its position and size are remembered per device in that browser. The menu contains reservations, capture settings, device configuration and remote style. The first key or text sent to an available device reserves it using the menu's owner and reason. An occupied device requires an explicit takeover; stopping or ending an active recording saves the file first.
+Remote, Record, Screenshot, Reserve and Identify open above the clicked button, moving below or inward when needed to fit the screen. Drag the remote’s title bar anywhere, resize its lower-right corner, and keep watching the feeds underneath. Its size is remembered per device in that browser; each new action opens beside the button you just clicked. The menu contains reservations, capture settings, device configuration and remote style. The first key or text sent to an available device reserves it using the menu's owner and reason. An occupied device requires an explicit takeover; stopping or ending an active recording saves the file first.
 
 Enable **Keyboard input** to send arrows, Enter, Space, B (Back), H (Home), R (Rewind), F (Forward), P (Replay) and S (Special). Escape exits keyboard mode. While keyboard input is off, the feed viewer keeps its navigation shortcuts. Use the text field for text entry.
 
