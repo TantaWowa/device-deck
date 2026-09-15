@@ -76,7 +76,8 @@
   color: #344c6b;
 }
 .period-dates input,
-.card-assignment select {
+.card-assignment select,
+.card-assignment input {
   background: white;
   border: 1px solid #b9c9df;
   color: #152840;
@@ -251,9 +252,11 @@
 .card-assignment label {
   flex-basis: 100%;
 }
-.card-assignment select {
+.card-assignment select,
+.card-assignment input {
   width: 100%;
   max-width: 100%;
+  min-width: 0;
 }
 .card-assignment small,
 .card-assignment .workspace-error {

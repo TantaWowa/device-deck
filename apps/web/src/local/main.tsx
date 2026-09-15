@@ -9,7 +9,10 @@ import { FeedViewer } from "./FeedViewer";
 import { Reports } from "../components/Reports";
 import { License, LicenseReminder } from "../components/License";
 import { CaptureCards, type CardView } from "../components/CaptureCards";
-import { assignCaptureCard } from "../../../../packages/core/src/capture-cards";
+import {
+  assignCaptureCard,
+  assignCustomCaptureCard,
+} from "../../../../packages/core/src/capture-cards";
 import React, {
   useState,
   useEffect,
@@ -1242,6 +1245,7 @@ function App() {
             }))}
             devices={data.devices.map((d) => ({
               ...d,
+              captureOnly: d.connection.type === "capture",
               owner: activeSession(d.id)?.owner,
               reason: activeSession(d.id)?.reason,
               recording: data.recordings.some((r) => r.deviceId === d.id),
@@ -1266,6 +1270,21 @@ function App() {
                     uniqueId: source.uniqueId,
                   },
                   id,
+                ),
+              );
+              await refreshCards();
+            }}
+            assignCustom={async (card, name) => {
+              await saveConfig(
+                assignCustomCaptureCard(
+                  data.config,
+                  {
+                    id: card.id,
+                    name: card.name,
+                    kind: "usb",
+                    uniqueId: card.uniqueId,
+                  },
+                  { id: crypto.randomUUID(), name },
                 ),
               );
               await refreshCards();
@@ -1697,7 +1716,7 @@ function DeviceEditor({
             }}
           >
             <option value="capture">
-              USB capture only · no remote connection
+              Custom / HDMI device · capture only
             </option>
             <option value="roku">Roku · network ECP</option>
             <option value="adb">Android / Android TV · ADB</option>
@@ -1708,6 +1727,12 @@ function DeviceEditor({
             </option>
           </select>
         </label>
+        {type === "capture" && (
+          <small>
+            Enter any device name, such as Mac mini, and choose its USB capture
+            input. You can view, screenshot and record its feed.
+          </small>
+        )}
         {type !== "capture" && (
           <label>
             {type === "roku" || type === "apple-tv"

@@ -44,6 +44,8 @@ Each card shows connection, hardware ID, assigned device, reservation owner/reas
 
 Assignments use the existing revision-checked `config.save` operation. The service validates both affected devices and source exclusivity before saving JSON. The Devices table and Capture Cards page read the same binding. Unassigning keeps the configured hardware record, so it remains visible if disconnected. Native screens continue to be configured through Devices.
 
+In the local app, **Assigned device → Custom device…** accepts a name such as **Mac mini** and creates a physical capture-only device bound to that card. No network address or discovery step is required. If a capture-only device already owns the card, **Save device name** renames that same device, preserving its ID and capture history. Names must be unique, nonblank and at most 64 characters. Reserved or recording devices must be released before editing their assignment or name. Custom capture-only devices need a USB input; configure a supported control connection separately to enable remote input.
+
 `capture-cards.list` returns `{sources, diagnostics}` without registering devices or changing bindings. CLI can call it directly; MCP exposes `capture-cards_list`.
 
 ```sh
@@ -57,5 +59,7 @@ Assignments use the existing revision-checked `config.save` operation. The servi
 ## Validation boundary
 
 Service/model tests cover local calendar/DST boundaries, custom inclusion and validation, ongoing/crossing reservations, untruncated event totals, removed capture counts, hardware-ID merges and assignment persistence/conflicts. Browser fixtures cover all presets, saved custom ranges, invalid/empty states, matching API counts, reserved controls, assignment/unassignment/reassignment, Devices selector consistency, rediscovery/reload persistence, viewer links and responsive layouts.
+
+`npm run qa:custom-devices` checks custom names against the real local web UI and daemon using an isolated profile and inert device adapters. It covers creation, rename, persistence, duplicate-name rejection and reserved-device protection without accessing capture hardware.
 
 The card screenshots using fixture devices are labelled as fixtures. No physical capture stream or device input was used for this update. Physical capture-card permissions, video and disconnect/reorder behavior remain unverified on hardware.

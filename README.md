@@ -38,6 +38,8 @@ From an unpacked release, use `./devdeck` instead of `node build/devdeck.mjs`. K
 
 Reports offer Day, Week, Month and inclusive custom date ranges. The same range applies to every metric and device row; CLI and MCP can request it too. Capture Cards shows detected and disconnected USB cards, stable hardware IDs, ownership and direct device assignment. See [range and binding semantics](docs/reports-and-capture-cards.md).
 
+For a Mac mini, console or another HDMI device, open **Capture Cards → Assigned device → Custom device…**, type its name and choose **Create & assign**. The device appears in Devices and on its feed, with screenshot and recording support through the selected card. For an existing capture-only device, the same option renames it and preserves its history. Remote control requires a supported connection configured separately.
+
 ## First device session
 
 The Devices list has Apple, Roku, Android and USB-only filter buttons, plus Sim / Real buttons. Click an active filter again to clear it; less common filters are under **More filters**.

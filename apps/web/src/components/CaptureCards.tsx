@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import "./workspace.css";
+const CUSTOM_DEVICE = "custom:";
 export type CardView = {
   id: string;
   name: string;
@@ -17,26 +18,33 @@ export type CardDevice = {
   owner?: string;
   reason?: string;
   recording?: boolean;
+  captureOnly?: boolean;
 };
 function Assignment({
   card,
   devices,
   busy,
   assign,
+  assignCustom,
 }: {
   card: CardView;
   devices: CardDevice[];
   busy: boolean;
   assign: (deviceId: string | null) => Promise<unknown>;
+  assignCustom?: (name: string) => Promise<unknown>;
 }) {
   const [target, setTarget] = useState(card.deviceId || ""),
+    [name, setName] = useState(""),
+    [saving, setSaving] = useState(false),
     [error, setError] = useState("");
+  const current = devices.find((d) => d.id === card.deviceId),
+    selected = devices.find((d) => d.id === target),
+    custom = target === CUSTOM_DEVICE,
+    pending = busy || saving;
   useEffect(() => {
     setTarget(card.deviceId || "");
     setError("");
-  }, [card.deviceId]);
-  const current = devices.find((d) => d.id === card.deviceId),
-    selected = devices.find((d) => d.id === target);
+  }, [card.deviceId, current?.name]);
   const conflict =
     target && target !== card.deviceId && selected?.captureSourceId
       ? "That device already has a capture input. Unassign its current input first."
@@ -45,10 +53,19 @@ function Assignment({
   return (
     <form
       className="card-assignment"
-      onSubmit={(e) => {
+      onSubmit={async (e) => {
         e.preventDefault();
+        if (pending || reserved || conflict) return;
         setError("");
-        void assign(target || null).catch((e) => setError(e.message));
+        setSaving(true);
+        try {
+          if (custom && assignCustom) await assignCustom(name.trim());
+          else await assign(target || null);
+        } catch (e) {
+          setError((e as Error).message);
+        } finally {
+          setSaving(false);
+        }
       }}
     >
       <label>
@@ -56,13 +73,18 @@ function Assignment({
         <select
           aria-label={`Assigned device for ${card.name}`}
           value={target}
-          disabled={busy || reserved}
+          disabled={pending || reserved}
           onChange={(e) => {
             setTarget(e.target.value);
+            if (e.target.value === CUSTOM_DEVICE)
+              setName(current?.captureOnly ? current.name : "");
             setError("");
           }}
         >
           <option value="">Unassigned</option>
+          {assignCustom && (
+            <option value={CUSTOM_DEVICE}>Custom device…</option>
+          )}
           {devices.map((d) => (
             <option
               key={d.id}
@@ -81,28 +103,75 @@ function Assignment({
           ))}
         </select>
       </label>
+      {custom && (
+        <>
+          <label>
+            Device name
+            <input
+              aria-label={`Custom device name for ${card.name}`}
+              autoFocus
+              required
+              maxLength={64}
+              placeholder="e.g. Mac mini"
+              value={name}
+              disabled={pending || reserved}
+              onChange={(e) => {
+                setName(e.target.value);
+                setError("");
+              }}
+            />
+          </label>
+          <small>
+            {current?.captureOnly
+              ? "Rename this device and keep its capture history. "
+              : "Name any HDMI device, such as a Mac mini or console. "}
+            View, screenshot and record through this card. Remote control
+            requires a supported connection.
+          </small>
+        </>
+      )}
       <button
         disabled={
-          busy ||
+          pending ||
           reserved ||
+          (custom && !name.trim()) ||
           target === (card.deviceId || "") ||
           Boolean(conflict)
         }
         type="submit"
       >
-        Apply assignment
+        {saving
+          ? "Saving…"
+          : custom
+            ? current?.captureOnly
+              ? "Save device name"
+              : "Create & assign"
+            : "Apply assignment"}
       </button>
-      {card.deviceId && (
+      {custom ? (
         <button
           type="button"
-          disabled={busy || reserved}
+          disabled={pending}
           onClick={() => {
+            setTarget(card.deviceId || "");
             setError("");
-            void assign(null).catch((e) => setError(e.message));
           }}
         >
-          Unassign
+          Cancel
         </button>
+      ) : (
+        card.deviceId && (
+          <button
+            type="button"
+            disabled={pending || reserved}
+            onClick={() => {
+              setError("");
+              void assign(null).catch((e) => setError(e.message));
+            }}
+          >
+            Unassign
+          </button>
+        )
       )}
       {reserved && (
         <small>
@@ -130,6 +199,7 @@ export function CaptureCards({
   diagnostics = [],
   refresh,
   assign,
+  assignCustom,
   view,
   demo = false,
 }: {
@@ -140,6 +210,7 @@ export function CaptureCards({
   diagnostics?: string[];
   refresh: () => void;
   assign: (card: CardView, deviceId: string | null) => Promise<unknown>;
+  assignCustom?: (card: CardView, name: string) => Promise<unknown>;
   view: (id: string) => void;
   demo?: boolean;
 }) {
@@ -244,7 +315,10 @@ export function CaptureCards({
                       </p>
                     </>
                   ) : (
-                    <p>Unassigned. Choose an available configured device.</p>
+                    <p>
+                      Unassigned. Choose a device
+                      {assignCustom ? " or enter a custom one." : "."}
+                    </p>
                   )}
                   {card.detail && !device?.owner && <p>{card.detail}</p>}
                 </div>
@@ -253,6 +327,11 @@ export function CaptureCards({
                   devices={devices}
                   busy={busy}
                   assign={(id) => assign(card, id)}
+                  assignCustom={
+                    assignCustom
+                      ? (name) => assignCustom(card, name)
+                      : undefined
+                  }
                 />
               </article>
             );
