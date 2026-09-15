@@ -14,6 +14,7 @@ import { build } from "vite";
 import { z } from "zod";
 import { chromium, expect, type Browser } from "@playwright/test";
 import { exerciseDeviceTable } from "./qa-device-table";
+import { exerciseRemoteInput } from "./qa-remote-input";
 import { DeckService } from "../apps/daemon/src/local/service";
 import { createService } from "../apps/daemon/src/server";
 import { Adapters } from "../packages/adapters/src";
@@ -50,6 +51,9 @@ const detected = [
   { uniqueId: "fixture-roku", name: "Fixture Roku input" },
 ];
 let deck: DeckService;
+const remoteInputs: { key?: string; text?: string }[] = [];
+const remoteAttempts: { key?: string; text?: string }[] = [];
+let remoteInputBarrier: Promise<void> | undefined;
 class FixtureAdapters extends Adapters {
   async diagnostics() {
     return [];
@@ -63,7 +67,7 @@ class FixtureAdapters extends Adapters {
       online: device.id !== "iphone-sim",
       locked: false,
       healthDetail: "Isolated fixture",
-      capabilities: [],
+      capabilities: device.id === "roku" ? ["key", "text"] : [],
     };
   }
   async inspectSources(sources: SourceConfig[]) {
@@ -78,8 +82,20 @@ class FixtureAdapters extends Adapters {
       diagnostics: [],
     };
   }
-  async input() {
-    throw new Error("Fixture must not send input");
+  async input(device: DeviceConfig, input: { key?: string; text?: string }) {
+    assert.equal(
+      device.id,
+      "roku",
+      "Only the inert fixture remote may receive input",
+    );
+    const value =
+      input.text !== undefined ? { text: input.text } : { key: input.key };
+    remoteAttempts.push(value);
+    const barrier = remoteInputBarrier;
+    remoteInputBarrier = undefined;
+    if (barrier) await barrier;
+    await new Promise<void>((resolve) => setTimeout(resolve, 120));
+    remoteInputs.push(value);
   }
 }
 class FixtureCapture extends CaptureEngine {
@@ -254,6 +270,33 @@ try {
   await page.goto(`${base}/#ticket=${ticket}`);
   await page.getByRole("heading", { name: "Devices", exact: true }).waitFor();
   checks.push(...(await exerciseDeviceTable(page, output, base)));
+  checks.push(
+    ...(await exerciseRemoteInput(page, output, {
+      inputs: () => remoteInputs,
+      attempts: () => remoteAttempts,
+      sessions: () =>
+        deck.store.sessions().filter((session) => session.deviceId === "roku")
+          .length,
+      holdNext: () => {
+        let release!: () => void;
+        remoteInputBarrier = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        return release;
+      },
+      release: async () => {
+        const leases = await page.evaluate(() =>
+          JSON.parse(localStorage.getItem("deck-local-leases") || "{}"),
+        );
+        const lease = leases.roku;
+        if (lease)
+          await deck.execute("sessions.release", {
+            sessionId: lease.session.id,
+            leaseToken: lease.leaseToken,
+          });
+      },
+    })),
+  );
   await nav("Capture Cards");
   const fresh = card("Fixture HDMI");
   const dialog = page.getByRole("dialog");

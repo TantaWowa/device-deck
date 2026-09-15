@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useLayoutEffect, useRef, useState } from "react";
 import { Camera, Circle, Square, Lock, Unlock, RefreshCw } from "lucide-react";
 import type {
   Device,
@@ -9,6 +9,7 @@ import { api } from "./api";
 import { RemoteControl } from "./RemoteControl";
 import type { FeedAction } from "./FeedActions";
 export type DeviceLease = { session: Session; leaseToken: string };
+type RemoteLease = DeviceLease & { observed: boolean };
 export function DeviceControls({
   device,
   data,
@@ -50,11 +51,60 @@ export function DeviceControls({
     session.expiresAt > Date.now(),
   );
   const enabled = (owned || !session) && device.online && !device.locked;
+  const latest = useRef({
+    device,
+    data,
+    lease,
+    session,
+    owned,
+    owner,
+    reason,
+    busy,
+    confirm,
+    optionsOpen,
+    onLease,
+    refresh,
+    setOptionsOpen,
+  });
+  latest.current = {
+    device,
+    data,
+    lease,
+    session,
+    owned,
+    owner,
+    reason,
+    busy,
+    confirm,
+    optionsOpen,
+    onLease,
+    refresh,
+    setOptionsOpen,
+  };
+  const input = useRef({
+    mounted: true,
+    generation: 0,
+    tail: Promise.resolve<unknown>(undefined),
+    lease: null as RemoteLease | null,
+  });
+  useLayoutEffect(() => {
+    input.current.mounted = true;
+    return () => {
+      input.current.mounted = false;
+      input.current.generation++;
+      input.current.lease = null;
+    };
+  }, [device.id]);
   const run = async (fn: () => Promise<unknown>) => {
+    // Management actions supersede queued keys and wait for dispatched input.
+    input.current.generation++;
+    input.current.lease = null;
+    latest.current.busy = true;
     setBusy(true);
     setError("");
     setNotice("");
     try {
+      await input.current.tail;
       const result = await fn();
       await refresh();
       return result;
@@ -64,6 +114,7 @@ export function DeviceControls({
       await refresh();
       return false;
     } finally {
+      latest.current.busy = false;
       setBusy(false);
     }
   };
@@ -97,17 +148,112 @@ export function DeviceControls({
     else setNotice("Device reserved. Remote and capture controls are ready.");
     return { sessionId: result.session.id, leaseToken: result.leaseToken };
   };
-  const send = (payload: { key?: string; text?: string }) =>
-    run(async () => {
-      if (session && !owned) {
-        setOptionsOpen(true);
-        throw new Error(
-          `Reserved by ${session.owner}. End the current session from the menu to take control.`,
+  const send = (payload: { key?: string; text?: string }) => {
+    const queue = input.current;
+    const generation = queue.generation;
+    const deviceId = latest.current.device.id;
+    // Remember the session at enqueue time so a released reservation cannot be
+    // silently replaced while older keys are still waiting to be dispatched.
+    const expectedSession = latest.current.owned
+      ? latest.current.session!.id
+      : queue.lease?.session.id;
+    const current = () =>
+      queue.mounted &&
+      queue.generation === generation &&
+      latest.current.device.id === deviceId;
+    const task = queue.tail.then(async () => {
+      if (!current()) return false;
+      const state = latest.current;
+      if (state.busy || state.confirm || state.optionsOpen) return false;
+      try {
+        if (!state.device.online || state.device.locked)
+          throw new Error(
+            "This device is offline or locked. Remote input is unavailable.",
+          );
+        let credentials = queue.lease;
+        if (!credentials && state.owned && state.lease && state.session) {
+          credentials = {
+            session: state.session,
+            leaseToken: state.lease.leaseToken,
+            observed: true,
+          };
+          queue.lease = credentials;
+        }
+        if (expectedSession && credentials?.session.id !== expectedSession)
+          throw new Error(
+            "Your reservation ended or changed. Reserve the device again to continue.",
+          );
+        if (!credentials) {
+          if (state.session)
+            throw new Error(
+              `Reserved by ${state.session.owner}. End the current session from the menu to take control.`,
+            );
+          const reserved: DeviceLease = await api("sessions.reserve", {
+            selector: { device: deviceId },
+            owner: state.owner,
+            reason: state.reason,
+          });
+          // Keep the returned token even if the window closes during reservation.
+          state.onLease(reserved);
+          void state.refresh().catch(() => {});
+          if (!current()) return false;
+          credentials = { ...reserved, observed: false };
+          queue.lease = credentials;
+        }
+        if (!current()) return false;
+        // Reservation may have awaited the network while inventory or the
+        // window changed. Check the latest state before dispatching this key.
+        const beforeSend = latest.current;
+        if (beforeSend.busy || beforeSend.confirm || beforeSend.optionsOpen)
+          return false;
+        if (!beforeSend.device.online || beforeSend.device.locked)
+          throw new Error(
+            "This device is offline or locked. Remote input is unavailable.",
+          );
+        const known = beforeSend.data.sessions.find(
+          (s) => s.id === credentials.session.id,
         );
+        if (
+          (known &&
+            (known.state !== "active" || known.expiresAt <= Date.now())) ||
+          (beforeSend.session &&
+            beforeSend.session.id !== credentials.session.id) ||
+          (credentials.observed &&
+            (!beforeSend.owned ||
+              beforeSend.lease?.sessionId !== credentials.session.id))
+        )
+          throw new Error(
+            "Your reservation ended or changed. Reserve the device again to continue.",
+          );
+        if (known) credentials.session = known;
+        if (
+          beforeSend.owned &&
+          beforeSend.lease?.sessionId === credentials.session.id
+        )
+          credentials.observed = true;
+        if (credentials.session.expiresAt <= Date.now())
+          throw new Error(
+            "Your reservation expired. Reserve the device again to continue.",
+          );
+        return await api("remote.input", {
+          sessionId: credentials.session.id,
+          leaseToken: credentials.leaseToken,
+          ...payload,
+        });
+      } catch (e) {
+        if (!current()) return false;
+        queue.generation++;
+        queue.lease = null;
+        setError((e as Error).message);
+        setNotice("");
+        latest.current.setOptionsOpen(true);
+        void latest.current.refresh().catch(() => {});
+        return false;
       }
-      const credentials = owned ? lease : await reserve();
-      return api("remote.input", { ...credentials, ...payload });
     });
+    queue.tail = task;
+    return task;
+  };
   const captureAllowed = (kind: "record" | "screenshot") =>
     device.online &&
     !device.locked &&

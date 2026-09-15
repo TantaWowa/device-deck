@@ -110,6 +110,7 @@ export function FloatingRemote({
     <div
       ref={panel}
       role="region"
+      tabIndex={-1}
       aria-label={`Remote for ${title}`}
       className={`floating-remote anchored-remote ${menu ? "options-open" : ""}`}
       style={{
