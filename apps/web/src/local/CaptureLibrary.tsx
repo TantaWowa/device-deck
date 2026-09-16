@@ -1,15 +1,16 @@
 import React, { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, ArrowUpDown, Camera, Check, Copy, Download, FolderOpen, Search, SlidersHorizontal, Trash2, Undo2, Video, X } from "lucide-react";
-import type { Artifact, Operation } from "../../../../packages/core/src/local/types";
-import { captureBatches, captureDownloadName, captureIsBusy, captureStorage, formatCaptureBytes, visibleCaptures, visibleCaptureSelection, type CaptureDevice, type CaptureFilters, type CaptureSort, type CaptureSortColumn, type CaptureVariant } from "../../../../packages/core/src/capture-library";
-import { AnchoredPopover } from "./AnchoredPopover";
-import { popupAnchor, type PopupAnchor } from "./anchored-popup";
+import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, ArrowUpDown, Camera, Copy, Download, FolderOpen, Grid2X2, List, Trash2, Undo2, X } from "lucide-react";
+import type { Artifact, Operation, Session } from "../../../../packages/core/src/local/types";
+import { captureBatches, captureDownloadName, captureIsBusy, captureStorage, emptyCaptureFilters, hasCaptureFilters, formatCaptureBytes, visibleCaptures, visibleCaptureSelection, type CaptureDevice, type CaptureFilters, type CaptureSort, type CaptureSortColumn, type CaptureVariant } from "../../../../packages/core/src/capture-library";
+import { CaptureFilters as CaptureFilterBar } from "./CaptureFilters";
+import { CaptureThumbnail, type CaptureThumbnailProps } from "./CaptureThumbnail";
 import { copyImageToClipboard } from "./capture-feedback";
 import "./capture-library.css";
 
-export type CaptureLibraryProps = {
+export type CaptureLibraryProps = Pick<CaptureThumbnailProps, "thumbnailUrl" | "getThumbnail"> & {
   artifacts: Artifact[];
   devices: CaptureDevice[];
+  sessions?: Session[];
   folder: string;
   operation: <T = unknown>(name: Operation, args?: unknown, signal?: AbortSignal) => Promise<T>;
   getBlob: (artifact: Artifact, variant: CaptureVariant, signal?: AbortSignal) => Promise<Blob>;
@@ -21,7 +22,7 @@ export type CaptureLibraryProps = {
   onOpenFolder?: () => Promise<unknown>;
 };
 
-const emptyFilters: CaptureFilters = { search: "", deviceId: "", platform: "", kind: "", trash: false };
+const emptyFilters = emptyCaptureFilters;
 const date = (value: number) => new Date(value).toLocaleString();
 const errorMessage = (error: unknown) => error instanceof Error ? error.message : String(error);
 const statusLabel = (status: Artifact["status"]) => status[0].toUpperCase() + status.slice(1);
@@ -35,7 +36,11 @@ export function CaptureLibrary(props: CaptureLibraryProps) {
   const [filters, setFilters] = useState<CaptureFilters>(emptyFilters);
   const [sort, setSort] = useState<CaptureSort>({ column: "createdAt", direction: "descending" });
   const [selected, setSelected] = useState<string[]>([]);
-  const [filterAnchor, setFilterAnchor] = useState<PopupAnchor | null>(null);
+  const [view, setView] = useState<"tiled" | "list">(() => {
+    try { return localStorage.getItem("deck-captures-view") === "list" ? "list" : "tiled"; }
+    catch { return "tiled"; }
+  });
+  useEffect(() => { try { localStorage.setItem("deck-captures-view", view); } catch {} }, [view]);
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -46,15 +51,13 @@ export function CaptureLibrary(props: CaptureLibraryProps) {
   const storageRequest = useRef({ operation, lastAt: 0, revision: -1 });
   storageRequest.current.operation = operation;
   const selectAll = useRef<HTMLInputElement>(null);
-  const visible = useMemo(() => visibleCaptures(artifacts, devices, filters, sort), [artifacts, devices, filters, sort]);
+  const visible = useMemo(() => visibleCaptures(artifacts, devices, filters, sort, props.sessions), [artifacts, devices, filters, sort, props.sessions]);
   const eligible = visible.filter((artifact) => !captureIsBusy(artifact));
   const selection = visibleCaptureSelection(selected, visible);
   const storage = captureStorage(artifacts);
   const current = artifacts.find((artifact) => artifact.id === openArtifactId && !artifact.purgedAt);
   const currentIndex = visible.findIndex((artifact) => artifact.id === openArtifactId);
-  const activeFilters = Number(Boolean(filters.deviceId)) + Number(Boolean(filters.platform)) + Number(Boolean(filters.kind));
-  const deviceOptions = [...devices.map((device) => ({ id: device.id, name: device.name, platform: String(device.platform) })),
-    ...[...new Set(artifacts.filter((artifact) => !artifact.purgedAt && !devices.some((device) => device.id === artifact.deviceId)).map((artifact) => artifact.deviceId))].map((id) => ({ id, name: `${id} · removed`, platform: "" }))];
+  const activeFilters = hasCaptureFilters(filters);
   const selectionKey = JSON.stringify(selection);
   const storageKey = JSON.stringify(artifacts.map(({ id, bytes, deletedAt, purgedAt, status }) => [id, bytes, deletedAt, purgedAt, status]));
 
@@ -140,31 +143,24 @@ export function CaptureLibrary(props: CaptureLibraryProps) {
       <div><strong>{formatCaptureBytes(storageStats?.trashBytes ?? storage.trash.bytes)}</strong><span>Trash · {storage.trash.count} captures</span></div>
       <div className="capture-folder"><span title={folder}>{folder}</span><button type="button" disabled={Boolean(busy)} onClick={() => void run("Opening capture folder…", async () => { await (onOpenFolder ? onOpenFolder() : operation("captures.openFolder", {})); announce("Opened the capture folder in Finder on the host Mac."); })}><FolderOpen size={15} />Open folder on Mac</button></div>
     </div>
-    <div className="capture-library-toolbar">
-      <label className="capture-search"><Search size={16} /><input type="search" aria-label="Search captures" placeholder="Search name, device or tags" value={filters.search} onChange={(event) => setFilters((previous) => ({ ...previous, search: event.target.value }))} />{filters.search && <button type="button" onClick={() => setFilters((previous) => ({ ...previous, search: "" }))} aria-label="Clear capture search"><X size={14} /></button>}</label>
-      <button type="button" aria-haspopup="dialog" aria-expanded={Boolean(filterAnchor)} className={activeFilters ? "capture-selected-button" : ""} onClick={(event) => setFilterAnchor(filterAnchor ? null : popupAnchor(event.currentTarget))}><SlidersHorizontal size={15} />Filters{activeFilters ? ` (${activeFilters})` : ""}</button>
-      {(activeFilters > 0 || filters.search) && <button type="button" className="capture-reset" onClick={() => setFilters((previous) => ({ ...emptyFilters, trash: previous.trash }))}>Clear filters</button>}
+    <CaptureFilterBar value={filters} onChange={setFilters} devices={devices} artifacts={artifacts} />
+    <div className="capture-view-toolbar">
+      <label className="capture-select-all"><input ref={selectAll} type="checkbox" aria-label="Select all visible captures" checked={eligible.length > 0 && selection.length === eligible.length} disabled={!eligible.length || Boolean(busy)} onChange={(event) => setSelected(event.target.checked ? eligible.map((artifact) => artifact.id) : [])} />Select all</label>
       <span className="capture-result-count">{visible.length} {visible.length === 1 ? "capture" : "captures"}</span>
+      {view === "tiled" && <div className="capture-sort-controls"><label>Sort by <select aria-label="Sort captures by" value={sort.column} onChange={(event) => setSort((current) => ({ ...current, column: event.target.value as CaptureSortColumn }))}>{columns.map(({ key, label }) => <option key={key} value={key}>{label}</option>)}</select></label><button type="button" aria-label={sort.direction === "ascending" ? "Sort descending" : "Sort ascending"} onClick={() => setSort((current) => ({ ...current, direction: current.direction === "ascending" ? "descending" : "ascending" }))}>{sort.direction === "ascending" ? <ArrowUp size={15} /> : <ArrowDown size={15} />}</button></div>}
+      <div className="capture-view-buttons" role="group" aria-label="Capture view"><button type="button" aria-pressed={view === "tiled"} onClick={() => setView("tiled")}><Grid2X2 size={15} />Tiled view</button><button type="button" aria-pressed={view === "list"} onClick={() => setView("list")}><List size={15} />List view</button></div>
     </div>
-    {filterAnchor && <AnchoredPopover title="Filter captures" anchor={filterAnchor} onClose={() => setFilterAnchor(null)}>
-      <div className="capture-filter-fields">
-        <label>Platform<select aria-label="Capture platform" value={filters.platform} onChange={(event) => setFilters((previous) => ({ ...previous, platform: event.target.value, deviceId: "" }))}><option value="">All platforms</option>{[...new Set(devices.map((device) => device.platform))].sort().map((platform) => <option key={platform}>{platform}</option>)}</select></label>
-        <label>Device<select aria-label="Capture device" value={filters.deviceId} onChange={(event) => setFilters((previous) => ({ ...previous, deviceId: event.target.value }))}><option value="">All devices</option>{deviceOptions.filter((device) => !filters.platform || device.platform === filters.platform).map((device) => <option value={device.id} key={device.id}>{device.name}</option>)}</select></label>
-        <label>Type<select aria-label="Capture type" value={filters.kind} onChange={(event) => setFilters((previous) => ({ ...previous, kind: event.target.value }))}><option value="">All capture types</option><option value="screenshot">Screenshot</option><option value="recording">Recording</option></select></label>
-        <footer><button type="button" onClick={() => setFilters((previous) => ({ ...emptyFilters, search: previous.search, trash: previous.trash }))}>Reset filters</button><button type="button" className="capture-selected-button" onClick={() => setFilterAnchor(null)}><Check size={14} />Done</button></footer>
-      </div>
-    </AnchoredPopover>}
     {(notice || busy) && <p className="capture-library-notice" role="status">{busy || notice}</p>}
     {error && <p className="capture-library-error" role="alert">{error}</p>}
     {selection.length > 0 && <div className="capture-bulk-actions"><strong>{selection.length} selected</strong><button type="button" disabled={Boolean(busy)} onClick={() => void change(filters.trash ? "restore" : "remove", selection)}>{filters.trash ? <Undo2 size={14} /> : <Trash2 size={14} />}{filters.trash ? "Restore selected" : "Move to trash"}</button>{filters.trash && <button type="button" className="capture-danger" disabled={Boolean(busy)} onClick={() => setPurgeIds(selection)}>Delete permanently…</button>}<button type="button" disabled={Boolean(busy)} onClick={() => setSelected([])}>Clear selection</button></div>}
-    <div className="capture-table-scroll">
+    {view === "list" ? <div className="capture-table-scroll">
       <table className="capture-table">
-        <thead><tr><th className="capture-check"><input ref={selectAll} type="checkbox" aria-label="Select all visible captures" checked={eligible.length > 0 && selection.length === eligible.length} disabled={!eligible.length || Boolean(busy)} onChange={(event) => setSelected(event.target.checked ? eligible.map((artifact) => artifact.id) : [])} /></th>{columns.map(({ key, label }) => <th key={key} aria-sort={sort.column === key ? sort.direction : "none"}><button type="button" onClick={() => sortBy(key)}>{label}{sort.column === key ? sort.direction === "ascending" ? <ArrowUp size={12} /> : <ArrowDown size={12} /> : <ArrowUpDown size={12} />}</button></th>)}<th className="capture-download-col"><span className="capture-visually-hidden">Download</span></th></tr></thead>
+        <thead><tr><th className="capture-check"><span className="capture-visually-hidden">Select</span></th>{columns.map(({ key, label }) => <th key={key} aria-sort={sort.column === key ? sort.direction : "none"}><button type="button" onClick={() => sortBy(key)}>{label}{sort.column === key ? sort.direction === "ascending" ? <ArrowUp size={12} /> : <ArrowDown size={12} /> : <ArrowUpDown size={12} />}</button></th>)}<th className="capture-download-col"><span className="capture-visually-hidden">Download</span></th></tr></thead>
         <tbody>{visible.map((artifact) => {
           const device = devices.find((device) => device.id === artifact.deviceId);
           return <tr key={artifact.id} data-capture-id={artifact.id} className={selection.includes(artifact.id) ? "capture-row-selected" : ""}>
             <td className="capture-check"><input type="checkbox" aria-label={`Select ${artifact.name}`} checked={selection.includes(artifact.id)} disabled={captureIsBusy(artifact) || Boolean(busy)} onChange={(event) => setSelected(event.target.checked ? [...selection, artifact.id] : selection.filter((id) => id !== artifact.id))} /></td>
-            <td className="capture-name-cell"><button type="button" className="capture-name" onClick={() => onOpenArtifact(artifact.id)}>{artifact.kind === "screenshot" ? <Camera size={17} /> : <Video size={17} />}<span>{artifact.name}</span></button>{artifact.tags.length > 0 && <span className="capture-tags">{artifact.tags.join(" · ")}</span>}</td>
+            <td className="capture-name-cell"><button type="button" className="capture-name" aria-label={artifact.name} onClick={() => onOpenArtifact(artifact.id)}><CaptureThumbnail artifact={artifact} thumbnailUrl={props.thumbnailUrl} getThumbnail={props.getThumbnail} /><span>{artifact.name}{artifact.tags.length > 0 && <small className="capture-row-tags">{artifact.tags.join(" · ")}</small>}</span></button></td>
             <td><span className="capture-device-name">{device?.name || artifact.deviceId}</span><small>{device?.platform || "Device removed"}</small></td>
             <td><span className="capture-type">{artifact.kind}</span></td>
             <td><time dateTime={new Date(artifact.createdAt).toISOString()}>{date(artifact.createdAt)}</time></td>
@@ -174,7 +170,21 @@ export function CaptureLibrary(props: CaptureLibraryProps) {
           </tr>;
         })}</tbody>
       </table>
-    </div>
+    </div> : <div className="capture-tiles">
+      {visible.map((artifact) => {
+        const device = devices.find((device) => device.id === artifact.deviceId);
+        return <article key={artifact.id} data-capture-id={artifact.id} className={`capture-tile${selection.includes(artifact.id) ? " capture-tile-selected" : ""}`}>
+          <div className="capture-tile-image">
+            <button type="button" className="capture-tile-preview" aria-label={`Preview ${artifact.name}`} onClick={() => onOpenArtifact(artifact.id)}><CaptureThumbnail artifact={artifact} thumbnailUrl={props.thumbnailUrl} getThumbnail={props.getThumbnail} /></button>
+            <input className="capture-tile-select" type="checkbox" aria-label={`Select ${artifact.name}`} checked={selection.includes(artifact.id)} disabled={captureIsBusy(artifact) || Boolean(busy)} onChange={(event) => setSelected(event.target.checked ? [...selection, artifact.id] : selection.filter((id) => id !== artifact.id))} />
+            <span className="capture-tile-kind">{artifact.kind === "recording" ? `Video${artifact.duration ? ` · ${Math.floor(artifact.duration / 60)}:${String(Math.floor(artifact.duration) % 60).padStart(2, "0")}` : ""}` : "Screenshot"}</span>
+          </div>
+          <div className="capture-tile-details"><button type="button" className="capture-tile-title" onClick={() => onOpenArtifact(artifact.id)}>{artifact.name}</button><p>{device?.name || artifact.deviceId}{device ? ` · ${device.platform}` : " · Device removed"}</p><time dateTime={new Date(artifact.createdAt).toISOString()}>{date(artifact.createdAt)}</time>{artifact.tags.length > 0 && <span className="capture-tile-tags">{artifact.tags.join(" · ")}</span>}
+            <footer><span className={`capture-status capture-status-${artifact.status}`} title={artifact.error}>{statusLabel(artifact.status)}</span><span>{formatCaptureBytes(artifact.bytes)}</span><button type="button" aria-label={`Download ${artifact.name}`} title="Download capture" disabled={Boolean(busy) || Boolean(artifact.deletedAt) || captureIsBusy(artifact)} onClick={() => void run(`Downloading ${artifact.name}…`, () => download(artifact))}><Download size={16} /></button></footer>
+          </div>
+        </article>;
+      })}
+    </div>}
     {!visible.length && <div className="capture-empty"><Camera size={25} /><strong>{filters.search || activeFilters ? "No captures match these filters" : filters.trash ? "Trash is empty" : "Your captures will appear here"}</strong><p>{filters.search || activeFilters ? "Try another search or clear the filters." : filters.trash ? "Captures moved to trash can be restored or permanently deleted here." : "Take a screenshot or record a device from a feed or remote."}</p></div>}
     <p className="capture-storage-note">{storageStats ? `${formatCaptureBytes(storageStats.bytes)} total across ${storageStats.files} managed files, including clean originals and logs.${storageStats.missingFiles ? ` ${storageStats.missingFiles} files are missing.` : ""}` : `Media sizes shown; ${storageLoading ? "calculating total storage…" : "total storage is unavailable. Clean originals and logs may use additional space."}`}</p>
     {current && <CapturePreviewModal artifact={current} deviceName={devices.find((device) => device.id === current.deviceId)?.name || current.deviceId} index={currentIndex} count={visible.length} previous={currentIndex > 0 ? () => onOpenArtifact(visible[currentIndex - 1].id) : undefined} next={currentIndex >= 0 && currentIndex < visible.length - 1 ? () => onOpenArtifact(visible[currentIndex + 1].id) : undefined} close={() => onOpenArtifact(null)} getBlob={getBlob} fileUrl={fileUrl} download={download} operation={operation} onChange={onChange} onNotice={announce} />}

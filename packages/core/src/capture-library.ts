@@ -1,18 +1,25 @@
-import type { Artifact, Device } from "./local/types";
+import type { Artifact, Device, Session } from "./local/types";
 
 export type CaptureSortColumn = "name" | "device" | "kind" | "createdAt" | "bytes" | "status";
 export type CaptureSort = { column: CaptureSortColumn; direction: "ascending" | "descending" };
-export type CaptureFilters = { search: string; deviceId: string; platform: string; kind: string; trash: boolean };
-export type CaptureDevice = Pick<Device, "id" | "name" | "platform">;
+export type CaptureFilters = {
+  search: string; deviceId: string; platform: string; kind: string; trash: boolean;
+  deviceKind?: string; health?: string; reservation?: string; visibility?: string;
+};
+export type CaptureDevice = Pick<Device, "id" | "name" | "platform"> & Partial<Pick<Device, "kind" | "online" | "locked" | "visibility">>;
+export type CaptureSession = Pick<Session, "deviceId" | "state">;
 export type CaptureVariant = "file" | "clean" | "log";
+export const emptyCaptureFilters: CaptureFilters = { search: "", deviceId: "", platform: "", kind: "", trash: false, deviceKind: "", health: "", reservation: "", visibility: "" };
+export const hasCaptureFilters = (filters: CaptureFilters) => Boolean(filters.search.trim() || filters.deviceId || filters.platform || filters.kind || filters.deviceKind || filters.health || filters.reservation || filters.visibility);
 const collator = new Intl.Collator(undefined, { sensitivity: "base", numeric: true });
 
 export function captureIsBusy(artifact: Pick<Artifact, "status">) {
   return artifact.status === "recording" || artifact.status === "finalizing";
 }
 
-export function visibleCaptures(artifacts: readonly Artifact[], devices: readonly CaptureDevice[], filters: CaptureFilters, sort: CaptureSort): Artifact[] {
+export function visibleCaptures(artifacts: readonly Artifact[], devices: readonly CaptureDevice[], filters: CaptureFilters, sort: CaptureSort, sessions: readonly CaptureSession[] = []): Artifact[] {
   const deviceMap = new Map(devices.map((device) => [device.id, device]));
+  const reservedDevices = new Set(sessions.filter((session) => session.state !== "closed").map((session) => session.deviceId));
   const query = filters.search.trim().toLocaleLowerCase();
   const rows = artifacts.filter((artifact) => {
     const device = deviceMap.get(artifact.deviceId);
@@ -20,6 +27,14 @@ export function visibleCaptures(artifacts: readonly Artifact[], devices: readonl
       (!filters.deviceId || artifact.deviceId === filters.deviceId) &&
       (!filters.platform || device?.platform === filters.platform) &&
       (!filters.kind || artifact.kind === filters.kind) &&
+      (!filters.deviceKind || device?.kind === filters.deviceKind) &&
+      (!filters.visibility || device?.visibility === filters.visibility) &&
+      (!filters.health || (filters.health === "online" ? device?.online === true : filters.health === "offline" && device?.online === false)) &&
+      (!filters.reservation || Boolean(device && (filters.reservation === "locked"
+        ? device.locked === true
+        : filters.reservation === "reserved"
+          ? reservedDevices.has(device.id)
+          : filters.reservation === "free" && device.online === true && device.locked === false && !reservedDevices.has(device.id)))) &&
       (!query || [artifact.name, artifact.deviceId, device?.name, device?.platform, artifact.kind, artifact.status, ...artifact.tags].join(" ").toLocaleLowerCase().includes(query));
   });
   const value = (artifact: Artifact): string | number => sort.column === "device"

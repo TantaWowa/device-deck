@@ -294,8 +294,15 @@ export function createService(
         }
         if (req.method === "GET" && url.pathname.startsWith("/v1/artifacts/")) {
           const [, , , id, variant = "file"] = url.pathname.split("/");
-          if (!["file", "clean", "log"].includes(variant) || url.pathname.split("/").length > 5)
+          if (!["file", "clean", "log", "thumbnail"].includes(variant) || url.pathname.split("/").length > 5)
             throw new DeckError("not-found", "Unknown capture file variant.", 404);
+          if (variant === "thumbnail") {
+            const data = await deck.thumbnails.get(id);
+            deck.thumbnails.assertAvailable(id);
+            res.writeHead(200, { "Content-Type": "image/jpeg", "Content-Length": data.length });
+            res.end(data);
+            return;
+          }
           const a = deck.store.artifact(id);
           if (a.deletedAt)
             throw new DeckError(

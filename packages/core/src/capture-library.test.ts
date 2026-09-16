@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import type { Artifact } from "./local/types";
-import { captureBatches, captureDownloadName, captureStorage, formatCaptureBytes, visibleCaptures, visibleCaptureSelection, type CaptureFilters, type CaptureSortColumn } from "./capture-library";
+import { captureBatches, captureDownloadName, captureStorage, emptyCaptureFilters, formatCaptureBytes, hasCaptureFilters, visibleCaptures, visibleCaptureSelection, type CaptureFilters, type CaptureSortColumn } from "./capture-library";
 
 const capture = (id: string, overrides: Partial<Artifact> = {}): Artifact => ({
   id, deviceId: "roku", sessionId: "session", owner: "QA", sourceId: "source", name: id,
@@ -57,4 +57,40 @@ test("downloads retain the real file extension and distinguish clean originals a
   assert.equal(captureDownloadName(artifact, "clean"), "Login _ phone-clean.png");
   assert.equal(captureDownloadName(capture("video", { name: "Demo", kind: "recording", path: "/clips/run.webm" })), "Demo.webm");
   assert.equal(captureDownloadName(capture("one", { name: "Login" }), "log"), "Login-metadata.json");
+});
+
+test("capture device-state filters match current device and session state, including closing reservations", () => {
+  const currentDevices = [
+    { id: "free", name: "Android sim", platform: "Android" as const, kind: "virtual" as const, online: true, locked: false, visibility: "local" as const },
+    { id: "reserved", name: "Roku TV", platform: "Roku" as const, kind: "physical" as const, online: true, locked: false, visibility: "shared" as const },
+    { id: "locked", name: "Apple TV", platform: "Apple" as const, kind: "physical" as const, online: true, locked: true, visibility: "local" as const },
+    { id: "offline", name: "Offline sim", platform: "Android" as const, kind: "virtual" as const, online: false, locked: false, visibility: "shared" as const },
+    { id: "closing", name: "Finishing TV", platform: "Roku" as const, kind: "physical" as const, online: true, locked: false, visibility: "shared" as const },
+  ];
+  const sessions = [{ deviceId: "free", state: "closed" as const }, { deviceId: "reserved", state: "active" as const }, { deviceId: "closing", state: "closing" as const }];
+  const items = currentDevices.map((device) => capture(device.id, { deviceId: device.id, tags: ["release"] }));
+  const find = (changes: Partial<CaptureFilters>) => visibleCaptures(items, currentDevices, { ...emptyCaptureFilters, ...changes }, sort, sessions).map((artifact) => artifact.id);
+  assert.deepEqual(find({ deviceKind: "virtual" }), ["free", "offline"]);
+  assert.deepEqual(find({ deviceKind: "physical" }), ["reserved", "locked", "closing"]);
+  assert.deepEqual(find({ health: "online" }), ["free", "reserved", "locked", "closing"]);
+  assert.deepEqual(find({ health: "offline" }), ["offline"]);
+  assert.deepEqual(find({ reservation: "free" }), ["free"]);
+  assert.deepEqual(find({ reservation: "reserved" }), ["reserved", "closing"]);
+  assert.deepEqual(find({ reservation: "locked" }), ["locked"]);
+  assert.deepEqual(find({ visibility: "local" }), ["free", "locked"]);
+  assert.deepEqual(find({ visibility: "shared" }), ["reserved", "offline", "closing"]);
+  assert.deepEqual(find({ search: "release", platform: "Android", deviceKind: "virtual", health: "online", reservation: "free", visibility: "local", kind: "screenshot" }), ["free"]);
+  assert.deepEqual(find({ health: "offline", reservation: "free" }), []);
+});
+
+test("removed or unknown device state remains visible unfiltered but does not match specific current-state filters", () => {
+  const items = [capture("removed", { deviceId: "removed" }), capture("unknown")];
+  assert.deepEqual(visibleCaptures(items, devices, emptyCaptureFilters, sort).map((artifact) => artifact.id), ["removed", "unknown"]);
+  assert.deepEqual(visibleCaptures(items, devices, { ...emptyCaptureFilters, deviceId: "removed" }, sort).map((artifact) => artifact.id), ["removed"]);
+  for (const changes of [{ deviceKind: "physical" }, { health: "offline" }, { reservation: "free" }, { reservation: "locked" }, { visibility: "local" }])
+    assert.deepEqual(visibleCaptures(items, devices, { ...emptyCaptureFilters, ...changes }, sort), []);
+  assert.equal(hasCaptureFilters(emptyCaptureFilters), false);
+  assert.equal(hasCaptureFilters({ ...emptyCaptureFilters, trash: true }), false);
+  assert.equal(hasCaptureFilters({ ...emptyCaptureFilters, health: "online" }), true);
+  assert.equal(hasCaptureFilters({ ...emptyCaptureFilters, search: "  " }), false);
 });

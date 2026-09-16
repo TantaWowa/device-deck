@@ -73,6 +73,8 @@ Trash retains files. Purge accepts only trashed, stopped captures and permanentl
 
 `captures.storage` accepts `{}` and reports `{bytes,libraryBytes,trashBytes,files,missingFiles}` for managed capture files. Totals use actual file lengths, count shared paths once, and include clean originals, metadata and annotation sidecars. Purged captures and unrelated files in the folder are excluded.
 
+`GET /v1/artifacts/{id}/thumbnail` returns an authenticated JPEG image up to 480×270 pixels, preserving aspect ratio. Screenshots and recorded video frames use a bounded in-memory cache and encoder pool; no thumbnail sidecars are written. Recording/finalizing captures return 409, and trashed/purged captures return 410. The library requests these small images only near the viewport.
+
 Exit code 0 means success, 1 means service or operation failure, and 2 means invalid command arguments. Validation and ownership errors include a machine-readable error code and message. Unknown/ambiguous device selectors fail explicitly.
 
 ## Tailscale access
@@ -181,8 +183,9 @@ Read routes:
 - `GET /v1/artifacts/ID/file`: original capture or annotated export, with byte-range support for video.
 - `GET /v1/artifacts/ID/clean`: clean original when an annotated export exists.
 - `GET /v1/artifacts/ID/log`: JSON manifest with identity, outcome and recording-relative input timestamps.
+- `GET /v1/artifacts/ID/thumbnail`: JPEG preview of a screenshot or the first decoded recording frame, bounded to 480×270 while preserving aspect ratio. Uses an in-memory cache and returns `409` while a capture is recording/finalizing, or `410` after Trash/Purge. Requires the same authentication as other artifact routes; clients do not need to download the recording to show a thumbnail.
 
-Artifact routes display inline by default. Append `?download=1` to request an attachment. `Content-Disposition` uses the edited capture name, the file's extension, and `-clean` for clean originals or `-metadata` for logs; Unicode names use `filename*`. Local and portal downloads use the same filename. Downloading does not rename the file on the host. Downloads require the same authentication as previews, retain byte-range support, and reject captures in Trash until restored.
+File, clean-original and log routes display inline by default. Append `?download=1` to request an attachment. `Content-Disposition` uses the edited capture name, the file's extension, and `-clean` for clean originals or `-metadata` for logs; Unicode names use `filename*`. Local and portal downloads use the same filename. Downloading does not rename the file on the host. Downloads require the same authentication as previews, retain byte-range support, and reject captures in Trash until restored.
 
 Machine routes require authentication except static UI files, public `/v1/machine` identity, the one-use ticket exchange and the code-plus-signed-token pairing exchange. Portal grants authenticate machine API requests; `/v1/hub/pairing-code`, `/v1/hub/unpair` and browser-ticket creation require a native token over loopback. Every route accessed through the Tailscale origin requires an allowed user identity from Serve. Browser mutation requests also require `X-Device-Deck: local`. Unexpected hosts and origins outside the exact configured allow lists are rejected. Allowed portal origins receive CORS responses for scoped bearer requests. No API token is embedded in the public website or local JS bundle.
 

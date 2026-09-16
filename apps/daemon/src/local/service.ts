@@ -34,6 +34,7 @@ import {
 } from "../../../../packages/core/src/local/types";
 import { Store } from "./store";
 import { captureStorage, openCaptureFolder } from "./capture-library";
+import { CaptureThumbnails } from "./thumbnails";
 import { LiveStreams, type LiveTarget } from "../live";
 import type { StreamOpen } from "../../../../packages/core/src/live";
 import {
@@ -53,6 +54,7 @@ export class DeckService {
   readonly capture: CaptureEngine;
   readonly licensing: EntitlementService;
   readonly streams: LiveStreams;
+  readonly thumbnails: CaptureThumbnails;
   store!: Store;
   private control = new Map<string, SerialQueue>();
   private global = new SerialQueue();
@@ -81,6 +83,7 @@ export class DeckService {
     this.config = new ConfigStore(configFile);
     this.adapters = adapters || new Adapters(() => this.config.config);
     this.capture = capture || new CaptureEngine(this.adapters);
+    this.thumbnails = new CaptureThumbnails((id) => this.store.artifact(id), () => this.adapters.tool("ffmpeg"));
     this.licensing = licensing || new LicenseManager(directory);
     this.streams = new LiveStreams({
       resolve: (args) => this.liveTarget(args),
@@ -1572,6 +1575,7 @@ export class DeckService {
     );
     await this.streams.close();
     await this.capture.close();
+    await this.thumbnails.close();
     this.store.close();
   }
 }

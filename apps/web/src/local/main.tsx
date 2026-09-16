@@ -87,6 +87,7 @@ const getCaptureBlob = async (a: Artifact, kind: "file" | "clean" | "log", signa
   if (!response.ok) throw new Error("Could not load the capture file.");
   return response.blob();
 };
+const captureThumbnailUrl = (a: Artifact) => `/v1/artifacts/${encodeURIComponent(a.id)}/thumbnail`;
 function Modal({
   title,
   children,
@@ -1169,10 +1170,12 @@ function App() {
           <CaptureLibrary
             artifacts={data.artifacts}
             devices={data.devices}
+            sessions={data.sessions}
             folder={data.config.settings.folder}
             operation={api}
             getBlob={getCaptureBlob}
             fileUrl={fileUrl}
+            thumbnailUrl={captureThumbnailUrl}
             openArtifactId={openArtifactId}
             onOpenArtifact={setOpenArtifactId}
             onChange={refresh}

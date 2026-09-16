@@ -59,6 +59,8 @@ export function MachineWorkspace({ machine, cloud, owner, leases, onBack }: {
   const captureFeedback = useCaptureFeedback(snapshot?.artifacts);
   const getCaptureBlob = useCallback((item: Artifact, variant: "file" | "clean" | "log" = "file", signal?: AbortSignal) =>
     transport.getBlob(`/v1/artifacts/${encodeURIComponent(item.id)}/${variant}`, signal), [transport]);
+  const getCaptureThumbnail = useCallback((item: Artifact, signal?: AbortSignal) =>
+    transport.getBlob(`/v1/artifacts/${encodeURIComponent(item.id)}/thumbnail`, signal), [transport]);
   useEffect(() => {
     const query = matchMedia("(max-width: 640px)");
     const changed = () => setMobile(query.matches);
@@ -319,9 +321,11 @@ export function MachineWorkspace({ machine, cloud, owner, leases, onBack }: {
       {tab === "captures" && snapshot && <CaptureLibrary
         artifacts={snapshot.artifacts}
         devices={snapshot.devices}
+        sessions={snapshot.sessions}
         folder={snapshot.config.settings.folder}
         operation={transport.operation}
         getBlob={getCaptureBlob}
+        getThumbnail={getCaptureThumbnail}
         openArtifactId={capturePreviewId}
         onOpenArtifact={setCapturePreviewId}
         onChange={refresh}

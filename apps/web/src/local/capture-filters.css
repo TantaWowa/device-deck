@@ -1,0 +1,27 @@
+.capture-filter-bar { display: grid; gap: 12px; min-width: 0; padding: 14px 16px; margin-bottom: 16px; border: 1px solid #dce3ed; border-radius: 8px; background: #fff; }
+.capture-filter-primary, .capture-filter-secondary, .capture-filter-specific { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px 20px; min-width: 0; }
+.capture-filter-secondary, .capture-filter-specific { padding-top: 11px; border-top: 1px solid #edf1f6; }
+.capture-filter-group { display: grid; gap: 6px; min-width: 0; }
+.capture-filter-label { color: #61728a; font-size: 10px; font-weight: 700; letter-spacing: .35px; }
+.capture-filter-buttons { display: flex; flex-wrap: wrap; gap: 6px; --capture-filter-color: #315680; --capture-filter-pale: #eaf1fa; }
+.capture-filter-bar .capture-filter-group .capture-filter-buttons button { display: flex; align-items: center; gap: 7px; min-height: 32px; padding: 5px 8px; border: 2px solid transparent; border-radius: 7px; font-size: 11px; font-weight: 700; line-height: 1.4; color: var(--capture-filter-color); background: var(--capture-filter-pale); cursor: pointer; }
+.capture-filter-buttons button > span { font-size: 10px; opacity: .8; }
+.capture-filter-buttons .capture-filter-apple { --capture-filter-color: #235eca; --capture-filter-pale: #e7efff; }
+.capture-filter-buttons .capture-filter-roku { --capture-filter-color: #7834be; --capture-filter-pale: #f0e5ff; }
+.capture-filter-buttons .capture-filter-android, .capture-filter-buttons .capture-filter-online, .capture-filter-buttons .capture-filter-free { --capture-filter-color: #187641; --capture-filter-pale: #dff7e8; }
+.capture-filter-buttons .capture-filter-other, .capture-filter-buttons .capture-filter-reserved, .capture-filter-buttons .capture-filter-locked { --capture-filter-color: #9f5c13; --capture-filter-pale: #fff0d8; }
+.capture-filter-buttons .capture-filter-virtual { --capture-filter-color: #ab4d13; --capture-filter-pale: #ffeadb; }
+.capture-filter-buttons .capture-filter-physical { --capture-filter-color: #137e91; --capture-filter-pale: #dbf6fa; }
+.capture-filter-bar .capture-filter-group .capture-filter-buttons button[aria-pressed="true"] { color: white; background: var(--capture-filter-color); border-color: var(--capture-filter-color); box-shadow: 0 2px 5px #22334c20; }
+.capture-filter-bar .capture-filter-group .capture-filter-buttons button:hover { border-color: var(--capture-filter-color); }
+.capture-filter-bar .capture-filter-group .capture-filter-buttons button:focus-visible { outline: 2px solid var(--capture-filter-color); outline-offset: 2px; }
+.capture-filter-search { display: flex; align-items: center; gap: 8px; flex: 1 1 210px; max-width: 330px; min-width: 190px; margin-left: auto; padding: 7px 9px; border: 1px solid #d3ddea; border-radius: 6px; color: #6b7d93; background: #fff; box-sizing: border-box; }
+.capture-filter-search input { min-width: 0; width: 100%; flex: 1; border: 0; outline: 0; padding: 0; font: inherit; font-size: 11px; line-height: 1.45; color: #344a64; background: transparent; }
+.capture-filter-search input::-webkit-search-cancel-button { display: none; }
+.capture-filter-search:focus-within { outline: 2px solid #477ee4; outline-offset: 2px; }
+.capture-filter-bar .capture-filter-search > button { display: grid; padding: 0; background: transparent; border: 0; color: #7a8ca4; }
+.capture-filter-device { display: grid; gap: 6px; min-width: 0; flex: 0 1 250px; }
+.capture-filter-device select { min-width: 0; width: 100%; min-height: 32px; padding: 5px 26px 5px 8px; border: 1px solid #d3ddea; border-radius: 6px; font-size: 11px; color: #405572; background: #fff; }
+.capture-filter-bar .capture-filter-reset { margin-left: auto; min-height: 32px; padding: 5px 8px; border: 1px solid #d3ddea; border-radius: 6px; color: #5373a0; background: #fff; font-size: 11px; cursor: pointer; }
+.capture-filter-bar .capture-filter-reset:disabled { opacity: .45; cursor: default; }
+@media (max-width: 640px) { .capture-filter-bar { padding: 12px; gap: 10px; } .capture-filter-primary, .capture-filter-secondary, .capture-filter-specific { gap: 10px 14px; } .capture-filter-search { flex-basis: 100%; max-width: none; min-width: 0; margin-left: 0; order: -1; } .capture-filter-device { flex-basis: 100%; } .capture-filter-bar .capture-filter-reset { margin-left: 0; } }

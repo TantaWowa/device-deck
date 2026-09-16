@@ -1235,6 +1235,48 @@ test("capture files support authenticated inline previews and named downloads; f
   }
 });
 
+test("thumbnail HTTP routes require authentication and reject trashed, purged and active captures", async () => {
+  const { deck, cleanup } = await setup();
+  const token = "d".repeat(64), server = createService(deck, token, "/tmp/no-web");
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+  const headers = { Authorization: `Bearer ${token}` };
+  const artifact = { id: "thumb", deviceId: "one", sessionId: "history", owner: "test", sourceId: "screen-one", name: "Thumbnail", path: path.join(deck.directory, "thumbnail-source.png"), logPath: path.join(deck.directory, "thumbnail-source.json"), kind: "screenshot" as const, mode: "clean" as const, tags: [], createdAt: Date.now(), duration: 0, bytes: 0, status: "recording" as const, origin: "API" as const };
+  try {
+    deck.store.putArtifact(artifact);
+    const url = `${base}/v1/artifacts/thumb/thumbnail`;
+    assert.equal((await fetch(url)).status, 401);
+    assert.equal((await fetch(url, { headers: { ...headers, Origin: "https://untrusted.test" } })).status, 403);
+    assert.equal((await fetch(url, { headers })).status, 409);
+    deck.store.putArtifact({ ...artifact, status: "finalizing" });
+    assert.equal((await fetch(url, { headers })).status, 409);
+    deck.store.putArtifact({ ...artifact, status: "completed", deletedAt: Date.now() });
+    assert.equal((await fetch(url, { headers })).status, 410);
+    deck.store.putArtifact({ ...artifact, status: "completed", purgedAt: Date.now() });
+    assert.equal((await fetch(url, { headers })).status, 410);
+    deck.store.putArtifact({ ...artifact, status: "completed" });
+    assert.equal((await fetch(url, { headers })).status, 404, "Missing source files are not passed to ffmpeg");
+    const { available, run } = await import("../../../packages/adapters/src/process");
+    if (await available("ffmpeg")) {
+      await run("ffmpeg", ["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=1", "-frames:v", "1", artifact.path]);
+      const response = await fetch(url, { headers });
+      assert.equal(response.status, 200);
+      assert.equal(response.headers.get("content-type"), "image/jpeg");
+      assert.equal(response.headers.get("cache-control"), "no-store");
+      const data = Buffer.from(await response.arrayBuffer());
+      assert.equal(Number(response.headers.get("content-length")), data.length);
+      assert.equal(data.readUInt16BE(0), 0xffd8);
+      assert(data.length < 100_000);
+      deck.store.putArtifact({ ...artifact, status: "completed", deletedAt: Date.now() });
+      assert.equal((await fetch(url, { headers })).status, 410, "Cached thumbnails retain deletion checks");
+    }
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await cleanup();
+  }
+});
+
 test("renewal, expiry and takeover invalidate credentials while preserving ownership history", async () => {
   const { deck, capture, cleanup } = await setup();
   capture.resolveStop = () => {};

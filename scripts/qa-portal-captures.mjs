@@ -5,6 +5,7 @@ import { readFile, writeFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 import { build } from "esbuild";
 import { chromium, expect } from "@playwright/test";
+import { captureViewCase } from "./capture-view-qa.mjs";
 
 const output = path.resolve("outputs/capture-qa");
 const focusedPreview = process.env.QA_PORTAL_CAPTURE_FOCUS === "stale-preview";
@@ -94,6 +95,7 @@ async function stalePreviewFeedbackCase() {
     .sort((left, right) => right.createdAt - left.createdAt)[0];
   assert.ok(artifact, "The isolated fixture needs a completed screenshot.");
   await page.getByRole("button", { name: /^Captures/ }).click();
+  await page.getByRole("region", { name: "Capture library", exact: true }).getByRole("button", { name: "List view", exact: true }).click();
   await page.locator(`[data-capture-id="${artifact.id}"]`).getByRole("button", { name: artifact.name, exact: true }).click();
   const preview = page.getByRole("dialog", { name: "Capture preview", exact: true });
   await expect(preview.locator("img")).toBeVisible();
@@ -142,6 +144,7 @@ try {
   if (focusedPreview) await stalePreviewFeedbackCase();
   else {
   assert.equal(await page.locator(".capture-toast").count(), 0, "Existing capture history is not announced on first load.");
+  result.cases.push(await captureViewCase({ page, output, label: "portal", openLibrary: () => page.getByRole("button", { name: /^Captures/ }).click() }));
   let remote = await openRemote();
   assert.equal(await remote.locator("img,video").count(), 0);
   const saved = await screenshot(remote);
@@ -186,16 +189,14 @@ try {
   await page.screenshot({ path: path.join(output, "portal-capture-preview.png") });
   await preview.getByRole("button", { name: "Close capture preview", exact: true }).click();
   const library = page.getByRole("region", { name: "Capture library", exact: true });
+  await library.getByRole("button", { name: "List view", exact: true }).click();
   await library.getByRole("searchbox", { name: "Search captures", exact: true }).fill(renamedName);
   await expect(library.locator("tbody tr")).toHaveCount(1);
   await library.getByRole("button", { name: "Name", exact: true }).click();
   await expect(library.getByRole("columnheader", { name: "Name", exact: true })).toHaveAttribute("aria-sort", "ascending");
-  await library.getByRole("button", { name: "Filters", exact: true }).click();
-  const filters = page.getByRole("dialog", { name: "Filter captures", exact: true });
-  await filters.getByRole("combobox", { name: "Capture type", exact: true }).selectOption("recording");
-  await filters.getByRole("button", { name: "Done", exact: true }).click();
+  await library.getByRole("group", { name: "Filter capture type", exact: true }).getByRole("button", { name: "Recordings", exact: true }).click();
   await expect(library.locator("tbody tr")).toHaveCount(0);
-  await library.getByRole("button", { name: "Clear filters", exact: true }).click();
+  await library.getByRole("button", { name: "Reset filters", exact: true }).click();
   await page.route("**/v1/operations/captures.openFolder", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ opened: true, folder: "Synthetic capture folder" }) }));
   const opened = page.waitForResponse((response) => response.url().endsWith("/operations/captures.openFolder"));
   await library.getByRole("button", { name: /^Open folder/ }).click();

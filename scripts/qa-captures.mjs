@@ -6,6 +6,7 @@ import { spawn } from "node:child_process";
 import { mkdir, readFile, writeFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { chromium, expect } from "@playwright/test";
+import { captureViewCase } from "./capture-view-qa.mjs";
 
 const output = path.resolve("outputs/capture-qa");
 await mkdir(output, { recursive: true });
@@ -140,7 +141,7 @@ try {
 }
 
 async function libraryCase() {
-  await page.getByRole("button", { name: "Captures", exact: true }).click();
+  results.cases.push(await captureViewCase({ page, output, label: "local", openLibrary: () => page.getByRole("button", { name: "Captures", exact: true }).click() }));
   const library = page.getByRole("region", { name: "Capture library", exact: true });
   await expect(library.getByRole("heading", { name: "Captures", exact: true })).toBeVisible();
   const rows = library.locator("tbody tr[data-capture-id]");
@@ -148,15 +149,12 @@ async function libraryCase() {
   await library.getByRole("searchbox", { name: "Search captures" }).fill("payments");
   await expect.poll(ids).toEqual(["seed-0", "seed-2"]);
   await library.getByRole("button", { name: "Clear capture search" }).click();
-  await library.getByRole("button", { name: "Filters", exact: true }).click();
-  const filters = page.getByRole("dialog", { name: "Filter captures", exact: true });
-  await filters.getByRole("combobox", { name: "Capture platform" }).selectOption("Android");
-  await filters.getByRole("combobox", { name: "Capture device" }).selectOption("android");
-  await filters.getByRole("combobox", { name: "Capture type" }).selectOption("recording");
-  await filters.getByRole("button", { name: "Done", exact: true }).click();
+  await library.getByRole("group", { name: "Filter capture platform", exact: true }).getByRole("button", { name: "Android", exact: true }).click();
+  await library.getByRole("combobox", { name: "Capture device" }).selectOption("android");
+  await library.getByRole("group", { name: "Filter capture type", exact: true }).getByRole("button", { name: "Recordings", exact: true }).click();
   await expect.poll(ids).toEqual(["seed-1"]);
   await picture("library-filtered.png");
-  await library.getByRole("button", { name: "Clear filters", exact: true }).click();
+  await library.getByRole("button", { name: "Reset filters", exact: true }).click();
   await library.getByRole("columnheader").getByRole("button", { name: "Name", exact: true }).click();
   await expect(library.getByRole("columnheader").filter({ has: page.getByRole("button", { name: "Name", exact: true }) })).toHaveAttribute("aria-sort", "ascending");
   const ascending = await ids();

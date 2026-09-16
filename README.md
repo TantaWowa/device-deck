@@ -99,9 +99,9 @@ The feed viewer receives silent H.264 video over WebRTC, up to the USB capture l
 
 **Screenshot to clipboard** saves the screenshot and copies its image to the computer running your browser, including when connected over Tailscale. Use the Tailscale HTTPS address or localhost and allow browser clipboard access. **Copy image** in a screenshot preview copies an existing capture. The separate Settings option still controls automatic copying to the host Mac clipboard.
 
-Finished screenshots and recordings show a toast with a link to their preview. This includes recordings stopped by session expiry or other automatic finalization. **Captures** provides a searchable table with device, platform and type filters; click a column heading to sort. Select rows to move them to trash, then restore or permanently delete them from Trash. Active recordings cannot be deleted. Storage totals include managed media, clean originals and metadata; moving to trash does not free disk space.
+Finished screenshots and recordings show a toast with a link to their preview. This includes recordings stopped by session expiry or other automatic finalization. **Captures** opens in **Tiled view**; switch to **List view** for sortable columns. Both views show screenshot and video thumbnails, and your view choice is remembered in that browser. Filters include platform, Sim/Real, connection, availability and visibility, plus device, capture type and text search. Connection and availability refer to the device's current state. Select captures to move them to trash, then restore or permanently delete them from Trash. Active recordings cannot be deleted. Storage totals include managed media, clean originals and metadata; moving to trash does not free disk space.
 
-Use the download button on a row or in its preview. **Open folder on Mac** opens Finder on the machine hosting Device Deck. In the preview, use **← / →** or the previous/next buttons to browse the current filtered, sorted list. Name and tag fields retain normal text-editing arrow keys.
+Use the download button on a tile, row or in its preview. **Open folder on Mac** opens Finder on the machine hosting Device Deck. In the preview, use **← / →** or the previous/next buttons to browse the current filtered, sorted list. Name and tag fields retain normal text-editing arrow keys.
 
 ### Control a device
 
