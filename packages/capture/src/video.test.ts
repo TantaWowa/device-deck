@@ -12,28 +12,29 @@ import type { H264Frame, LiveVideoSource } from "../../core/src/live";
 import { h264Nals } from "./h264";
 import { encodeLiveImages } from "./video";
 
-function keyframe(source: LiveVideoSource) {
-  return new Promise<H264Frame>((resolve, reject) => {
-    const timer = setTimeout(() => { off(); closed(); reject(new Error("No live keyframe received")); }, 8000);
-    const off = source.onFrame((frame) => {
-      if (!frame.keyframe) return;
-      clearTimeout(timer); off(); closed(); resolve(frame);
-    });
-    const closed = source.onClose((reason) => { clearTimeout(timer); off(); closed(); reject(new Error(reason)); });
-  });
+function keyframe(source: LiveVideoSource, afterTimestamp = -1n) {
+  return videoFrames(source, 1, afterTimestamp).then(([frame]) => frame);
 }
 
-function videoFrames(source: LiveVideoSource, count: number) {
+function videoFrames(source: LiveVideoSource, count: number, afterTimestamp = -1n) {
   return new Promise<H264Frame[]>((resolve, reject) => {
     const frames: H264Frame[] = [];
-    const timer = setTimeout(() => { off(); closed(); reject(new Error("Not enough live frames received")); }, 8000);
-    const off = source.onFrame((frame) => {
-      if (!frames.length && !frame.keyframe) return;
+    let off = () => {}, closed = () => {}, settled = false;
+    const finish = (error?: Error) => {
+      if (settled) return;
+      settled = true; clearTimeout(timer); off(); closed();
+      if (error) reject(error); else resolve(frames);
+    };
+    const timer = setTimeout(() => finish(new Error("Not enough live frames received")), 8000);
+    off = source.onFrame((frame) => {
+      if (settled || frame.timestampUs <= afterTimestamp || !frames.length && !frame.keyframe) return;
       frames.push(frame);
       if (frames.length < count) return;
-      clearTimeout(timer); off(); closed(); resolve(frames);
+      finish();
     });
-    const closed = source.onClose((reason) => { clearTimeout(timer); off(); closed(); reject(new Error(reason)); });
+    if (settled) { off(); return; }
+    closed = source.onClose((reason) => finish(new Error(reason)));
+    if (settled) closed();
   });
 }
 
@@ -114,7 +115,7 @@ test("shared USB live encoders provide a decodable first IDR, preserve snapshots
     let recordingEnded = false;
     void recording.ended.then(() => { recordingEnded = true; });
     await one.close();
-    const stillLive = await keyframe(two);
+    const stillLive = await keyframe(two, b.timestampUs);
     assert.ok(stillLive.timestampUs > b.timestampUs);
     await two.close();
     assert.equal(recordingEnded, false, "closing the last live viewer must preserve an active recording");
@@ -159,4 +160,71 @@ test("native PNG screenshot fallback encodes promptly with its actual sampling l
     assert.equal(released, 1);
     assert.equal(events.listenerCount("frame"), 0);
   } finally { clearInterval(timer); await live?.close(); }
+});
+
+test("PNG startup needs only its first screenshot and stops repeating once ready", { timeout: 20000 }, async (t) => {
+  if (!(await available("ffmpeg"))) return t.skip("ffmpeg required for the real encoder fixture");
+  const dir = await mkdtemp(path.join(os.tmpdir(), "deck-live-cold-"));
+  const png = async (colour: string) => (await run("ffmpeg", ["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", `color=c=${colour}:s=64x128`, "-frames:v", "1", "-f", "image2pipe", "-c:v", "png", "pipe:1"])).stdout;
+  const first = await png("red"), next = await png("blue"), events = new EventEmitter();
+  let live: LiveVideoSource | undefined, timer: ReturnType<typeof setInterval> | undefined, released = 0;
+  try {
+    // No subsequent capture is available until startup completes. A slow native
+    // screenshot must not be mistaken for a stalled encoder after five seconds.
+    live = await encodeLiveImages("ffmpeg", {
+      first, fps: 2,
+      onFrame: (listener) => { events.on("frame", listener); return () => { events.off("frame", listener); }; },
+      onClose: (listener) => { events.on("closed", listener); return () => { events.off("closed", listener); }; },
+      close: async () => { released++; clearInterval(timer); },
+    }, "balanced");
+    assert.equal(live.fps, 2);
+    const bootstrap: H264Frame[] = [];
+    live.onFrame((frame) => bootstrap.push(frame))();
+    assert.ok(bootstrap.some((frame) => frame.keyframe), "late viewers receive the initial IDR without another capture");
+    const initial = path.join(dir, "initial.h264");
+    await writeFile(initial, Buffer.concat(bootstrap.map((frame) => frame.data)));
+    const initialPixels = (await run("ffmpeg", ["-hide_banner", "-loglevel", "error", "-i", initial, "-frames:v", "1", "-pix_fmt", "rgb24", "-f", "rawvideo", "pipe:1"])).stdout;
+    const initialColour = [...initialPixels.subarray(0, 3)];
+    assert.ok(initialColour[0] > 240 && initialColour[1] < 12 && initialColour[2] < 12, `initial screenshot should decode red, got ${initialColour}`);
+    let frames = 0;
+    const detach = live.onFrame(() => { frames++; });
+    // Let already buffered output settle, then ensure priming is not an ongoing
+    // synthetic video source while fresh screenshots remain unavailable.
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    const settledFrames = frames;
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+    assert.equal(frames, settledFrames, "startup repetition must stop when the encoder is ready");
+    detach();
+    const received = videoFrames(live, 6);
+    timer = setInterval(() => events.emit("frame", next), 500);
+    const encoded = path.join(dir, "continued.h264");
+    await writeFile(encoded, Buffer.concat((await received).map((frame) => frame.data)));
+    const decoded = (await run("ffmpeg", ["-hide_banner", "-loglevel", "error", "-i", encoded, "-pix_fmt", "rgb24", "-f", "rawvideo", "pipe:1"])).stdout;
+    const colour = [...decoded.subarray(decoded.length - 3)];
+    assert.ok(colour[0] < 12 && colour[1] < 12 && colour[2] > 240, `fresh screenshot should replace initial red frame, got ${colour}`);
+    await live.close();
+    assert.equal(released, 1);
+    assert.equal(events.listenerCount("frame"), 0);
+  } finally { clearInterval(timer); await live?.close(); await rm(dir, { recursive: true, force: true }); }
+});
+
+test("a PNG source closing during startup cannot be revived by cached frames", { timeout: 10000 }, async (t) => {
+  if (!(await available("ffmpeg"))) return t.skip("ffmpeg required for the real encoder fixture");
+  const first = (await run("ffmpeg", ["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "color=c=red:s=64x128", "-frames:v", "1", "-f", "image2pipe", "-c:v", "png", "pipe:1"])).stdout;
+  const events = new EventEmitter();
+  let released = 0, live: LiveVideoSource | undefined;
+  const timer = setTimeout(() => events.emit("closed", "Native capture disconnected"), 100);
+  try {
+    await assert.rejects(async () => {
+      live = await encodeLiveImages("ffmpeg", {
+        first, fps: 2,
+        onFrame: (listener) => { events.on("frame", listener); return () => { events.off("frame", listener); }; },
+        onClose: (listener) => { events.on("closed", listener); return () => { events.off("closed", listener); }; },
+        close: async () => { released++; },
+      }, "balanced");
+    }, /Native capture disconnected/);
+    assert.equal(released, 1);
+    assert.equal(events.listenerCount("frame"), 0);
+    assert.equal(events.listenerCount("closed"), 0);
+  } finally { clearTimeout(timer); await live?.close(); }
 });
