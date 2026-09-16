@@ -1,5 +1,5 @@
 // Isolated synthetic video + touch fixture. Never discovers or contacts real devices.
-import { mkdtemp, mkdir, writeFile, rename, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, rename, rm, copyFile, stat } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import { build } from "vite";
@@ -7,11 +7,13 @@ import { DeckService } from "../apps/daemon/src/local/service";
 import { createService } from "../apps/daemon/src/server";
 import { Adapters } from "../packages/adapters/src";
 import { CaptureEngine } from "../packages/capture/src";
+import { run } from "../packages/adapters/src/process";
 import type { Config, Device, DeviceConfig, SourceConfig } from "../packages/core/src/local/types";
 import type { InteractiveSource, VideoProfile } from "../packages/core/src/live";
 import { LocalDevelopmentLicense } from "./local-license";
 
 const directory = await mkdtemp(path.join(os.tmpdir(), "deck-live-qa-"));
+const capturesMode = process.env.QA_CAPTURES === "1";
 let config: Config;
 const events: unknown[] = [];
 const running = new Set(["usb", "android"]);
@@ -21,7 +23,7 @@ await writeFile(helper, '#!/bin/sh\nexec ffmpeg -hide_banner -loglevel error -re
 class FixtureAdapters extends Adapters {
   override async diagnostics() { return []; }
   override async inspect(d: DeviceConfig): Promise<Device> {
-    return { ...d, online: running.has(d.id), locked: false, healthDetail: "Synthetic fixture", ...(d.kind === "virtual" ? { simulatorState: running.has(d.id) ? "booted" as const : "shutdown" as const } : {}), capabilities: ["preview", "touch", "key", "text", "screenshot"], gestureCapabilities: d.platform === "Apple" ? ["tap", "swipe", "longPress"] : ["tap", "swipe", "longPress", "drag", "multitouch"] };
+    return { ...d, online: running.has(d.id), locked: false, healthDetail: "Synthetic fixture", ...(d.kind === "virtual" ? { simulatorState: running.has(d.id) ? "booted" as const : "shutdown" as const } : {}), capabilities: ["preview", "touch", "key", "text", "screenshot", ...(capturesMode && d.id === "usb" ? ["record" as const] : [])], gestureCapabilities: d.platform === "Apple" ? ["tap", "swipe", "longPress"] : ["tap", "swipe", "longPress", "drag", "multitouch"] };
   }
   override async inspectSources(sources: SourceConfig[]) { return sources.map((s) => ({ ...s, status: s.kind === "usb" || running.has(s.deviceId || "") ? "connected" as const : "missing" as const })); }
   override async verifyIdentity(d: DeviceConfig) { return d; }
@@ -56,6 +58,9 @@ const deck = new DeckService(directory, undefined, adapters, capture, new LocalD
 await deck.init();
 config = structuredClone(deck.config.config);
 config.port = 0;
+config.settings.folder = path.join(directory, "captures");
+config.settings.captureMode = "clean";
+config.settings.clipboard = false;
 config.devices = [
   { id: "usb", name: "Synthetic USB", platform: "Other", kind: "physical", model: "QA", visibility: "local", connection: { type: "capture" }, captureSourceId: source.id },
   { id: "android", name: "Synthetic Android", platform: "Android", kind: "physical", model: "QA", visibility: "local", connection: { type: "adb", serial: "qa-only-not-real", hardwareId: "qa-only", port: 5037 }, captureSourceId: "qa-native" },
@@ -64,6 +69,20 @@ config.devices = [
 ];
 config.sources = [source, { id: "qa-native", kind: "native", name: "Synthetic Android screen", deviceId: "android" }];
 await deck.config.save(config, deck.config.revision);
+if (capturesMode) {
+  await mkdir(config.settings.folder, { recursive: true });
+  const image = path.join(directory, "fixture.png"), video = path.join(directory, "fixture.mp4");
+  await run("ffmpeg", ["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=1", "-frames:v", "1", image]);
+  await run("ffmpeg", ["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=15", "-t", "1", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-movflags", "+faststart", video]);
+  const seedNames = ["Alpha screenshot", "Bravo recording", "Charlie screenshot", "Delta screenshot", "Trashed screenshot"];
+  for (let index = 0; index < seedNames.length; index++) {
+    const recording = index === 1, id = `seed-${index}`, file = path.join(config.settings.folder, `${id}.${recording ? "mp4" : "png"}`);
+    await copyFile(recording ? video : image, file);
+    const artifact = { id, deviceId: index % 2 ? "android" : "usb", sessionId: "synthetic-history", owner: "Capture QA", sourceId: index % 2 ? "qa-native" : source.id, name: seedNames[index], path: file, logPath: `${file}.json`, kind: recording ? "recording" as const : "screenshot" as const, mode: "clean" as const, tags: [index % 2 ? "regression" : "payments"], createdAt: Date.now() - (index + 1) * 60_000, duration: recording ? 1 : 0, bytes: (await stat(file)).size, status: "completed" as const, origin: "API" as const, ...(index === 4 ? { deletedAt: Date.now() } : {}) };
+    deck.store.putArtifact(artifact);
+    await writeFile(artifact.logPath, JSON.stringify({ schemaVersion: 1, artifact, inputs: [] }));
+  }
+}
 const webRoot = path.join(directory, "web");
 await build({ root: "apps/web", build: { outDir: webRoot, emptyOutDir: true, rollupOptions: { input: "apps/web/local.html" } } });
 await rename(path.join(webRoot, "local.html"), path.join(webRoot, "index.html"));
@@ -73,9 +92,9 @@ await new Promise<void>((resolve) => server.listen(Number(process.env.QA_LIVE_PO
 const port = (server.address() as { port: number }).port;
 const base = `http://127.0.0.1:${port}`;
 const ticket = await fetch(`${base}/v1/browser-ticket`, { method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: "{}" }).then((r) => r.json());
-const evidence = path.resolve("outputs/live-video-qa");
+const evidence = path.resolve(capturesMode ? "outputs/capture-qa" : "outputs/live-video-qa");
 await mkdir(evidence, { recursive: true });
-const info = { base, url: `${base}/#ticket=${ticket.ticket}`, directory, token };
+const info = { base, url: `${base}/#ticket=${ticket.ticket}`, directory, token, capturesMode, pid: process.pid };
 await writeFile(path.join(evidence, "fixture.json"), JSON.stringify(info));
 const timer = setInterval(() => void writeFile(path.join(evidence, "inputs.json"), JSON.stringify(events, null, 2)), 250);
 console.log(`LIVE_QA_READY ${JSON.stringify(info)}`);

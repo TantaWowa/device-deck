@@ -95,6 +95,14 @@ Open **Feeds** to watch connected inputs without reserving a device. **Choose fe
 
 The feed viewer receives silent H.264 video over WebRTC, up to the USB capture limit of 15 fps. It shares each card's native capture with previews and recordings. Select **Low bandwidth** for a slower remote connection. Actual frame rate depends on the Mac, USB bandwidth, HDMI signal and network. A connected card can still output a black picture or a “No Signal” slate when its HDMI source is sleeping or disconnected. Bound cards retain device maintenance and session-release checks. See [live video and touch](docs/live-video-and-touch.md) for quality profiles, touch support and the additional UDP connectivity needed over Tailscale.
 
+### Screenshots and recordings
+
+**Screenshot to clipboard** saves the screenshot and copies its image to the computer running your browser, including when connected over Tailscale. Use the Tailscale HTTPS address or localhost and allow browser clipboard access. **Copy image** in a screenshot preview copies an existing capture. The separate Settings option still controls automatic copying to the host Mac clipboard.
+
+Finished screenshots and recordings show a toast with a link to their preview. This includes recordings stopped by session expiry or other automatic finalization. **Captures** provides a searchable table with device, platform and type filters; click a column heading to sort. Select rows to move them to trash, then restore or permanently delete them from Trash. Active recordings cannot be deleted. Storage totals include managed media, clean originals and metadata; moving to trash does not free disk space.
+
+Use the download button on a row or in its preview. **Open folder on Mac** opens Finder on the machine hosting Device Deck. In the preview, use **← / →** or the previous/next buttons to browse the current filtered, sorted list. Name and tag fields retain normal text-editing arrow keys.
+
 ### Control a device
 
 1. Open Devices and select **Discover / add devices**. Select several devices and choose **Add selected**, or use **Add all** to register every new device that is ready. Already configured devices are skipped.

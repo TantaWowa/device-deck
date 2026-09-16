@@ -45,6 +45,9 @@ const descriptions: Partial<Record<Operation, string>> = {
     "Explicitly send one key, text string or x/y tap to an already reserved device without taking its reservation. Requires deviceId, the expected active sessionId, the overriding user's display owner and confirmed=true. Preserves the current reservation and recording; changed or ended sessions reject the override. Capture still requires the owner's lease credential.",
   "captures.screenshot":
     "Save a real screenshot in the shared local capture folder. Optionally copy it to the Mac clipboard or make an annotated copy. Return file metadata and image content.",
+  "captures.openFolder":
+    "Open the configured capture folder in Finder on the Mac running Device Deck. Accepts no path. For remote clients, this opens Finder on the host Mac, not on the viewing computer.",
+  "captures.storage": "Report space used by managed capture files, clean originals, metadata and trash.",
   "recordings.start":
     "Start a daemon-owned real recording. It survives client disconnection. Native Android recordings have a 175-second managed limit.",
   "recordings.stop":

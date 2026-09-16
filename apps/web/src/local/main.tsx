@@ -3,6 +3,8 @@ import { browserUUID } from "../../../../packages/ui/src/uuid";
 import { AnchoredPopover } from "./AnchoredPopover";
 import type { PopupAnchor } from "./anchored-popup";
 import { DeviceControls } from "./DeviceControls";
+import { CaptureLibrary } from "./CaptureLibrary";
+import { CaptureToasts, useCaptureFeedback } from "./capture-feedback";
 import { SimulatorControls } from "./SimulatorControls";
 import { FeedActions, type FeedAction } from "./FeedActions";
 import { DiscoveryDevices } from "./DiscoveryDevices";
@@ -44,10 +46,6 @@ import {
   Search,
   ArrowLeft,
   RefreshCw,
-  Play,
-  Download,
-  Copy,
-  Trash2,
   Terminal,
   Columns2,
   Lock,
@@ -83,7 +81,12 @@ type Tab =
 const time = (value: number) => new Date(value).toLocaleString();
 const duration = (ms: number) =>
   `${Math.floor(ms / 60000)}m ${Math.floor(ms / 1000) % 60}s`;
-const fileUrl = (a: Artifact, kind = "file") => `/v1/artifacts/${a.id}/${kind}`;
+const fileUrl = (a: Artifact, kind = "file") => `/v1/artifacts/${encodeURIComponent(a.id)}/${kind}`;
+const getCaptureBlob = async (a: Artifact, kind: "file" | "clean" | "log", signal?: AbortSignal) => {
+  const response = await fetch(fileUrl(a, kind), { signal });
+  if (!response.ok) throw new Error("Could not load the capture file.");
+  return response.blob();
+};
 function Modal({
   title,
   children,
@@ -247,12 +250,9 @@ function App() {
     >(null),
     [reason, setReason] = useState(""),
     [owner, setOwner] = useState("You");
-  const [overlay, setOverlay] = useState(true),
-    [captureSearch, setCaptureSearch] = useState(""),
-    [trash, setTrash] = useState(false),
-    [artifact, setArtifact] = useState<Artifact | null>(null),
-    [captureSelection, setCaptureSelection] = useState<string[]>([]),
-    [purging, setPurging] = useState(false);
+  const [overlay, setOverlay] = useState(true);
+  const [openArtifactId, setOpenArtifactId] = useState<string | null>(null);
+  const captureFeedback = useCaptureFeedback(data?.artifacts);
   const polling = useRef(false);
   const refresh = useCallback(async () => {
     if (polling.current) return;
@@ -533,6 +533,7 @@ function App() {
     setOptionsOpen: (open: boolean) => void,
   ) => (
     <DeviceControls
+      onCapture={captureFeedback.completed}
       key={d.id}
       device={d}
       data={data}
@@ -1165,138 +1166,17 @@ function App() {
           </>
         )}
         {tab === "Captures" && (
-          <>
-            <div className="live-heading">
-              <div>
-                <h1>Captures</h1>
-                <p>
-                  Real files from every client. One configured folder on this
-                  Mac.
-                </p>
-              </div>
-              <button
-                onClick={() => {
-                  setTrash(!trash);
-                  setCaptureSelection([]);
-                }}
-              >
-                {trash ? "Back to library" : "Trash"}
-              </button>
-            </div>
-            <div className="live-panel">
-              <div className="live-filters">
-                <input
-                  aria-label="Search captures"
-                  placeholder="Filter names, devices or tags…"
-                  value={captureSearch}
-                  onChange={(e) => setCaptureSearch(e.target.value)}
-                />
-                <span>{data.config.settings.folder}</span>
-                {captureSelection.length > 0 && (
-                  <>
-                    <button
-                      onClick={() =>
-                        perform(() =>
-                          action(
-                            trash ? "captures.restore" : "captures.remove",
-                            {
-                              ids: captureSelection,
-                              ...(!trash ? { confirmed: true } : {}),
-                            },
-                            trash
-                              ? "Restored captures."
-                              : "Moved to Device Deck trash. Files remain until permanently deleted.",
-                          ),
-                        )
-                      }
-                    >
-                      {trash ? "Restore" : "Move to trash"}
-                    </button>
-                    {trash && (
-                      <button
-                        className="danger"
-                        onClick={() => setPurging(true)}
-                      >
-                        Delete files permanently…
-                      </button>
-                    )}
-                  </>
-                )}
-              </div>
-              <div className="live-captures">
-                {data.artifacts
-                  .filter(
-                    (a) =>
-                      !a.purgedAt &&
-                      !!a.deletedAt === trash &&
-                      `${a.name} ${a.tags.join(" ")} ${data.devices.find((d) => d.id === a.deviceId)?.name}`
-                        .toLowerCase()
-                        .includes(captureSearch.toLowerCase()),
-                  )
-                  .map((a) => (
-                    <article key={a.id}>
-                      <div className="live-capture-image">
-                        <input
-                          type="checkbox"
-                          aria-label={`Select ${a.name}`}
-                          checked={captureSelection.includes(a.id)}
-                          onChange={(e) =>
-                            setCaptureSelection(
-                              e.target.checked
-                                ? [...captureSelection, a.id]
-                                : captureSelection.filter((id) => id !== a.id),
-                            )
-                          }
-                        />
-                        <button onClick={() => setArtifact(a)}>
-                          {a.kind === "screenshot" &&
-                          !trash &&
-                          a.status === "completed" ? (
-                            <img src={fileUrl(a)} alt={a.name} />
-                          ) : a.kind === "recording" ? (
-                            <Play size={34} />
-                          ) : (
-                            <Camera size={34} />
-                          )}
-                        </button>
-                        <span>
-                          {a.kind} · {a.mode}
-                        </span>
-                      </div>
-                      <div className="live-capture-info">
-                        <button onClick={() => setArtifact(a)}>
-                          <strong>{a.name}</strong>
-                        </button>
-                        <small>
-                          {data.devices.find((d) => d.id === a.deviceId)
-                            ?.name || a.deviceId}{" "}
-                          · {time(a.createdAt)}
-                        </small>
-                        <span
-                          className={`live-status ${a.status === "completed" ? "green" : "amber"}`}
-                        >
-                          {a.status}{" "}
-                          {a.duration ? `· ${a.duration.toFixed(1)}s` : ""}
-                        </span>
-                        {a.error && <small>{a.error}</small>}
-                        <p>{a.tags.map((t) => `#${t}`).join(" ")}</p>
-                      </div>
-                    </article>
-                  ))}
-              </div>
-              {!data.artifacts.some(
-                (a) => !!a.deletedAt === trash && !a.purgedAt,
-              ) && (
-                <div className="live-empty">
-                  <Camera size={36} />
-                  <h2>{trash ? "Trash is empty" : "No captures yet"}</h2>
-                  <p>
-                    Reserve a device and take a screenshot or start a recording.
-                  </p>
-                </div>
-              )}
-            </div>
-          </>
+          <CaptureLibrary
+            artifacts={data.artifacts}
+            devices={data.devices}
+            folder={data.config.settings.folder}
+            operation={api}
+            getBlob={getCaptureBlob}
+            fileUrl={fileUrl}
+            openArtifactId={openArtifactId}
+            onOpenArtifact={setOpenArtifactId}
+            onChange={refresh}
+          />
         )}
         {tab === "History" && (
           <>
@@ -1651,48 +1531,10 @@ function App() {
           }}
         />
       )}
-      {artifact && (
-        <ArtifactEditor
-          artifact={
-            data.artifacts.find((a) => a.id === artifact.id) || artifact
-          }
-          close={() => setArtifact(null)}
-          save={(name, tags) =>
-            action("captures.edit", { id: artifact.id, name, tags })
-          }
-        />
-      )}
-      {purging && (
-        <Modal
-          title="Permanently delete capture files?"
-          onClose={() => setPurging(false)}
-        >
-          <p>
-            This deletes {captureSelection.length} selected captures, clean
-            originals and log files from disk. This cannot be undone.
-          </p>
-          <footer>
-            <button onClick={() => setPurging(false)}>Cancel</button>
-            <button
-              className="danger"
-              disabled={busy}
-              onClick={() =>
-                perform(async () => {
-                  await action(
-                    "captures.purge",
-                    { ids: captureSelection, confirmed: true },
-                    "Capture files permanently deleted.",
-                  );
-                  setCaptureSelection([]);
-                  setPurging(false);
-                })
-              }
-            >
-              Delete files permanently
-            </button>
-          </footer>
-        </Modal>
-      )}
+      <CaptureToasts
+        {...captureFeedback}
+        onOpen={(id) => { setControl(null); setViewing([]); setTab("Captures"); setOpenArtifactId(id); }}
+      />
     </div>
   );
 }
@@ -1950,94 +1792,6 @@ function DeviceEditor({
           </button>
           <button className="primary" disabled={saving}>
             Save device
-          </button>
-        </footer>
-      </form>
-    </Modal>
-  );
-}
-function ArtifactEditor({
-  artifact: a,
-  close,
-  save,
-}: {
-  artifact: Artifact;
-  close: () => void;
-  save: (name: string, tags: string[]) => Promise<unknown>;
-}) {
-  const [name, setName] = useState(a.name),
-    [tags, setTags] = useState(a.tags.join(", ")),
-    [error, setError] = useState("");
-  return (
-    <Modal title="Capture details" onClose={close}>
-      {!a.deletedAt &&
-        !["recording", "finalizing"].includes(a.status) &&
-        (a.kind === "recording" ? (
-          <video className="live-artifact-preview" src={fileUrl(a)} controls />
-        ) : (
-          <img
-            className="live-artifact-preview"
-            src={fileUrl(a)}
-            alt={a.name}
-          />
-        ))}
-      <p>
-        {a.status} · {a.kind} · {time(a.createdAt)}
-      </p>
-      {a.error && <p className="live-alert">{a.error}</p>}
-      <small>{a.path}</small>
-      <form
-        onSubmit={async (e) => {
-          e.preventDefault();
-          try {
-            await save(
-              name,
-              tags
-                .split(",")
-                .map((s) => s.trim())
-                .filter(Boolean),
-            );
-            close();
-          } catch (e) {
-            setError((e as Error).message);
-          }
-        }}
-      >
-        <label>
-          Name
-          <input
-            required
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-          />
-        </label>
-        <label>
-          Tags, separated by commas
-          <input value={tags} onChange={(e) => setTags(e.target.value)} />
-        </label>
-        {error && <p>{error}</p>}
-        <footer>
-          {!a.deletedAt && (
-            <>
-              <a href={fileUrl(a)} download>
-                <Download size={16} />
-                File
-              </a>
-              {a.cleanPath && (
-                <a href={fileUrl(a, "clean")} download>
-                  Clean original
-                </a>
-              )}
-              <a href={fileUrl(a, "log")} download>
-                Key log / metadata
-              </a>
-            </>
-          )}
-          <button
-            className="primary"
-            disabled={["recording", "finalizing"].includes(a.status)}
-          >
-            Save details
           </button>
         </footer>
       </form>

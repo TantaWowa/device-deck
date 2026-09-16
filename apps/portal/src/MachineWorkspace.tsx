@@ -1,13 +1,16 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, Camera, Check, ChevronDown, ExternalLink, Film, Grid2X2, LoaderCircle, Monitor, Play, Radio, RefreshCw, Search, Square, Tv, X } from "lucide-react";
+import { ArrowLeft, Camera, Check, ChevronDown, Clipboard, ExternalLink, Film, Grid2X2, LoaderCircle, Monitor, Play, Radio, RefreshCw, Search, Square, Tv, X } from "lucide-react";
 import { grantSchema, type MachineRecord } from "../../../packages/core/src/hub";
 import type { Artifact, Device, Session, Snapshot } from "../../../packages/core/src/local/types";
 import { createMachineTransport } from "../../../packages/machine-client/src";
 import { canLaunchSimulator } from "../../../packages/core/src/local/types";
 import { LivePreview } from "../../web/src/local/LivePreview";
 import { RemoteControl } from "../../web/src/local/RemoteControl";
+import { CaptureLibrary } from "../../web/src/local/CaptureLibrary";
+import { CaptureToasts, copyImageToClipboard, useCaptureFeedback } from "../../web/src/local/capture-feedback";
 import { connectionMessage, ControlGate, needsStandalone } from "./model";
 import type { CloudClient } from "./cloud";
+import "./capture-workspace.css";
 
 type Transport = ReturnType<typeof createMachineTransport>;
 export type Lease = { sessionId: string; leaseToken: string };
@@ -19,22 +22,6 @@ function MachinePreview({ transport, route, label, lease, inputEnabled, active =
   const sourceId = route.startsWith("/v1/source-preview/") ? decodeURIComponent(route.slice("/v1/source-preview/".length)) : undefined;
   const deviceId = route.startsWith("/v1/preview/") ? decodeURIComponent(route.slice("/v1/preview/".length)) : undefined;
   return <LivePreview key={deviceId || sourceId} name={label} sourceId={sourceId} deviceId={deviceId} operation={transport.operation} getSnapshot={getSnapshot} controlLease={lease} inputEnabled={inputEnabled} active={active} />;
-}
-
-function ArtifactViewer({ artifact, transport, onClose }: { artifact: Artifact; transport: Transport; onClose: () => void }) {
-  const dialog = useRef<HTMLDialogElement>(null);
-  const [url, setUrl] = useState("");
-  const [error, setError] = useState("");
-  useEffect(() => {
-    dialog.current?.showModal();
-    const controller = new AbortController();
-    let objectUrl = "";
-    void transport.getBlob(`/v1/artifacts/${encodeURIComponent(artifact.id)}/file`, controller.signal).then((blob) => {
-      if (!controller.signal.aborted) { objectUrl = URL.createObjectURL(blob); setUrl(objectUrl); }
-    }).catch((failure) => { if (!controller.signal.aborted) setError(connectionMessage(failure)); });
-    return () => { controller.abort(); if (objectUrl) URL.revokeObjectURL(objectUrl); };
-  }, [artifact.id, transport]);
-  return <dialog ref={dialog} className="portal-dialog artifact-dialog" onCancel={onClose}><header><h2>{artifact.name}</h2><button className="icon-button" aria-label="Close capture" onClick={onClose}><X /></button></header>{error ? <p className="notice error">{error}</p> : url ? <>{artifact.kind === "screenshot" ? <img src={url} alt={artifact.name} /> : <video src={url} controls playsInline />}<a className="secondary" href={url} download={artifact.name}>Download capture</a></> : <p role="status">Loading capture directly from the machine…</p>}</dialog>;
 }
 
 export function MachineWorkspace({ machine, cloud, owner, leases, onBack }: {
@@ -59,7 +46,7 @@ export function MachineWorkspace({ machine, cloud, owner, leases, onBack }: {
   const [revealingDevice, setRevealingDevice] = useState<string>();
   const [launchingDevice, setLaunchingDevice] = useState<string>();
   const [sessionOwner, setSessionOwner] = useState(owner);
-  const [artifact, setArtifact] = useState<Artifact>();
+  const [capturePreviewId, setCapturePreviewId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [mobile, setMobile] = useState(() => matchMedia("(max-width: 640px)").matches);
   const lifecycle = useRef(new AbortController());
@@ -69,6 +56,9 @@ export function MachineWorkspace({ machine, cloud, owner, leases, onBack }: {
   const remotePanel = useRef<HTMLElement>(null);
   const feedPicker = useRef<HTMLDivElement>(null);
   const standalone = needsStandalone(machine.endpoint, location.protocol);
+  const captureFeedback = useCaptureFeedback(snapshot?.artifacts);
+  const getCaptureBlob = useCallback((item: Artifact, variant: "file" | "clean" | "log" = "file", signal?: AbortSignal) =>
+    transport.getBlob(`/v1/artifacts/${encodeURIComponent(item.id)}/${variant}`, signal), [transport]);
   useEffect(() => {
     const query = matchMedia("(max-width: 640px)");
     const changed = () => setMobile(query.matches);
@@ -143,17 +133,18 @@ export function MachineWorkspace({ machine, cloud, owner, leases, onBack }: {
   const occupied = activeSession && activeSession.id !== ownLease?.sessionId;
   const hasConnection = Boolean(device?.online && !device.locked && !error);
   const canControl = hasConnection && !occupied;
-  const command = async (action: (signal: AbortSignal, current: () => boolean) => Promise<unknown>, timeoutMs = 10_000) => {
+  const command = async (action: (signal: AbortSignal, current: () => boolean) => Promise<unknown>, timeoutMs = 10_000, successNotice: string | null = "Command sent.", rethrow = false) => {
     if (!navigator.onLine || document.hidden) { setNotice("Controls are paused. Reconnect and return to this page before sending a new command."); return false; }
     const result = await gate.current.run(async (signal, current) => {
       setBusy(true); setNotice("");
       const bounded = AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]);
       try {
         const result = await action(bounded, () => current() && !bounded.aborted);
-        if (result !== false && current() && alive.current) { setNotice("Command sent."); void refresh(); }
+        if (result !== false && current() && alive.current) { if (successNotice) setNotice(successNotice); void refresh(); }
         return result;
       } catch (failure) {
         if (current() && alive.current) setNotice(connectionMessage(failure));
+        if (rethrow) throw failure;
         return false;
       } finally { if (current() && alive.current) setBusy(false); }
     });
@@ -184,20 +175,41 @@ export function MachineWorkspace({ machine, cloud, owner, leases, onBack }: {
   const capture = (operation: "captures.screenshot" | "recordings.start" | "recordings.stop") => command(async (signal, current) => {
     const lease = await withLease(signal, current);
     if (!current()) return false;
-    return transport.operation(operation, lease, signal);
-  });
+    const item = await transport.operation<Artifact | null>(operation, operation === "captures.screenshot" ? { ...lease, clipboard: false } : lease, signal);
+    if (current()) {
+      if (item && operation !== "recordings.start") captureFeedback.completed(item);
+      setNotice(operation === "recordings.start" ? "Recording started. You can close this remote." : operation === "recordings.stop" ? item ? "Recording finished. See Captures for the saved file." : "No recording is active." : "Screenshot saved to Captures.");
+    }
+    return item;
+  }, operation === "recordings.stop" ? 180_000 : 60_000, null);
+  const screenshotToClipboard = () => {
+    let currentRequest = () => alive.current;
+    void copyImageToClipboard(async () => {
+      const result = await command(async (signal, current) => {
+        currentRequest = current;
+        const lease = await withLease(signal, current);
+        if (!current()) throw new DOMException("Cancelled", "AbortError");
+        const item = await transport.operation<Artifact>("captures.screenshot", { ...lease, clipboard: false }, signal);
+        if (current()) captureFeedback.completed(item);
+        return getCaptureBlob(item, "file", signal);
+      }, 60_000, null, true);
+      if (!(result instanceof Blob)) throw new Error("Screenshot could not be copied. Check the capture result and try again.");
+      return result;
+    }).then(() => { if (alive.current && currentRequest()) setNotice("Screenshot copied to your clipboard and saved to Captures."); })
+      .catch((failure) => { if (alive.current && currentRequest()) setNotice(connectionMessage(failure)); });
+  };
   const takeover = () => command(async (signal, current) => {
     if (!device || !window.confirm(`Take over ${device.name} from ${activeSession?.owner}? Any active recording will be finalized.`)) return false;
     const result = await transport.operation<{ session: Session; leaseToken: string }>("sessions.takeover", { deviceId: device.id, reason: "Take over from Device Deck web remote", owner: sessionOwner, confirmed: true }, signal);
     if (current()) leases.set(leaseKey, { sessionId: result.session.id, leaseToken: result.leaseToken });
     return result;
-  });
+  }, 180_000);
   const endSession = () => command(async (signal, current) => {
     if (!ownLease) return false;
     const result = await transport.operation("sessions.release", ownLease, signal);
     if (current()) { leases.delete(leaseKey); setTouchSessions((sessions) => { const next = { ...sessions }; delete next[device!.id]; return next; }); }
     return result;
-  });
+  }, 180_000);
   const startFeedControl = (target: Device, takeOver = false) => command(async (signal, current) => {
     const session = snapshot?.sessions.find((s) => s.deviceId === target.id && s.state !== "closed" && s.expiresAt > Date.now());
     const own = leases.get(`${machine.id}:${target.id}`);
@@ -212,7 +224,7 @@ export function MachineWorkspace({ machine, cloud, owner, leases, onBack }: {
     if (!current()) return false;
     setTouchSessions((sessions) => ({ ...sessions, [target.id]: lease.sessionId }));
     return lease;
-  });
+  }, takeOver ? 180_000 : 10_000);
   const endFeedControl = (target: Device) => command(async (signal, current) => {
     const key = `${machine.id}:${target.id}`, lease = leases.get(key);
     if (!lease) return false;
@@ -222,7 +234,7 @@ export function MachineWorkspace({ machine, cloud, owner, leases, onBack }: {
       setTouchSessions((sessions) => { const next = { ...sessions }; delete next[target.id]; return next; });
     }
     return result;
-  });
+  }, 180_000);
   const launchFeed = (target: Device) => command(async (signal, current) => {
     setLaunchingDevice(target.id); setNotice(`Starting ${target.name}. Waiting for its screen…`);
     try {
@@ -303,13 +315,24 @@ export function MachineWorkspace({ machine, cloud, owner, leases, onBack }: {
         })}</div> : <div className="empty-panel"><Monitor size={38} /><h2>{feeds.length || simulators.length ? "Choose a feed to get started" : "No feeds configured yet"}</h2><p>{feeds.length || simulators.length ? "Show a connected screen or launch a simulator from the feed picker." : "Add devices or capture cards on this machine to see their live screens here."}</p>{feeds.length || simulators.length ? <button className="secondary" onClick={() => chooseFeeds("all")}>Choose feeds</button> : <a className="secondary" href={`${machine.endpoint}/`} target="_blank" rel="noreferrer">Open machine setup <ExternalLink size={15} /></a>}</div>}
       </>}
       {tab === "devices" && snapshot && <div className="device-grid">{snapshot.devices.length ? snapshot.devices.map((item) => { const session = snapshot.sessions.find((entry) => entry.deviceId === item.id && entry.state !== "closed"); return <article className="device-card" key={item.id}><div className="device-card-top"><span className="machine-icon"><Tv size={25} /></span><span className={`pill ${item.online ? "good" : "muted"}`}>{item.locked ? "Locked" : item.online ? "Online" : "Offline"}</span></div><h2>{item.name}</h2><p>{item.platform} · {item.kind}</p><small>{session ? `Reserved by ${session.owner}` : item.healthDetail || "Available"}</small><button className="primary" onClick={() => selectRemote(item.id)}><Radio size={17} />Open remote</button></article>; }) : <div className="empty-panel"><Tv size={38} /><h2>No devices configured</h2><p>Discover or add devices from the machine's standalone dashboard.</p></div>}</div>}
-      {tab === "captures" && snapshot && <div className="capture-list">{snapshot.artifacts.filter((item) => !item.deletedAt && !item.purgedAt).length ? snapshot.artifacts.filter((item) => !item.deletedAt && !item.purgedAt).sort((a, b) => b.createdAt - a.createdAt).map((item) => <article key={item.id}><span className="machine-icon">{item.kind === "screenshot" ? <Camera /> : <Film />}</span><div><strong>{item.name}</strong><small>{new Date(item.createdAt).toLocaleString()} · {item.status}</small></div><button className="secondary" disabled={!['completed', 'interrupted'].includes(item.status)} onClick={() => setArtifact(item)}>View</button></article>) : <div className="empty-panel"><Camera size={38} /><h2>Your captures will appear here</h2><p>Open a device remote to take a screenshot or start a recording.</p></div>}</div>}
+      {tab === "captures" && notice && !remoteId && <p className="notice" role="status">{notice}</p>}
+      {tab === "captures" && snapshot && <CaptureLibrary
+        artifacts={snapshot.artifacts}
+        devices={snapshot.devices}
+        folder={snapshot.config.settings.folder}
+        operation={transport.operation}
+        getBlob={getCaptureBlob}
+        openArtifactId={capturePreviewId}
+        onOpenArtifact={setCapturePreviewId}
+        onChange={refresh}
+        onOpenFolder={() => transport.operation("captures.openFolder", {}, AbortSignal.timeout(15_000))}
+      />}
     </>}
     {device && <><button className="remote-backdrop" aria-label="Close remote" onClick={() => selectRemote()} /><aside ref={remotePanel} className="portal-remote-sheet" role="dialog" aria-modal="true" aria-label={`Remote for ${device.name}`}><header><div><span className="eyebrow">REMOTE CONTROL</span><h2>{device.name}</h2></div><button className="icon-button" aria-label="Close remote" onClick={() => selectRemote()}><X /></button></header><div className="portal-remote-content">
       <div className="deck-control-session-actions">
         {!activeSession && <input aria-label="Control session owner" value={sessionOwner} maxLength={128} onChange={(event) => setSessionOwner(event.target.value)} />}
         {!device.online && canLaunchSimulator(device) && <button className="primary" disabled={busy || device.locked || Boolean(error) || Boolean(activeSession)} onClick={() => { selectRemote(); void launchFeed(device); }}>Launch &amp; show feed</button>}
-      </div><p className="remote-session-label">{occupied ? `Reserved by ${activeSession.owner}` : ownLease ? `Your reservation · ${recording ? "recording" : "active"}` : "First command reserves this device for 15 minutes."}</p>{occupied && <button className="secondary full-width" disabled={busy} onClick={() => void takeover()}>Take over control</button>}<RemoteControl key={device.id} preferenceScope={machine.id} compact={mobile} device={device} enabled={Boolean(canControl)} busy={busy} sendKey={(key) => remoteInput({ key })} sendText={(text) => remoteInput({ text })} wakeEnabled={!device.locked && !error} wake={wake} /><div className="portal-capture-actions"><button className="secondary" disabled={!canControl || busy || !device.capabilities.includes("screenshot")} onClick={() => void capture("captures.screenshot")}><Camera size={17} />Screenshot</button><button className={recording ? "danger" : "secondary"} disabled={!canControl || busy || !device.capabilities.includes("record")} onClick={() => void capture(recording ? "recordings.stop" : "recordings.start")}>{recording ? <Square size={17} /> : <Film size={17} />}{recording ? "Stop recording" : "Record"}</button></div>{ownLease && <button className="text-button full-width" disabled={busy} onClick={() => void endSession()}>{recording ? "End session & save recording" : "End session"}</button>}{notice && <p className="remote-notice" role="status">{notice === "Command sent." && <Check size={16} />}{notice}</p>}</div></aside></>}
-    {artifact && <ArtifactViewer artifact={artifact} transport={transport} onClose={() => setArtifact(undefined)} />}
+      </div><p className="remote-session-label">{occupied ? `Reserved by ${activeSession.owner}` : ownLease ? `Your reservation · ${recording ? "recording" : "active"}` : "First command reserves this device for 15 minutes."}</p>{occupied && <button className="secondary full-width" disabled={busy} onClick={() => void takeover()}>Take over control</button>}<RemoteControl key={device.id} preferenceScope={machine.id} compact={mobile} device={device} enabled={Boolean(canControl)} busy={busy} sendKey={(key) => remoteInput({ key })} sendText={(text) => remoteInput({ text })} wakeEnabled={!device.locked && !error} wake={wake} /><div className="portal-capture-actions"><button className="secondary" disabled={!canControl || busy || !device.capabilities.includes("screenshot")} onClick={() => void capture("captures.screenshot")}><Camera size={17} />Screenshot</button><button className="secondary" disabled={!canControl || busy || !device.capabilities.includes("screenshot")} onClick={screenshotToClipboard}><Clipboard size={17} />Screenshot to clipboard</button><button className={recording ? "danger" : "secondary"} disabled={!canControl || busy || !device.capabilities.includes("record")} onClick={() => void capture(recording ? "recordings.stop" : "recordings.start")}>{recording ? <Square size={17} /> : <Film size={17} />}{recording ? "Stop recording" : "Record"}</button></div>{ownLease && <button className="text-button full-width" disabled={busy} onClick={() => void endSession()}>{recording ? "End session & save recording" : "End session"}</button>}{notice && <p className="remote-notice" role="status">{notice === "Command sent." && <Check size={16} />}{notice}</p>}</div></aside></>}
+    <CaptureToasts toasts={captureFeedback.toasts} dismiss={captureFeedback.dismiss} onOpen={(id) => { selectRemote(); setTab("captures"); setCapturePreviewId(id); }} />
   </div>;
 }

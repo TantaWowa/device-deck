@@ -1193,6 +1193,48 @@ test("direct USB previews share bound-device locks and need HTTP authentication"
   }
 });
 
+test("capture files support authenticated inline previews and named downloads; folder actions reject arbitrary paths", async () => {
+  const { deck, cleanup } = await setup();
+  const token = "c".repeat(64), server = createService(deck, token, "/tmp/no-web");
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+  const headers = { Authorization: `Bearer ${token}` };
+  try {
+    const { writeFile } = await import("node:fs/promises");
+    const file = path.join(deck.directory, "original.mp4"), clean = path.join(deck.directory, "clean.mp4"), log = `${file}.json`;
+    await writeFile(file, "original-video");
+    await writeFile(clean, "clean-video");
+    await writeFile(log, "{}");
+    deck.store.putArtifact({ id: "download", deviceId: "one", sessionId: "history", owner: "test", sourceId: "screen-one", name: "Café's demo", path: file, cleanPath: clean, logPath: log, kind: "recording", mode: "annotated", tags: [], createdAt: Date.now(), duration: 1, bytes: 14, status: "completed", origin: "API" });
+    assert.equal((await fetch(`${base}/v1/artifacts/download/file?download=1`)).status, 401);
+    const inline = await fetch(`${base}/v1/artifacts/download/file`, { headers });
+    assert.equal(inline.status, 200);
+    assert.equal(inline.headers.get("content-type"), "video/mp4");
+    assert.match(inline.headers.get("content-disposition")!, /^inline; .*filename\*=UTF-8''Caf%C3%A9%27s%20demo.mp4$/);
+    assert.equal(await inline.text(), "original-video");
+    const download = await fetch(`${base}/v1/artifacts/download/clean?download=1`, { headers: { ...headers, Origin: base, Range: "bytes=0-4" } });
+    assert.equal(download.status, 206);
+    assert.equal(download.headers.get("content-range"), "bytes 0-4/11");
+    assert.match(download.headers.get("content-disposition")!, /^attachment; .*demo-clean.mp4$/);
+    assert.match(download.headers.get("access-control-expose-headers")!, /Content-Disposition/);
+    assert.equal(await download.text(), "clean");
+    const manifest = await fetch(`${base}/v1/artifacts/download/log?download=1`, { headers });
+    assert.equal(manifest.headers.get("content-type"), "application/json");
+    assert.match(manifest.headers.get("content-disposition")!, /^attachment; .*demo-metadata.json$/);
+    assert.equal(await manifest.text(), "{}");
+    assert.equal((await fetch(`${base}/v1/artifacts/download/arbitrary`, { headers })).status, 404);
+    const folderAction = (auth: boolean) => fetch(`${base}/v1/operations/captures.openFolder`, { method: "POST", headers: { "Content-Type": "application/json", ...(auth ? headers : {}) }, body: JSON.stringify({ path: "/tmp/not-configured" }) });
+    assert.equal((await folderAction(false)).status, 401);
+    assert.equal((await folderAction(true)).status, 400);
+    deck.store.putArtifact({ ...deck.store.artifact("download"), deletedAt: Date.now() });
+    assert.equal((await fetch(`${base}/v1/artifacts/download/file?download=1`, { headers })).status, 410);
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>((r) => server.close(() => r()));
+    await cleanup();
+  }
+});
+
 test("renewal, expiry and takeover invalidate credentials while preserving ownership history", async () => {
   const { deck, capture, cleanup } = await setup();
   capture.resolveStop = () => {};

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createMachineTransport, normalizeMachineEndpoint } from './index';
+import type { Operation } from '../../core/src/local/types';
 
 const id = '93c65aaa-3727-42e5-b91f-2d16ee1d4b4d';
 const publicKey = { kty: 'OKP' as const, crv: 'Ed25519' as const, x: 'x'.repeat(43) };
@@ -82,5 +83,71 @@ test('caller cancellation rejects during grant acquisition and later refresh nev
   finish(await validGrant());
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(calls, 1);
+  client.dispose();
+});
+
+test('long captures and artifact downloads retain their full deadline without replaying requests', async (context) => {
+  let elapsed = 0;
+  const timers: { at: number; controller: AbortController }[] = [];
+  context.mock.method(AbortSignal, 'timeout', (milliseconds: number) => {
+    const controller = new AbortController();
+    timers.push({ at: elapsed + milliseconds, controller });
+    return controller.signal;
+  });
+  const advance = (milliseconds: number) => {
+    elapsed += milliseconds;
+    for (const timer of timers) if (timer.at <= elapsed && !timer.controller.signal.aborted)
+      timer.controller.abort(new DOMException('Request deadline elapsed', 'TimeoutError'));
+  };
+  const cases: { operation?: Operation; path?: string; deadline: number }[] = [
+    { operation: 'captures.screenshot', deadline: 60_000 },
+    { operation: 'recordings.stop', deadline: 180_000 },
+    { operation: 'sessions.release', deadline: 180_000 },
+    { operation: 'sessions.takeover', deadline: 180_000 },
+    { operation: 'devices.simulator', deadline: 300_000 },
+    { path: '/v1/artifacts/synthetic/file', deadline: 600_000 },
+    { path: '/v1/preview/synthetic', deadline: 30_000 },
+  ];
+  for (const scenario of cases) {
+    let started!: () => void, requestSignal: AbortSignal | undefined, requests = 0;
+    const ready = new Promise<void>((resolve) => { started = resolve; });
+    const client = createMachineTransport({ endpoint: 'https://studio.example', getGrant: validGrant, fetch: async (url, init) => {
+      if (new URL(String(url)).pathname === '/v1/machine') return Response.json(identity);
+      requests++;
+      requestSignal = init!.signal!;
+      started();
+      return new Promise<Response>((_, reject) => {
+        const aborted = () => reject(requestSignal!.reason);
+        requestSignal!.addEventListener('abort', aborted, { once: true });
+        if (requestSignal!.aborted) aborted();
+      });
+    } });
+    const outcome = (scenario.operation ? client.operation(scenario.operation) : client.getBlob(scenario.path!))
+      .then(() => assert.fail('The delayed request must eventually time out.'), (error: unknown) => error);
+    await ready;
+    advance(scenario.deadline - 1);
+    assert.equal(requestSignal!.aborted, false, `${scenario.operation || scenario.path} stopped before its allowed deadline`);
+    advance(1);
+    assert.equal((await outcome as Error).name, 'TimeoutError');
+    assert.equal(requests, 1, 'Timeouts must never replay a request.');
+    client.dispose();
+  }
+});
+
+test('caller cancellation still immediately aborts a long artifact download', async () => {
+  const caller = new AbortController();
+  let ready!: () => void, requests = 0;
+  const started = new Promise<void>((resolve) => { ready = resolve; });
+  const client = createMachineTransport({ endpoint: 'https://studio.example', getGrant: validGrant, fetch: async (url, init) => {
+    if (new URL(String(url)).pathname === '/v1/machine') return Response.json(identity);
+    requests++; ready();
+    return new Promise<Response>((_, reject) => init!.signal!.addEventListener('abort', () => reject(init!.signal!.reason), { once: true }));
+  } });
+  const download = client.getBlob('/v1/artifacts/synthetic/file', caller.signal);
+  await started;
+  const rejected = assert.rejects(download, /user cancelled/);
+  caller.abort(new Error('user cancelled'));
+  await rejected;
+  assert.equal(requests, 1);
   client.dispose();
 });

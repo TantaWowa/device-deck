@@ -89,13 +89,17 @@ export function createMachineTransport(options: MachineTransportOptions) {
     async operation<T = unknown>(name: Operation, args: unknown = {}, signal?: AbortSignal): Promise<T> {
       const deadline = name === 'remote.input' || name === 'remote.override'
         ? AbortSignal.any([AbortSignal.timeout(3_000), ...(signal ? [signal] : [])]) : signal;
+      const timeoutMs = name === 'devices.simulator' ? 300_000
+        : name === 'captures.screenshot' ? 60_000
+        : ['recordings.stop', 'sessions.release', 'sessions.takeover'].includes(name) ? 180_000
+        : 30_000;
       const response = await authorized(`/v1/operations/${encodeURIComponent(name)}`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(args),
-      }, deadline, name === 'devices.simulator' ? 300_000 : 30_000);
+      }, deadline, timeoutMs);
       return response.json() as Promise<T>;
     },
     async getBlob(path: string, signal?: AbortSignal): Promise<Blob> {
-      return (await authorized(path, { method: 'GET' }, signal)).blob();
+      return (await authorized(path, { method: 'GET' }, signal, path.startsWith('/v1/artifacts/') ? 600_000 : 30_000)).blob();
     },
     async getJson<T = unknown>(path: string, signal?: AbortSignal): Promise<T> {
       return (await authorized(path, { method: 'GET' }, signal)).json() as Promise<T>;

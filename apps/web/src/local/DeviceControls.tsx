@@ -1,10 +1,12 @@
 import React, { useLayoutEffect, useRef, useState } from "react";
-import { Camera, Circle, Square, Lock, Unlock, RefreshCw } from "lucide-react";
+import { Camera, Copy, Circle, Square, Lock, Unlock, RefreshCw } from "lucide-react";
 import type {
   Device,
   Snapshot,
   Session,
+  Artifact,
 } from "../../../../packages/core/src/local/types";
+import { copyImageToClipboard } from "./capture-feedback";
 import { api } from "./api";
 import { RemoteControl } from "./RemoteControl";
 import type { FeedAction } from "./FeedActions";
@@ -22,6 +24,7 @@ export function DeviceControls({
   initialAction = "remote",
   optionsOpen,
   setOptionsOpen,
+  onCapture,
 }: {
   device: Device;
   data: Snapshot;
@@ -32,6 +35,7 @@ export function DeviceControls({
   initialAction?: FeedAction;
   optionsOpen: boolean;
   setOptionsOpen: (open: boolean) => void;
+  onCapture?: (artifact: Artifact) => void;
 }) {
   const [busy, setBusy] = useState(false),
     [waking, setWaking] = useState(false),
@@ -141,7 +145,7 @@ export function DeviceControls({
     focusRemote.current = Boolean(sessionId);
     setOptionsOpen(!sessionId);
   };
-  const run = async (fn: () => Promise<unknown>) => {
+  const run = async <T,>(fn: () => Promise<T>, rethrow = false): Promise<T | false> => {
     // Management actions supersede queued keys and wait for dispatched input.
     input.current.generation++;
     input.current.lease = null;
@@ -159,6 +163,7 @@ export function DeviceControls({
       setError((e as Error).message);
       setOptionsOpen(true);
       await refresh();
+      if (rethrow) throw e;
       return false;
     } finally {
       latest.current.busy = false;
@@ -169,10 +174,11 @@ export function DeviceControls({
     kind: "record" | "screenshot",
     credentials = lease,
   ) => {
-    const result = await api(
+    const result = await api<Artifact>(
       kind === "record" ? "recordings.start" : "captures.screenshot",
       { ...credentials, mode },
     );
+    if (kind === "screenshot") onCapture?.(result);
     setNotice(
       kind === "record"
         ? "Recording started. You can close this remote."
@@ -195,6 +201,23 @@ export function DeviceControls({
       });
     else setNotice("Device reserved. Choose a control or capture action.");
     return { sessionId: result.session.id, leaseToken: result.leaseToken };
+  };
+  const screenshotToClipboard = () => {
+    setError("");
+    // The browser clipboard write must begin in this click's activation scope.
+    void copyImageToClipboard(async () => {
+      const result = await run(async () => {
+        const credentials = owned ? lease : await reserve();
+        const artifact = await api<Artifact>("captures.screenshot", { ...credentials, mode, clipboard: false });
+        onCapture?.(artifact);
+        const response = await fetch(`/v1/artifacts/${encodeURIComponent(artifact.id)}/file`);
+        if (!response.ok) throw new Error("Screenshot saved, but its image could not be loaded for copying.");
+        return response.blob();
+      }, true);
+      if (!result) throw new Error("Could not capture the screenshot.");
+      return result;
+    }).then(() => setNotice("Screenshot copied to this computer’s clipboard and saved in Captures."))
+      .catch((error: Error) => { setError(error.message); setOptionsOpen(true); });
   };
   const send = (payload: { key?: string; text?: string; wake?: true }) => {
     const queue = input.current;
@@ -638,13 +661,21 @@ export function DeviceControls({
                 (!owned && (!owner.trim() || !reason.trim()))
               }
               onClick={() =>
-                void run(() =>
+                void run<unknown>(() =>
                   owned ? capture("screenshot") : reserve("screenshot"),
                 )
               }
             >
               <Camera size={17} />
               {owned ? "Take screenshot" : "Reserve & take screenshot"}
+            </button>
+            <button
+              disabled={busy || !captureAllowed("screenshot") || (!owned && (!owner.trim() || !reason.trim()))}
+              onClick={screenshotToClipboard}
+              title="Save a screenshot and copy its image to the clipboard on this computer"
+            >
+              <Copy size={17} />
+              Screenshot to clipboard
             </button>
             <button
               className={recording ? "danger" : "primary"}
@@ -656,7 +687,7 @@ export function DeviceControls({
               onClick={() =>
                 recording
                   ? setConfirm("stop")
-                  : void run(() =>
+                  : void run<unknown>(() =>
                       owned ? capture("record") : reserve("record"),
                     )
               }

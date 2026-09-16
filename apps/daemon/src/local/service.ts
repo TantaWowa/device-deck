@@ -33,6 +33,7 @@ import {
   type SourceConfig,
 } from "../../../../packages/core/src/local/types";
 import { Store } from "./store";
+import { captureStorage, openCaptureFolder } from "./capture-library";
 import { LiveStreams, type LiveTarget } from "../live";
 import type { StreamOpen } from "../../../../packages/core/src/live";
 import {
@@ -793,6 +794,11 @@ export class DeckService {
         );
       case "recordings.stop":
         return this.withLease(args, (s) => this.finishRecording(s.id));
+      case "captures.openFolder":
+        await this.refresh();
+        return openCaptureFolder(this.config.folder);
+      case "captures.storage":
+        return this.library.run(() => captureStorage(this.store.artifacts()));
       case "captures.edit":
         return this.library.run(async () => {
           const a = this.store.artifact(args.id);

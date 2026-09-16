@@ -390,6 +390,8 @@ export const operations = {
       tags: z.array(z.string().trim().min(1).max(48)).max(30),
     })
     .strict(),
+  "captures.openFolder": z.object({}).strict(),
+  "captures.storage": z.object({}).strict(),
   "captures.remove": z
     .object({
       ids: z.array(z.string()).min(1).max(100),

@@ -64,9 +64,14 @@ Other operations:
 ./devdeck call captures.remove '{"ids":["CAPTURE_ID"],"confirmed":true}'
 ./devdeck call captures.restore '{"ids":["CAPTURE_ID"]}'
 ./devdeck call captures.purge '{"ids":["CAPTURE_ID"],"confirmed":true}'
+./devdeck call captures.openFolder '{}'
 ```
 
 Trash retains files. Purge accepts only trashed, stopped captures and permanently removes their files and sidecars. Neither metadata names nor tags rename the backing file.
+
+`captures.openFolder` opens the configured capture folder in Finder on the Mac running Device Deck, including when called from a remote browser. It accepts no path and returns `{opened:true,folder:"/resolved/host/path"}`. The folder is created if it does not exist.
+
+`captures.storage` accepts `{}` and reports `{bytes,libraryBytes,trashBytes,files,missingFiles}` for managed capture files. Totals use actual file lengths, count shared paths once, and include clean originals, metadata and annotation sidecars. Purged captures and unrelated files in the folder are excluded.
 
 Exit code 0 means success, 1 means service or operation failure, and 2 means invalid command arguments. Validation and ownership errors include a machine-readable error code and message. Unknown/ambiguous device selectors fail explicitly.
 
@@ -165,6 +170,8 @@ To control an already reserved device without taking its reservation, authentica
 | `recordings.start`                                                       | Recording artifact ID and managed maximum duration                                                         |
 | `recordings.stop`                                                        | Completed/interrupted artifact after finalization and validation; repeated stop returns the last recording |
 | `captures.edit`, `captures.remove`, `captures.restore`, `captures.purge` | Updated capture metadata and trash state                                                                   |
+| `captures.openFolder` | Opens the configured capture folder in Finder on the host Mac; accepts `{}` |
+| `captures.storage` | Measures managed files, originals and sidecars, split between library and trash |
 
 Read routes:
 
@@ -174,6 +181,8 @@ Read routes:
 - `GET /v1/artifacts/ID/file`: original capture or annotated export, with byte-range support for video.
 - `GET /v1/artifacts/ID/clean`: clean original when an annotated export exists.
 - `GET /v1/artifacts/ID/log`: JSON manifest with identity, outcome and recording-relative input timestamps.
+
+Artifact routes display inline by default. Append `?download=1` to request an attachment. `Content-Disposition` uses the edited capture name, the file's extension, and `-clean` for clean originals or `-metadata` for logs; Unicode names use `filename*`. Local and portal downloads use the same filename. Downloading does not rename the file on the host. Downloads require the same authentication as previews, retain byte-range support, and reject captures in Trash until restored.
 
 Machine routes require authentication except static UI files, public `/v1/machine` identity, the one-use ticket exchange and the code-plus-signed-token pairing exchange. Portal grants authenticate machine API requests; `/v1/hub/pairing-code`, `/v1/hub/unpair` and browser-ticket creation require a native token over loopback. Every route accessed through the Tailscale origin requires an allowed user identity from Serve. Browser mutation requests also require `X-Device-Deck: local`. Unexpected hosts and origins outside the exact configured allow lists are rejected. Allowed portal origins receive CORS responses for scoped bearer requests. No API token is embedded in the public website or local JS bundle.
 

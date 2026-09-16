@@ -7,6 +7,7 @@ import { readFile, stat } from "node:fs/promises";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { ZodError } from "zod";
 import { DeckService } from "./local/service";
+import { artifactDisposition } from "./local/capture-library";
 import { allowedNetworkHosts, isLoopback, MachineAuthority } from "./network";
 import {
   DeckError,
@@ -94,7 +95,7 @@ export function createService(
     if (req.headers.origin && allowedOrigins.has(req.headers.origin)) {
       res.setHeader("Access-Control-Allow-Origin", req.headers.origin);
       res.setHeader("Vary", "Origin");
-      res.setHeader("Access-Control-Expose-Headers", "Content-Length, Content-Range, Content-Type, Accept-Ranges");
+      res.setHeader("Access-Control-Expose-Headers", "Content-Length, Content-Range, Content-Type, Content-Disposition, Accept-Ranges");
     }
     if (req.method === "OPTIONS") {
       const requested = (req.headers["access-control-request-headers"] || "").toLowerCase().split(",").map((header) => header.trim()).filter(Boolean);
@@ -293,6 +294,8 @@ export function createService(
         }
         if (req.method === "GET" && url.pathname.startsWith("/v1/artifacts/")) {
           const [, , , id, variant = "file"] = url.pathname.split("/");
+          if (!["file", "clean", "log"].includes(variant) || url.pathname.split("/").length > 5)
+            throw new DeckError("not-found", "Unknown capture file variant.", 404);
           const a = deck.store.artifact(id);
           if (a.deletedAt)
             throw new DeckError(
@@ -324,17 +327,9 @@ export function createService(
                 ? "video/mp4"
                 : "image/png",
           );
-          const fileName =
-            a.name.replace(/[\x00-\x1f\x7f/\\]/g, "-") +
-            (variant === "clean" ? "-clean" : "") +
-            (variant === "log"
-              ? ".json"
-              : a.kind === "recording"
-                ? ".mp4"
-                : ".png");
           res.setHeader(
             "Content-Disposition",
-            `inline; filename*=UTF-8''${encodeURIComponent(fileName)}`,
+            artifactDisposition(a, variant as "file" | "clean" | "log", url.searchParams.get("download") === "1"),
           );
           res.setHeader("Accept-Ranges", "bytes");
           res.setHeader("Content-Length", end - begin + 1);
