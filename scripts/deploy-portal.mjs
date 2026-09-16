@@ -110,7 +110,7 @@ gcloud(['run', 'deploy', run.serviceId, `--image=${image}`, `--region=${run.regi
 // Firebase CLI accepts a short-lived OAuth access token in this environment
 // variable. It is never passed in argv, printed, or persisted by this script.
 command('npx', ['--yes', 'firebase-tools@15.30.1', 'deploy', '--only', 'hosting,firestore:rules', '--project', project, '--non-interactive'],
-  { env: { FIREBASE_TOKEN: token() } });
+  { env: { FIREBASE_TOKEN: token(), GOOGLE_CLOUD_QUOTA_PROJECT: project } });
 const key = await fetch(`${origin}/api/v1/public-key`, { signal: AbortSignal.timeout(30_000) });
 if (!key.ok || (await key.json()).issuer !== origin) throw new Error('Deployment finished but public-key health verification failed.');
 const unauthenticated = await fetch(`${origin}/api/v1/machines`, { signal: AbortSignal.timeout(30_000) });
