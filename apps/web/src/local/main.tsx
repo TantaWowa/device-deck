@@ -635,7 +635,7 @@ function App() {
             sources={data.sources}
             devices={data.devices}
             launchSimulator={async (device) => {
-              await api("devices.simulator", { deviceId: device.id, action: "launch" }, AbortSignal.timeout(150_000));
+              await api("devices.simulator", { deviceId: device.id, action: "launch" }, AbortSignal.timeout(300_000));
               const latest = await api<Snapshot>("inventory");
               setData(latest);
               return latest;

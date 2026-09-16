@@ -66,7 +66,7 @@ See [API and CLI examples](api.md#live-video-and-touch-operations) and [source p
 
 A read-only check of the running local daemon's UGREEN/Roku USB source delivered 1280×720 video to Chrome at about 13 fps over a four-second loopback sample. No remote input was sent. The result is recorded in `outputs/live-video-qa/usb-readonly-browser-proof.json`; it verifies real USB capture, encoding and browser decoding, but does not measure cross-machine Tailscale latency.
 
-Real Google TV browser validation also covers joining after the initial keyframe on a static screen. Apple TV simulator validation covers launch, decoded 1280×720 video and Home/Right/Home remote input using idb 1.5.9. An iOS simulator that stalled waiting for its system app was shut down; this is not an iOS touch proof. Launch failures now explain that startup has not completed rather than returning an empty command error.
+Real Google TV browser validation also covers joining after the initial keyframe on a static screen. Apple TV, iPhone and Android phone emulator browser validation covers cold launch, automatic feed display, decoded video and Home from the controls-only remote. Apple controls used idb 1.5.9, and the iPhone also accepted a swipe through the lease-protected gesture API. Its first cold boot took almost three minutes, so Apple startup allows four minutes and both browser clients keep the launch request alive for five. Launch failures explain that startup has not completed rather than returning an empty command error. Evidence is saved under `outputs/live-video-qa/real-emulator-workflow.json` and the adjacent screenshots.
 
 ## Repeatable browser validation
 

@@ -164,11 +164,24 @@ async function workspaceCase(viewport, isPortal) {
     console.log(`PASS ${label}: video, controls-only remote, feed gestures, cancellation and session release`);
   } finally { await Promise.all(observed.pending); await page.close(); await cleanup(); }
 }
-async function simulatorCase(isPortal, deviceId, name) {
-  const label = `${isPortal ? "portal" : "local"}-${deviceId}-launch`;
+async function simulatorCase(isPortal, deviceId, name, alreadyRunningWithoutSource = false) {
+  const label = `${isPortal ? "portal" : "local"}-${deviceId}-${alreadyRunningWithoutSource ? "running-unbound" : "launch"}`;
   const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
   const observed = observe(page);
   try {
+    if (alreadyRunningWithoutSource) {
+      await api("devices.simulator", { deviceId, action: "launch" });
+      const current = await api("inventory");
+      assert.ok(!current.sessions.some((session) => session.state !== "closed"));
+      const config = structuredClone(current.config);
+      config.sources = config.sources.filter((source) => source.deviceId !== deviceId);
+      config.devices.find((device) => device.id === deviceId).captureSourceId = null;
+      await api("config.save", { config, revision: current.configRevision });
+      const unbound = await api("inventory");
+      assert.equal(unbound.devices.find((device) => device.id === deviceId).online, true);
+      assert.equal(unbound.devices.find((device) => device.id === deviceId).captureSourceId, null);
+      assert.ok(!unbound.sources.some((source) => source.deviceId === deviceId));
+    }
     await page.goto(isPortal ? portal.url : await ticketUrl());
     if (!isPortal) await page.getByRole("button", { name: "Feeds", exact: true }).click();
     await page.getByRole("button", { name: "Start simulator", exact: true }).click();
@@ -189,7 +202,7 @@ async function simulatorCase(isPortal, deviceId, name) {
     await picture(page, `${label}.png`);
     await endSession(page, feed, isPortal, deviceId);
     assert.deepEqual(observed.errors, []);
-    results.cases.push({ name: label, passed: true, launchedFromChooser: true, automaticallyRevealed: true, nativeSourceProvisioned: true, decodedVideo: true, touchAccepted: true, controls: deviceId === "apple-sim" ? "completed gestures" : "continuous pointer" });
+    results.cases.push({ name: label, passed: true, alreadyRunningWithoutSource, launchedFromChooser: true, automaticallyRevealed: true, nativeSourceProvisioned: true, decodedVideo: true, touchAccepted: true, controls: deviceId === "apple-sim" ? "completed gestures" : "continuous pointer" });
     console.log(`PASS ${label}: launch, reveal, video decode, touch and session release`);
   } finally {
     await Promise.all(observed.pending); await page.close(); await cleanup();
@@ -263,6 +276,7 @@ try {
     await simulatorCase(isPortal, "android-sim", "Synthetic Android emulator");
     await simulatorCase(isPortal, "apple-sim", "Synthetic Apple simulator");
   }
+  await simulatorCase(false, "android-sim", "Synthetic Android emulator", true);
   results.passed = true;
 } catch (error) {
   results.failure = error instanceof Error ? error.stack : String(error);
