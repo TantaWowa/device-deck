@@ -1,4 +1,5 @@
 import { FloatingRemote } from "./FloatingRemote";
+import { browserUUID } from "../../../../packages/ui/src/uuid";
 import { AnchoredPopover } from "./AnchoredPopover";
 import type { PopupAnchor } from "./anchored-popup";
 import { DeviceControls } from "./DeviceControls";
@@ -500,7 +501,7 @@ function App() {
         config.devices.some((d) => d.name.toLowerCase() === name.toLowerCase())
       )
         name = `${source.name.slice(0, 54)} (${suffix++})`;
-      const id = crypto.randomUUID();
+      const id = browserUUID();
       config.devices.push({
         id,
         name,
@@ -1039,9 +1040,13 @@ function App() {
                                 aria-label={`Copy CLI command for ${d.name}`}
                                 onClick={() =>
                                   perform(async () => {
-                                    await navigator.clipboard.writeText(
-                                      `devdeck remote --device '${d.name.replaceAll("'", "'\\''")}'`,
-                                    );
+                                    const command = `devdeck remote --device '${d.name.replaceAll("'", "'\\''")}'`;
+                                    if (!navigator.clipboard?.writeText) {
+                                      setNotice(`Copy this command: ${command}`);
+                                      return;
+                                    }
+                                    try { await navigator.clipboard.writeText(command); }
+                                    catch { throw new Error(`Clipboard unavailable. Copy this command: ${command}`); }
                                     setNotice("CLI command copied.");
                                   })
                                 }
@@ -1374,7 +1379,7 @@ function App() {
                     kind: "usb",
                     uniqueId: card.uniqueId,
                   },
-                  { id: crypto.randomUUID(), name },
+                  { id: browserUUID(), name },
                 ),
               );
               await refreshCards();
@@ -1724,7 +1729,7 @@ function DeviceEditor({
           e.preventDefault();
           setSaving(true);
           try {
-            const id = device?.id || crypto.randomUUID();
+            const id = device?.id || browserUUID();
             const connection: DeviceConfig["connection"] =
               type === "roku"
                 ? { type, host: address, serial: identity }

@@ -13,12 +13,12 @@
   "scripts": {
     "dev": "vite apps/website --host 127.0.0.1 --port 5173 --strictPort",
     "dev:app": "vite apps/web --host 127.0.0.1 --port 5174 --strictPort",
-    "build": "vite build apps/website --outDir ../../dist --emptyOutDir && vite build apps/web --base=/demo/ --outDir ../../dist/demo --emptyOutDir",
+    "build": "vite build apps/website --outDir ../../dist --emptyOutDir && vite build apps/web --base=/demo/ --outDir ../../dist/demo --emptyOutDir && npm run build:portal",
     "check": "tsc --noEmit",
     "qa": "node scripts/qa.mjs",
     "qa:custom-devices": "node --import tsx scripts/qa-custom-devices.ts",
     "screenshots:website": "node scripts/marketing-screenshots.mjs",
-    "test": "node --import tsx --test apps/daemon/src/*.test.ts apps/billing/src/*.test.ts apps/cli/src/*.test.ts apps/tui/src/*.test.ts packages/*/src/*.test.ts",
+    "test": "node --import tsx --test apps/daemon/src/*.test.ts apps/billing/src/*.test.ts apps/cloud/src/*.test.ts apps/portal/src/*.test.ts apps/cli/src/*.test.ts apps/tui/src/*.test.ts packages/*/src/*.test.ts",
     "service": "node --import tsx apps/daemon/src/index.ts",
     "install:dev-cli": "node scripts/install-dev-cli.mjs",
     "service:local": "node --import tsx scripts/service-local.ts",
@@ -41,24 +41,35 @@
     "release:github": "node scripts/release/setup-github.mjs",
     "release:cask": "node --import tsx scripts/release/generate-cask.ts",
     "billing:build": "node apps/billing/build.mjs",
-    "billing:operator": "node --import tsx apps/billing/src/operator.ts"
+    "billing:operator": "node --import tsx apps/billing/src/operator.ts",
+    "build:portal": "vite build apps/portal --base=/app/ --outDir ../../dist/app --emptyOutDir",
+    "build:cloud": "node apps/cloud/build.mjs",
+    "dev:portal": "vite apps/portal --host 127.0.0.1 --port 5175 --strictPort",
+    "cloud:serve": "node --import tsx apps/cloud/src/index.ts",
+    "test:portal": "node --import tsx --test apps/cloud/src/*.test.ts apps/portal/src/*.test.ts packages/machine-client/src/*.test.ts apps/daemon/src/hub-integration.test.ts apps/daemon/src/network.test.ts",
+    "deploy:portal": "node scripts/deploy-portal.mjs",
+    "qa:portal": "node --import tsx scripts/qa-portal.ts",
+    "qa:portal-pwa": "node scripts/qa-portal-pwa.mjs"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.17.5",
+    "firebase": "^12.19.0",
+    "firebase-admin": "^14.4.0",
+    "jose": "^6.2.12",
+    "lucide-react": "^0.468.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
-    "lucide-react": "^0.468.0",
-    "@modelcontextprotocol/sdk": "^1.17.5",
     "zod": "^3.25.76"
   },
   "devDependencies": {
-    "typescript": "^5.9.2",
-    "vite": "^7.1.5",
+    "@playwright/test": "^1.55.0",
+    "@types/node": "^24.3.1",
     "@types/react": "^19.1.12",
     "@types/react-dom": "^19.1.9",
-    "@types/node": "^24.3.1",
-    "tsx": "^4.20.5",
-    "@playwright/test": "^1.55.0",
     "esbuild": "^0.25.9",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.2",
+    "vite": "^7.1.5",
     "zod-to-json-schema": "^3.25.2"
   }
 }

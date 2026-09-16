@@ -109,7 +109,7 @@ Use the CLI to manage this configuration together with Serve. The origin must be
 
 ## HTTP
 
-Read the private `endpoint.json` under `DEVICE_DECK_HOME`, or its default Application Support folder. It supplies the active port and API token. The server always binds loopback; optional Tailscale Serve proxies the configured remote HTTPS origin to this listener.
+Read the private `endpoint.json` under `DEVICE_DECK_HOME`, or its default Application Support folder. It supplies the active port and API token. The server defaults to loopback. `network.host` or `DEVICE_DECK_HOST` enables ordinary IP/port access; optional TLS serves trusted HTTPS. The endpoint file always identifies the native loopback control path. See [remote access](remote-access.md) for configuration and portal pairing.
 
 ```http
 POST /v1/operations/sessions.reserve
@@ -172,7 +172,7 @@ Read routes:
 - `GET /v1/artifacts/ID/clean`: clean original when an annotated export exists.
 - `GET /v1/artifacts/ID/log`: JSON manifest with identity, outcome and recording-relative input timestamps.
 
-Local routes require local authentication except static local UI files and the one-use ticket exchange. Every route accessed through the Tailscale origin requires an allowed user identity from Serve. Browser mutation requests also require `X-Device-Deck: local`. Cross-origin and unexpected-host requests are rejected. No API token is embedded in the public website or local JS bundle.
+Machine routes require authentication except static UI files, public `/v1/machine` identity, the one-use ticket exchange and the code-plus-signed-token pairing exchange. Portal grants authenticate machine API requests; `/v1/hub/pairing-code`, `/v1/hub/unpair` and browser-ticket creation require a native token over loopback. Every route accessed through the Tailscale origin requires an allowed user identity from Serve. Browser mutation requests also require `X-Device-Deck: local`. Unexpected hosts and origins outside the exact configured allow lists are rejected. Allowed portal origins receive CORS responses for scoped bearer requests. No API token is embedded in the public website or local JS bundle.
 
 Errors use an HTTP status and `{error,message,details?}`. Common codes are `no-match`, `ambiguous-match`, `device-reserved`, `source-reserved`, `device-locked`, `invalid-lease`, `stale-lease`, `config-conflict`, `unsupported-capability`, `capture-failed`, and `cleanup-required`. A failed bulk member appears in that member's result rather than pretending the whole selection succeeded.
 

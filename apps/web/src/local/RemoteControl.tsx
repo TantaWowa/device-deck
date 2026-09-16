@@ -33,6 +33,7 @@ import {
   type RemoteTooltip,
 } from "./RemoteKeyTooltip";
 import "./remote-feedback.css";
+import "./mobile-remote.css";
 
 export function RemoteControl({
   device,
@@ -42,6 +43,8 @@ export function RemoteControl({
   sendText,
   wakeEnabled,
   wake,
+  compact = false,
+  preferenceScope,
 }: {
   device: Device;
   enabled: boolean;
@@ -50,15 +53,32 @@ export function RemoteControl({
   sendText: (text: string) => Promise<unknown>;
   wakeEnabled: boolean;
   wake: () => Promise<unknown>;
+  compact?: boolean;
+  preferenceScope?: string;
 }) {
+  const deviceKey = preferenceScope ? `${preferenceScope}:${device.id}` : device.id;
   const [text, setText] = useState("");
+  const [optionsOpen, setOptionsOpen] = useState(false);
   const element = useRef<HTMLElement>(null);
   const tooltipId = useId();
   const [tooltip, setTooltip] = useState<RemoteTooltip | null>(null);
   const [profile, setProfile] = useState<RemoteProfile>(() => {
-    const saved = localStorage.getItem(`deck-remote-style-${device.id}`);
-    return remoteProfiles.find((p) => p === saved) || remoteProfile(device);
+    try {
+      const saved = localStorage.getItem(`deck-remote-style-${deviceKey}`);
+      return remoteProfiles.find((p) => p === saved) || remoteProfile(device);
+    } catch { return remoteProfile(device); }
   });
+  const currentDevice = useRef(deviceKey);
+  currentDevice.current = deviceKey;
+  useEffect(() => {
+    setText("");
+    setTooltip(null);
+    setOptionsOpen(false);
+    try {
+      const saved = localStorage.getItem(`deck-remote-style-${deviceKey}`);
+      setProfile(remoteProfiles.find((p) => p === saved) || remoteProfile(device));
+    } catch { setProfile(remoteProfile(device)); }
+  }, [deviceKey]);
   const canKey = enabled && device.capabilities.includes("key");
   useEffect(() => {
     const dismiss = (event: KeyboardEvent) => {
@@ -77,6 +97,7 @@ export function RemoteControl({
     },
   );
   const showTooltip = (target: EventTarget | null) => {
+    if (matchMedia("(pointer: coarse)").matches) return;
     const button =
       target instanceof Element
         ? target.closest<HTMLButtonElement>("[data-remote-key]")
@@ -132,9 +153,11 @@ export function RemoteControl({
     <section
       ref={element}
       tabIndex={-1}
-      className="remote-component"
+      className={`remote-component ${compact ? "remote-compact" : ""} ${optionsOpen ? "remote-compact-options-open" : ""}`}
       data-keyboard-remote={keyboard}
-      onPointerOverCapture={(event) => showTooltip(event.target)}
+      onPointerOverCapture={(event) => {
+        if (event.pointerType !== "touch") showTooltip(event.target);
+      }}
       onPointerOutCapture={(event) => {
         if (
           !(event.relatedTarget instanceof Node) ||
@@ -153,7 +176,7 @@ export function RemoteControl({
           onChange={(e) => {
             const p = e.target.value as RemoteProfile;
             setProfile(p);
-            localStorage.setItem(`deck-remote-style-${device.id}`, p);
+            try { localStorage.setItem(`deck-remote-style-${deviceKey}`, p); } catch {}
           }}
         >
           {remoteProfiles.map((p) => (
@@ -255,14 +278,20 @@ export function RemoteControl({
             !device.capabilities.includes("text")
           )
             return;
+          const targetDevice = deviceKey;
           const result = await sendText(text);
-          if (result !== false) setText("");
+          if (result !== false && currentDevice.current === targetDevice) setText("");
         }}
       >
         <input
           aria-label={`Text for ${device.name}`}
           placeholder="Type text to send…"
           maxLength={4096}
+          autoComplete="off"
+          autoCapitalize="none"
+          autoCorrect="off"
+          spellCheck={false}
+          enterKeyHint="send"
           value={text}
           onChange={(e) => setText(e.target.value)}
           disabled={!enabled || !device.capabilities.includes("text")}
@@ -276,6 +305,7 @@ export function RemoteControl({
           <Send size={17} />
         </button>
       </form>
+      {compact && <button type="button" className="remote-compact-options-toggle" aria-expanded={optionsOpen} onClick={() => setOptionsOpen((value) => !value)}><Menu size={16} />{optionsOpen ? "Hide remote options" : "Style & keyboard options"}</button>}
       {!device.capabilities.includes("key") && (
         <p className="remote-key-help">
           Remote input needs a connected control adapter. Edit the device to

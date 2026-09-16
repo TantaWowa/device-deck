@@ -105,11 +105,40 @@ export const tailscaleSchema = z
       .refine((users) => new Set(users).size === users.length, "Tailscale logins must be unique."),
   })
   .strict();
+const networkOriginSchema = z.string().refine((value) => {
+  try {
+    const url = new URL(value);
+    return ["http:", "https:"].includes(url.protocol) &&
+      url.origin === value && !url.username && !url.password;
+  } catch { return false; }
+}, "Use an exact HTTP or HTTPS origin, including its port when needed.");
+export const networkSchema = z.object({
+  host: z.string().min(1).max(253).regex(/^[A-Za-z0-9_.:-]+$/).default("127.0.0.1"),
+  allowedHosts: z.array(z.string().min(1).max(260).regex(/^[A-Za-z0-9_.:\[\]-]+$/).refine((value) => {
+    try {
+      const url = new URL(`http://${value}`);
+      return !url.username && !url.password && url.pathname === "/" && !url.search && !url.hash;
+    } catch { return false; }
+  }, "Use a hostname or IP address, optionally with an exact port; wildcards are not supported.")
+    .transform((value) => {
+      const url = new URL(`http://${value}`);
+      const explicitPort = /:(\d+)$/.exec(value)?.[1];
+      return `${url.hostname}${explicitPort ? `:${Number(explicitPort)}` : ""}`;
+    }))
+    .max(128).default([]),
+  allowedOrigins: z.array(networkOriginSchema).max(32).default([]),
+  tls: z.object({ cert: z.string().min(1), key: z.string().min(1) }).strict().optional(),
+  hubOrigin: networkOriginSchema.refine((value) => {
+    const url = new URL(value);
+    return url.protocol === "https:" || ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
+  }, "The portal requires HTTPS; HTTP is allowed only for loopback development.").optional(),
+}).strict();
 export const configSchema = z
   .object({
     schemaVersion: z.literal(1),
     port: z.number().int().min(0).max(65535).default(47831),
     tailscale: tailscaleSchema.optional(),
+    network: networkSchema.optional(),
     devices: z.array(deviceSchema).default([]),
     sources: z.array(sourceSchema).default([]),
     settings: settingsSchema,

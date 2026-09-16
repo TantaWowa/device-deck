@@ -1,10 +1,11 @@
 import path from "node:path";
 import { mkdir, readFile, rm } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
-import { createService } from "./server";
+import { createBrowserCredentials, createService } from "./server";
+import { hostWithPort, MachineAuthority } from "./network";
 import { DeckService } from "./local/service";
 import { dataDirectory } from "../../../packages/core/src/local/paths";
-import { atomicWrite } from "../../../packages/config/src";
+import { atomicWrite, expand } from "../../../packages/config/src";
 import { root } from "../../../packages/adapters/src";
 export async function runDaemon(
   licensing?: import("../../../packages/licensing/src").EntitlementService,
@@ -42,10 +43,22 @@ export async function runDaemon(
     licensing,
   );
   let shutdown: (() => Promise<void>) | undefined;
+  const servers: ReturnType<typeof createService>[] = [];
   try {
     await deck.init();
     const token = randomBytes(32).toString("base64url");
-    const server = createService(deck, token, path.join(root, "build/web"));
+    const network = deck.config.config.network;
+    const bindHost = process.env.DEVICE_DECK_HOST || network?.host || "127.0.0.1";
+    if (!/^[A-Za-z0-9_.:-]+$/.test(bindHost)) throw new Error("Invalid DEVICE_DECK_HOST.");
+    const tls = network?.tls ? {
+      cert: await readFile(expand(network.tls.cert, path.dirname(deck.config.file))),
+      key: await readFile(expand(network.tls.key, path.dirname(deck.config.file))),
+    } : undefined;
+    const authority = new MachineAuthority(directory);
+    await authority.init();
+    const credentials = createBrowserCredentials();
+    const server = createService(deck, token, path.join(root, "build/web"), { bindHost, tls, authority, credentials });
+    servers.push(server);
     const port = Number(
       process.env.DEVICE_DECK_PORT ?? deck.config.config.port,
     );
@@ -53,28 +66,43 @@ export async function runDaemon(
       throw new Error("Invalid DEVICE_DECK_PORT.");
     await new Promise<void>((resolve, reject) => {
       server.once("error", reject);
-      server.listen(port, "127.0.0.1", resolve);
+      server.listen(port, bindHost, resolve);
     });
     const address = server.address() as { port: number };
+    // Preserve a plain HTTP, loopback-only control path for CLI/MCP and key
+    // management when the external listener uses TLS or a specific interface.
+    let control = server;
+    if (tls || !["127.0.0.1", "0.0.0.0"].includes(bindHost)) {
+      control = createService(deck, token, path.join(root, "build/web"), { authority, credentials, networkPort: address.port, bindHost });
+      servers.push(control);
+      await new Promise<void>((resolve, reject) => {
+        control.once("error", reject);
+        control.listen(0, "127.0.0.1", resolve);
+      });
+    }
+    const controlPort = (control.address() as { port: number }).port;
     await atomicWrite(
       path.join(directory, "endpoint.json"),
       JSON.stringify({
-        port: address.port,
+        port: controlPort,
+        networkPort: address.port,
+        networkHost: bindHost,
+        networkProtocol: tls ? "https:" : "http:",
         token,
         pid: process.pid,
         startedAt: Date.now(),
       }),
     );
     console.error(
-      `Device Deck is ready at http://127.0.0.1:${address.port}. Open with devdeck ui.`,
+      `Device Deck is listening at ${tls ? "https" : "http"}://${hostWithPort(bindHost, address.port)}. Local dashboard: http://127.0.0.1:${controlPort}. Open with devdeck ui.`,
     );
     let stopping = false;
     shutdown = async () => {
       if (stopping) return;
       stopping = true;
-      server.close();
+      for (const listener of servers) listener.close();
       await deck.close();
-      server.closeAllConnections();
+      for (const listener of servers) listener.closeAllConnections();
       await rm(path.join(directory, "endpoint.json"), { force: true });
       await rm(lock, { recursive: true, force: true });
     };
@@ -88,6 +116,8 @@ export async function runDaemon(
           });
       });
   } catch (e) {
+    for (const server of servers) { server.close(); server.closeAllConnections(); }
+    await deck.close().catch(() => {});
     await rm(lock, { recursive: true, force: true });
     throw e;
   }

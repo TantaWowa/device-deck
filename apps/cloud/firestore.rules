@@ -1,0 +1,8 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // The authenticated Cloud Run API owns all registry access. Firebase clients
+    // cannot bypass pairing validation or read another account's registry.
+    match /{document=**} { allow read, write: if false; }
+  }
+}

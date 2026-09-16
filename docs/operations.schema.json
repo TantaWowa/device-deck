@@ -123,6 +123,59 @@
             ],
             "additionalProperties": false
           },
+          "network": {
+            "type": "object",
+            "properties": {
+              "host": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 253,
+                "pattern": "^[A-Za-z0-9_.:-]+$",
+                "default": "127.0.0.1"
+              },
+              "allowedHosts": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 260,
+                  "pattern": "^[A-Za-z0-9_.:\\[\\]-]+$"
+                },
+                "maxItems": 128,
+                "default": []
+              },
+              "allowedOrigins": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 32,
+                "default": []
+              },
+              "tls": {
+                "type": "object",
+                "properties": {
+                  "cert": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "key": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "cert",
+                  "key"
+                ],
+                "additionalProperties": false
+              },
+              "hubOrigin": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          },
           "devices": {
             "type": "array",
             "items": {

@@ -1,0 +1,224 @@
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { ArrowLeft, Camera, Check, ExternalLink, Film, Grid2X2, LoaderCircle, Monitor, Radio, RefreshCw, Square, Tv, X } from "lucide-react";
+import { grantSchema, type MachineRecord } from "../../../packages/core/src/hub";
+import type { Artifact, Device, Session, Snapshot } from "../../../packages/core/src/local/types";
+import { createMachineTransport } from "../../../packages/machine-client/src";
+import { RemoteControl } from "../../web/src/local/RemoteControl";
+import { connectionMessage, ControlGate, needsStandalone } from "./model";
+import type { CloudClient } from "./cloud";
+
+type Transport = ReturnType<typeof createMachineTransport>;
+export type Lease = { sessionId: string; leaseToken: string };
+export type LeaseMemory = Map<string, Lease>;
+const time = (value: string | number) => new Date(value).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+
+function BlobPreview({ transport, route, label }: { transport: Transport; route: string; label: string }) {
+  const [url, setUrl] = useState("");
+  const [error, setError] = useState("");
+  const [updated, setUpdated] = useState("");
+  useEffect(() => {
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout>;
+    let objectUrl = "";
+    const update = async () => {
+      if (controller.signal.aborted) return;
+      if (!document.hidden) {
+        try {
+          const blob = await transport.getBlob(route, AbortSignal.any([controller.signal, AbortSignal.timeout(10_000)]));
+          if (!/^image\/(png|jpeg|webp)/.test(blob.type)) throw new Error("The machine returned an unsupported preview.");
+          if (controller.signal.aborted) return;
+          const next = URL.createObjectURL(blob);
+          if (objectUrl) URL.revokeObjectURL(objectUrl);
+          objectUrl = next; setUrl(next); setError(""); setUpdated(new Date().toISOString());
+        } catch (failure) {
+          if (!controller.signal.aborted) setError(connectionMessage(failure));
+        }
+      }
+      if (!controller.signal.aborted) timer = setTimeout(() => void update(), 1400);
+    };
+    void update();
+    return () => { controller.abort(); clearTimeout(timer); if (objectUrl) URL.revokeObjectURL(objectUrl); setUrl(""); };
+  }, [route, transport]);
+  return <div className={`feed-preview ${error ? "feed-interrupted" : ""}`}>
+    {url ? <img src={url} alt={`Live preview of ${label}`} /> : <div className="preview-placeholder"><Monitor size={36} /><span>{error ? "Preview unavailable" : "Connecting to preview…"}</span></div>}
+    <span className={`feed-live-label ${error ? "paused" : ""}`}><i />{error ? "Preview interrupted" : updated ? `Updated ${time(updated)}` : "Connecting"}</span>
+    {error && <p className="feed-error" role="status">{error}</p>}
+  </div>;
+}
+
+function ArtifactViewer({ artifact, transport, onClose }: { artifact: Artifact; transport: Transport; onClose: () => void }) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  const [url, setUrl] = useState("");
+  const [error, setError] = useState("");
+  useEffect(() => {
+    dialog.current?.showModal();
+    const controller = new AbortController();
+    let objectUrl = "";
+    void transport.getBlob(`/v1/artifacts/${encodeURIComponent(artifact.id)}/file`, controller.signal).then((blob) => {
+      if (!controller.signal.aborted) { objectUrl = URL.createObjectURL(blob); setUrl(objectUrl); }
+    }).catch((failure) => { if (!controller.signal.aborted) setError(connectionMessage(failure)); });
+    return () => { controller.abort(); if (objectUrl) URL.revokeObjectURL(objectUrl); };
+  }, [artifact.id, transport]);
+  return <dialog ref={dialog} className="portal-dialog artifact-dialog" onCancel={onClose}><header><h2>{artifact.name}</h2><button className="icon-button" aria-label="Close capture" onClick={onClose}><X /></button></header>{error ? <p className="notice error">{error}</p> : url ? <>{artifact.kind === "screenshot" ? <img src={url} alt={artifact.name} /> : <video src={url} controls playsInline />}<a className="secondary" href={url} download={artifact.name}>Download capture</a></> : <p role="status">Loading capture directly from the machine…</p>}</dialog>;
+}
+
+export function MachineWorkspace({ machine, cloud, owner, leases, onBack }: {
+  machine: MachineRecord; cloud: CloudClient; owner: string; leases: LeaseMemory; onBack: () => void;
+}) {
+  const transport = useMemo(() => createMachineTransport({
+    endpoint: machine.endpoint, expectedMachineId: machine.id, expectedPublicKey: machine.publicKey,
+    getGrant: async () => grantSchema.parse(await cloud(`/machines/${encodeURIComponent(machine.id)}/grant`, { method: "POST", body: {} })),
+  }), [machine.id, machine.endpoint, machine.publicKey.x, cloud]);
+  const [snapshot, setSnapshot] = useState<Snapshot>();
+  const [updatedAt, setUpdatedAt] = useState("");
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const [refreshing, setRefreshing] = useState(false);
+  const [tab, setTab] = useState<"feeds" | "devices" | "captures">("feeds");
+  const [remoteId, setRemoteId] = useState<string>();
+  const [artifact, setArtifact] = useState<Artifact>();
+  const [busy, setBusy] = useState(false);
+  const [mobile, setMobile] = useState(() => matchMedia("(max-width: 640px)").matches);
+  const lifecycle = useRef(new AbortController());
+  const gate = useRef(new ControlGate());
+  const alive = useRef(true);
+  const refreshingRef = useRef(false);
+  const remotePanel = useRef<HTMLElement>(null);
+  const standalone = needsStandalone(machine.endpoint, location.protocol);
+  useEffect(() => {
+    const query = matchMedia("(max-width: 640px)");
+    const changed = () => setMobile(query.matches);
+    query.addEventListener("change", changed);
+    return () => query.removeEventListener("change", changed);
+  }, []);
+  const refresh = async () => {
+    if (standalone || refreshingRef.current || lifecycle.current.signal.aborted) return;
+    refreshingRef.current = true; setRefreshing(true);
+    try {
+      const result = await transport.operation<Snapshot>("inventory", {}, AbortSignal.any([lifecycle.current.signal, AbortSignal.timeout(12_000)]));
+      if (alive.current) {
+        setSnapshot(result); setUpdatedAt(new Date().toISOString()); setError("");
+        for (const device of result.devices) {
+          const key = `${machine.id}:${device.id}`;
+          const lease = leases.get(key);
+          if (lease && !result.sessions.some((session) => session.id === lease.sessionId && session.state !== "closed" && session.expiresAt > Date.now())) leases.delete(key);
+        }
+      }
+    } catch (failure) {
+      gate.current.cancel();
+      if (alive.current) { setBusy(false); setError(connectionMessage(failure)); }
+    }
+    finally { refreshingRef.current = false; if (alive.current) setRefreshing(false); }
+  };
+  useEffect(() => {
+    alive.current = true;
+    lifecycle.current = new AbortController();
+    void refresh();
+    const timer = setInterval(() => { if (!document.hidden) void refresh(); }, 10_000);
+    const cancelControls = () => {
+      gate.current.cancel();
+      setBusy(false);
+      setNotice("Controls paused. Tap again when you are ready to send a new command.");
+    };
+    const visibility = () => { if (document.hidden) cancelControls(); };
+    window.addEventListener("offline", cancelControls);
+    document.addEventListener("visibilitychange", visibility);
+    return () => {
+      alive.current = false; lifecycle.current.abort(); gate.current.cancel(); transport.dispose(); clearInterval(timer);
+      window.removeEventListener("offline", cancelControls); document.removeEventListener("visibilitychange", visibility);
+    };
+  }, [transport]);
+  const selectRemote = (id?: string) => { gate.current.cancel(); setBusy(false); setNotice(""); setRemoteId(id); };
+  useEffect(() => {
+    if (!remoteId) return;
+    const previous = document.activeElement;
+    remotePanel.current?.querySelector<HTMLButtonElement>('button[aria-label="Close remote"]')?.focus();
+    const keydown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !event.defaultPrevented) { event.preventDefault(); selectRemote(); }
+      if (event.key !== "Tab") return;
+      const buttons = [...(remotePanel.current?.querySelectorAll<HTMLElement>('button:not(:disabled),input:not(:disabled),select:not(:disabled),a[href]') || [])].filter((item) => item.getClientRects().length);
+      const first = buttons[0], last = buttons.at(-1);
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+    };
+    document.addEventListener("keydown", keydown);
+    return () => { document.removeEventListener("keydown", keydown); if (previous instanceof HTMLElement && previous.isConnected) previous.focus(); };
+  }, [remoteId]);
+  const device = snapshot?.devices.find((item) => item.id === remoteId);
+  const activeSession = snapshot?.sessions.find((session) => session.deviceId === remoteId && session.state !== "closed" && session.expiresAt > Date.now());
+  const leaseKey = device ? `${machine.id}:${device.id}` : "";
+  const ownLease = leases.get(leaseKey);
+  const occupied = activeSession && activeSession.id !== ownLease?.sessionId;
+  const hasConnection = Boolean(device?.online && !device.locked && !error);
+  const canControl = hasConnection && !occupied;
+  const command = async (action: (signal: AbortSignal, current: () => boolean) => Promise<unknown>) => {
+    if (!navigator.onLine || document.hidden) { setNotice("Controls are paused. Reconnect and return to this page before sending a new command."); return false; }
+    const result = await gate.current.run(async (signal, current) => {
+      setBusy(true); setNotice("");
+      const bounded = AbortSignal.any([signal, AbortSignal.timeout(10_000)]);
+      try {
+        const result = await action(bounded, () => current() && !bounded.aborted);
+        if (result !== false && current() && alive.current) { setNotice("Command sent."); void refresh(); }
+        return result;
+      } catch (failure) {
+        if (current() && alive.current) setNotice(connectionMessage(failure));
+        return false;
+      } finally { if (current() && alive.current) setBusy(false); }
+    });
+    return result === undefined ? false : result;
+  };
+  const withLease = async (signal: AbortSignal, current: () => boolean) => {
+    if (!device) throw new Error("Select a device first.");
+    let lease = leases.get(leaseKey);
+    if (!lease) {
+      const reserved = await transport.operation<{ session: Session; leaseToken: string }>("sessions.reserve", {
+        selector: { device: device.id }, owner, reason: "Device Deck web remote", ttlMinutes: 15,
+      }, signal);
+      if (!current()) throw new DOMException("Cancelled", "AbortError");
+      lease = { sessionId: reserved.session.id, leaseToken: reserved.leaseToken };
+      leases.set(leaseKey, lease);
+    }
+    return lease;
+  };
+  const remoteInput = (input: { key?: string; text?: string }) => command(async (signal, current) => {
+    const lease = await withLease(signal, current);
+    if (!current()) return false;
+    return transport.operation("remote.input", { ...lease, ...input }, signal);
+  });
+  const capture = (operation: "captures.screenshot" | "recordings.start" | "recordings.stop") => command(async (signal, current) => {
+    const lease = await withLease(signal, current);
+    if (!current()) return false;
+    return transport.operation(operation, lease, signal);
+  });
+  const takeover = () => command(async (signal, current) => {
+    if (!device || !window.confirm(`Take over ${device.name} from ${activeSession?.owner}? Any active recording will be finalized.`)) return false;
+    const result = await transport.operation<{ session: Session; leaseToken: string }>("sessions.takeover", { deviceId: device.id, reason: "Take over from Device Deck web remote", owner, confirmed: true }, signal);
+    if (current()) leases.set(leaseKey, { sessionId: result.session.id, leaseToken: result.leaseToken });
+    return result;
+  });
+  const wake = () => command(async (signal) => {
+    if (!device) return false;
+    if (activeSession && !window.confirm(`Wake ${device.name}? It is currently reserved by ${activeSession.owner}.`)) return false;
+    return transport.operation("devices.wake", { deviceId: device.id, ...(activeSession ? { sessionId: activeSession.id, confirmed: true } : {}) }, signal);
+  });
+  const recording = snapshot?.recordings.find((item) => item.deviceId === remoteId);
+  const feeds = snapshot?.sources.map((source) => ({
+    source,
+    device: snapshot.devices.find((item) => item.captureSourceId === source.id),
+    route: source.kind === "usb" ? `/v1/source-preview/${encodeURIComponent(source.id)}` : source.deviceId ? `/v1/preview/${encodeURIComponent(source.deviceId)}` : "",
+  })).filter((feed) => feed.route) || [];
+  return <div className="machine-workspace">
+    <div className="workspace-heading"><button className="secondary back-button" onClick={onBack}><ArrowLeft size={17} />Machines</button><div><h1>{machine.name}</h1><a href={`${machine.endpoint}/`} target="_blank" rel="noreferrer">{machine.endpoint}<ExternalLink size={13} /></a></div><button className="secondary" aria-label="Refresh machine" onClick={() => void refresh()} disabled={refreshing || standalone}><RefreshCw size={17} className={refreshing ? "spin" : ""} /><span>Refresh</span></button></div>
+    {standalone ? <div className="empty-panel"><ExternalLink size={38} /><h2>Open this machine directly</h2><p>This address uses HTTP. Phone browsers and secure pages need trusted HTTPS for embedded feeds and controls.</p><a className="primary" href={`${machine.endpoint}/`} target="_blank" rel="noreferrer">Open standalone <ExternalLink size={16} /></a><p className="field-note">Update its address to trusted HTTPS in Machine settings to use it inside Device Deck.</p></div> : <>
+      <div className="workspace-status"><span className={`status-dot ${error ? "warn" : snapshot ? "good" : ""}`} />{error ? "Connection interrupted" : snapshot ? "Connected directly from this browser" : "Connecting to machine…"}{updatedAt && <span>Last checked {time(updatedAt)}</span>}</div>
+      {error && <div className="notice error" role="alert">{error}<a href={`${machine.endpoint}/`} target="_blank" rel="noreferrer">Open machine address <ExternalLink size={14} /></a></div>}
+      <nav className="workspace-tabs" aria-label="Machine views">{([['feeds', Grid2X2, 'Feeds', feeds.length], ['devices', Tv, 'Devices', snapshot?.devices.length], ['captures', Camera, 'Captures', snapshot?.artifacts.filter((item) => !item.deletedAt && !item.purgedAt).length]] as const).map(([key, Icon, label, count]) => <button key={key} aria-current={tab === key ? "page" : undefined} onClick={() => setTab(key)}><Icon size={18} />{label}<span>{count ?? "—"}</span></button>)}</nav>
+      {!snapshot && !error && <div className="empty-panel" role="status"><LoaderCircle className="spin" size={32} /><p>Loading devices and feeds…</p></div>}
+      {tab === "feeds" && snapshot && (feeds.length ? <div className="feed-grid">{feeds.map(({ source, device: feedDevice, route }) => <article className="feed-card" key={source.id}><BlobPreview transport={transport} route={route} label={source.name} /><footer><div><strong>{source.name}</strong><span>{feedDevice?.name || "Unassigned input"}</span></div>{feedDevice && <button className="secondary" onClick={() => selectRemote(feedDevice.id)}><Radio size={16} />Remote</button>}</footer></article>)}</div> : <div className="empty-panel"><Monitor size={38} /><h2>No feeds configured yet</h2><p>Add devices or capture cards on this machine to see their live screens here.</p><a className="secondary" href={`${machine.endpoint}/`} target="_blank" rel="noreferrer">Open machine setup <ExternalLink size={15} /></a></div>)}
+      {tab === "devices" && snapshot && <div className="device-grid">{snapshot.devices.length ? snapshot.devices.map((item) => { const session = snapshot.sessions.find((entry) => entry.deviceId === item.id && entry.state !== "closed"); return <article className="device-card" key={item.id}><div className="device-card-top"><span className="machine-icon"><Tv size={25} /></span><span className={`pill ${item.online ? "good" : "muted"}`}>{item.locked ? "Locked" : item.online ? "Online" : "Offline"}</span></div><h2>{item.name}</h2><p>{item.platform} · {item.kind}</p><small>{session ? `Reserved by ${session.owner}` : item.healthDetail || "Available"}</small><button className="primary" onClick={() => selectRemote(item.id)}><Radio size={17} />Open remote</button></article>; }) : <div className="empty-panel"><Tv size={38} /><h2>No devices configured</h2><p>Discover or add devices from the machine's standalone dashboard.</p></div>}</div>}
+      {tab === "captures" && snapshot && <div className="capture-list">{snapshot.artifacts.filter((item) => !item.deletedAt && !item.purgedAt).length ? snapshot.artifacts.filter((item) => !item.deletedAt && !item.purgedAt).sort((a, b) => b.createdAt - a.createdAt).map((item) => <article key={item.id}><span className="machine-icon">{item.kind === "screenshot" ? <Camera /> : <Film />}</span><div><strong>{item.name}</strong><small>{new Date(item.createdAt).toLocaleString()} · {item.status}</small></div><button className="secondary" disabled={!['completed', 'interrupted'].includes(item.status)} onClick={() => setArtifact(item)}>View</button></article>) : <div className="empty-panel"><Camera size={38} /><h2>Your captures will appear here</h2><p>Open a device remote to take a screenshot or start a recording.</p></div>}</div>}
+    </>}
+    {device && <><button className="remote-backdrop" aria-label="Close remote" onClick={() => selectRemote()} /><aside ref={remotePanel} className="portal-remote-sheet" role="dialog" aria-modal="true" aria-label={`Remote for ${device.name}`}><header><div><span className="eyebrow">REMOTE CONTROL</span><h2>{device.name}</h2></div><button className="icon-button" aria-label="Close remote" onClick={() => selectRemote()}><X /></button></header><div className="portal-remote-content">{mobile && device.capabilities.includes("preview") && <div className="portal-remote-preview"><BlobPreview transport={transport} route={`/v1/preview/${encodeURIComponent(device.id)}`} label={device.name} /></div>}<p className="remote-session-label">{occupied ? `Reserved by ${activeSession.owner}` : ownLease ? `Your session · ${recording ? "recording" : "ready"}` : "First command reserves this device for 15 minutes."}</p>{occupied && <button className="secondary full-width" disabled={busy} onClick={() => void takeover()}>Take over control</button>}<RemoteControl key={device.id} preferenceScope={machine.id} compact={mobile} device={device} enabled={Boolean(canControl)} busy={busy} sendKey={(key) => remoteInput({ key })} sendText={(text) => remoteInput({ text })} wakeEnabled={!device.locked && !error} wake={wake} /><div className="portal-capture-actions"><button className="secondary" disabled={!canControl || busy || !device.capabilities.includes("screenshot")} onClick={() => void capture("captures.screenshot")}><Camera size={17} />Screenshot</button><button className={recording ? "danger" : "secondary"} disabled={!canControl || busy || !device.capabilities.includes("record")} onClick={() => void capture(recording ? "recordings.stop" : "recordings.start")}>{recording ? <Square size={17} /> : <Film size={17} />}{recording ? "Stop recording" : "Record"}</button></div>{ownLease && <button className="text-button full-width" disabled={busy} onClick={() => void command(async (signal, current) => { const result = await transport.operation("sessions.release", ownLease, signal); if (current()) leases.delete(leaseKey); return result; })}>Release my session</button>}{notice && <p className="remote-notice" role="status">{notice === "Command sent." && <Check size={16} />}{notice}</p>}</div></aside></>}
+    {artifact && <ArtifactViewer artifact={artifact} transport={transport} onClose={() => setArtifact(undefined)} />}
+  </div>;
+}
