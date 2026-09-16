@@ -4,6 +4,7 @@ import { GripVertical, Menu, X } from "lucide-react";
 import { clampPopup } from "../../../../packages/ui/src/popup-position";
 import { useAnchoredPopup, type PopupAnchor } from "./anchored-popup";
 import "./anchored-popup.css";
+import "./mobile-remote.css";
 export function FloatingRemote({
   title,
   initialMenu = false,
@@ -24,6 +25,13 @@ export function FloatingRemote({
     setMenu: (open: boolean) => void,
   ) => React.ReactNode;
 }) {
+  const [mobile, setMobile] = useState(() => matchMedia("(max-width: 640px)").matches);
+  useEffect(() => {
+    const query = matchMedia("(max-width: 640px)");
+    const changed = () => setMobile(query.matches);
+    query.addEventListener("change", changed);
+    return () => query.removeEventListener("change", changed);
+  }, []);
   const saved = useRef<{
     width?: number;
     height?: number;
@@ -98,6 +106,7 @@ export function FloatingRemote({
     } catch {}
   }, [size, storageKey]);
   useEffect(() => {
+    if (mobile) return;
     const observer = new ResizeObserver(() => {
       if (!panel.current) return;
       const { width, height } = panel.current.getBoundingClientRect();
@@ -109,7 +118,7 @@ export function FloatingRemote({
     });
     if (panel.current) observer.observe(panel.current);
     return () => observer.disconnect();
-  }, [host]);
+  }, [host, mobile]);
   return createPortal(
     <div
       ref={panel}
@@ -117,6 +126,7 @@ export function FloatingRemote({
       tabIndex={-1}
       aria-label={`Remote for ${title}`}
       className={`floating-remote anchored-remote ${menu ? "options-open" : ""}`}
+      data-mobile-sheet={mobile}
       style={{
         left: position.x,
         top: position.y,
@@ -127,6 +137,7 @@ export function FloatingRemote({
       <header
         className="floating-remote-bar"
         onPointerDown={(e) => {
+          if (mobile) return;
           if ((e.target as HTMLElement).closest("button")) return;
           e.preventDefault();
           detach();

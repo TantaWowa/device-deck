@@ -150,7 +150,7 @@ Set absolute `tools.adb`, `tools.idb` and `tools.python` paths in Settings when 
 
 ## Configuration and local access
 
-By default, runtime files live under `~/Library/Application Support/Device Deck/`. `DEVICE_DECK_HOME` changes that directory. `DEVICE_DECK_CONFIG` can select a different configuration file, and `DEVICE_DECK_PORT` overrides the configured port. Port zero requests an available port. Port changes apply after the daemon restarts.
+By default, runtime files live under `~/Library/Application Support/Device Deck/`. `DEVICE_DECK_HOME` changes that directory. `DEVICE_DECK_CONFIG` can select a different configuration file, and `DEVICE_DECK_PORT` overrides the configured port. `DEVICE_DECK_HOST` overrides the listening address (loopback by default). Port zero requests an available port. Port changes apply after the daemon restarts.
 
 - `config.json`: editable, versioned operator settings. Relative capture folders resolve beside this file.
 - `state.sqlite`: transactional reservations, locks, capture metadata and event history.
@@ -163,12 +163,19 @@ Configuration saves serialize the revision check and atomic rename. Invalid exte
 
 Captures use a shared local output folder. Renaming changes library metadata while retaining file identity. Trash is reversible and retains files. **Delete files permanently** removes the selected trashed captures, clean originals and sidecars. Disabling input logging prevents new keys and text from entering SQLite or manifests; existing logs remain.
 
+## Remote machines and the web portal
+
+Use `devdeck network enable --host 0.0.0.0 --port 47831` for ordinary IP/port access through your own network. The new `/app/` PWA provides Google and email/password login, a private machine list, direct feeds and phone-friendly remotes. [Remote access and deployment](docs/remote-access.md) explains launch links, pairing, HTTPS and deployment to the existing Firebase project.
+
 ## Workspace
 
 | Location            | Purpose                                              |
 | ------------------- | ---------------------------------------------------- |
 | `apps/website`      | Public marketing website                             |
 | `apps/web`          | Isolated public demo and real local web entry        |
+| `apps/portal`       | Signed-in machine registry PWA and mobile remotes     |
+| `apps/cloud`        | Firebase-authenticated Cloud Run registry API         |
+| `packages/machine-client` | Direct browser-to-machine transport and grants |
 | `apps/daemon`       | HTTP server and application service                  |
 | `apps/cli`          | Scriptable commands and interactive picker           |
 | `apps/tui`          | Separate terminal UI                                 |
@@ -206,11 +213,12 @@ npm test
 npm run schema
 npm run build:local
 npm run package:local
-npm run build           # Public website plus isolated /demo/
+npm run build           # Website, isolated /demo/, and /app/ PWA
+npm run build:cloud     # Cloud Run registry API
 npm run dev             # Marketing site on 5173
 npm run dev:app         # Public demo on 5174
 ```
 
-The static Firebase preview remains in the existing `tantawowa-device-deck` project. Only `dist/` is hosted. Never deploy the local `build/`, runtime directory, capture files or private endpoint credentials to Firebase. The separate [billing service](apps/billing/README.md) has its own deployment and secrets.
+The Firebase website and portal use the existing `tantawowa-device-deck` project. Only `dist/` is hosted; the authenticated registry API runs separately on Cloud Run. Never deploy the local `build/`, runtime directory, capture files or private endpoint credentials to Firebase. The separate [billing service](apps/billing/README.md) has its own deployment and secrets.
 
 Copyright 2026 TantaWowa. All rights reserved. Dependency licenses are included in the release's `THIRD_PARTY_NOTICES.txt`.

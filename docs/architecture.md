@@ -30,13 +30,17 @@ Report requests resolve calendar dates in the daemon Mac timezone. A shared aggr
 
 ## Browser and API access
 
-The server binds `127.0.0.1`. A private endpoint file contains its port, PID and API token. CLI and MCP read that file. A local command obtains a one-use browser ticket; the browser exchanges it for an HttpOnly SameSite cookie. Host/Origin checks, a required custom mutation header and JSON-only request bodies protect browser access.
+The server defaults to `127.0.0.1`. Optional `network.host` (or `DEVICE_DECK_HOST`) binds an ordinary IP or all interfaces, with optional TLS and explicit Host/Origin allow lists. A private endpoint file contains its port, PID and API token. CLI and MCP read that file. A local command obtains a one-use browser ticket; the browser exchanges it for an HttpOnly SameSite cookie. Host/Origin checks, a required custom mutation header and JSON-only request bodies protect browser access.
 
 Optional Tailscale access uses Serve as an HTTPS reverse proxy to that loopback listener. `devdeck tailscale enable` records one canonical HTTPS `ts.net` origin and an explicit allow list of Tailscale user login names in the optional `tailscale` configuration. The first setup defaults to the host's Tailscale user; subsequent setup preserves saved users and the HTTPS port unless overridden. Serve runs in the background and retains its proxy configuration across restarts. Its backend port must stay fixed; disable access before changing ports, then enable it again. The CLI refuses conflicting or stale Serve routes rather than overwriting them. Disabling revokes Device Deck access first and removes the Serve endpoint only when its hostname and backend still match.
 
 Remote requests must arrive over the local proxy connection for that exact configured origin and contain an allowed Tailscale user identity. The daemon checks this identity on every request; remote access does not use local browser tickets or cookies. Tailscale Serve supplies authenticated identity headers and strips client-supplied versions. Requests without user identity, including tagged source devices and public Funnel traffic, are rejected. Tailnet network policy still controls whether a client can reach Serve. Allowed users receive full Device Deck control, including configuration and capture access.
 
-When Tailscale access is enabled, local processes that can reach the loopback listener are trusted. They can impersonate Serve, including processes run by another OS user; this does not provide per-OS-user isolation. This release also has no per-user Device Deck roles or multi-host coordination. Shared visibility is a label. Enabling Tailscale grants full daemon access to the configured users.
+When Tailscale access is enabled, local processes that can reach the loopback listener are trusted. They can impersonate Serve, including processes run by another OS user; this does not provide per-OS-user isolation. This release has no per-device user roles; the separate portal provides an account-owned machine registry. Shared visibility is a label. Enabling Tailscale grants full daemon access to the configured users.
+
+## Cloud portal
+
+The `/app/` PWA uses Firebase Auth and the Cloud Run registry in `apps/cloud`. Firestore stores account-owned machine addresses and public identities. Pairing requires a one-use code issued locally and a receipt signed by the machine. The host pins the configured portal key and validates separate 60-second, machine-scoped grants. Firebase ID tokens never go to machines. The cloud does not probe, proxy or tunnel machine traffic; feeds, artifacts and commands travel directly between browser and daemon. Stable machine IDs and in-memory grants isolate clients on machine switches. See [remote access](remote-access.md) for deployment, browser HTTPS requirements and revocation bounds.
 
 ## Licensing
 
@@ -44,4 +48,4 @@ When Tailscale access is enabled, local processes that can reach the loopback li
 
 ## Distribution
 
-The local build bundles the Node entry points and browser assets, plus the Mac helper for the build architecture. The package runs without source checkouts or npm at runtime, using Node 24 and the configured external platform tools. A per-user launchd job runs the daemon at login. The independent website build produces only static marketing and demo assets for the existing Firebase preview.
+The local build bundles the Node entry points and browser assets, plus the Mac helper for the build architecture. The package runs without source checkouts or npm at runtime, using Node 24 and the configured external platform tools. A per-user launchd job runs the daemon at login. The independent website build produces marketing, demo and portal assets for Firebase Hosting. The cloud registry is built and deployed separately; local daemon bundles contain no cloud credentials.

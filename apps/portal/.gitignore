@@ -1,0 +1,2 @@
+# Public web configuration is supplied per environment; do not commit a local fixture.
+/public/firebase-config.json

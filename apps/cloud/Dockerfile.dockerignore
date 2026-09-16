@@ -1,0 +1,13 @@
+**
+!package.json
+!package-lock.json
+!apps
+!apps/cloud
+!apps/cloud/package.json
+!apps/cloud/build.mjs
+!apps/cloud/src
+!apps/cloud/src/**
+!packages
+!packages/core
+!packages/core/src
+!packages/core/src/hub.ts

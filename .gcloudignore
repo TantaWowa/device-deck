@@ -1,0 +1,17 @@
+# Upload only cloud build inputs, never a machine's runtime or configuration.
+**
+!/package.json
+!/package-lock.json
+!apps/
+!apps/cloud/
+!apps/cloud/package.json
+!apps/cloud/build.mjs
+!apps/cloud/Dockerfile
+!apps/cloud/Dockerfile.dockerignore
+!apps/cloud/cloudbuild.yaml
+!apps/cloud/src/
+!apps/cloud/src/**
+!packages/
+!packages/core/
+!packages/core/src/
+!packages/core/src/hub.ts

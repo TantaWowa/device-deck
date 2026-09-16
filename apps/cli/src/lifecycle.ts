@@ -30,8 +30,8 @@ export function packagedApplication() {
 }
 function applicationArgs(bundle: string, directory: string) {
   return ["-n", "-g", "-a", bundle, "--args", "--service", "--profile", directory,
-    ...["DEVICE_DECK_CONFIG", "DEVICE_DECK_PORT"].flatMap((key) =>
-      process.env[key] ? [key === "DEVICE_DECK_CONFIG" ? "--config" : "--port", process.env[key]!] : []),
+    ...[["DEVICE_DECK_CONFIG", "--config"], ["DEVICE_DECK_PORT", "--port"], ["DEVICE_DECK_HOST", "--host"]].flatMap(([key, flag]) =>
+      process.env[key] ? [flag, process.env[key]!] : []),
   ];
 }
 export async function lifecycle(command: string, launchArgs?: string[]) {
@@ -124,6 +124,7 @@ export async function lifecycle(command: string, launchArgs?: string[]) {
       `<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>Label</key><string>com.tantawowa.device-deck</string><key>ProgramArguments</key><array>${programArguments.map((value) => `<string>${escape(value)}</string>`).join("")}</array><key>RunAtLoad</key><true/><key>EnvironmentVariables</key><dict><key>DEVICE_DECK_HOME</key><string>${escape(directory)}</string><key>PATH</key><string>${escape(pathValue)}</string>${[
         "DEVICE_DECK_CONFIG",
         "DEVICE_DECK_PORT",
+        "DEVICE_DECK_HOST",
       ]
         .filter((key) => process.env[key])
         .map(

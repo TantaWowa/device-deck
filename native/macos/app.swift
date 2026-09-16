@@ -18,7 +18,7 @@ final class DeviceDeckApp: NSObject, NSApplicationDelegate {
             showError("Device Deck must run as your Mac user, never as root.")
             return
         }
-        for (flag, key) in [("--profile", "DEVICE_DECK_HOME"), ("--config", "DEVICE_DECK_CONFIG"), ("--port", "DEVICE_DECK_PORT")] {
+        for (flag, key) in [("--profile", "DEVICE_DECK_HOME"), ("--config", "DEVICE_DECK_CONFIG"), ("--port", "DEVICE_DECK_PORT"), ("--host", "DEVICE_DECK_HOST")] {
             if let index = arguments.firstIndex(of: flag), arguments.count > index + 1 {
                 environment[key] = arguments[index + 1]
             }

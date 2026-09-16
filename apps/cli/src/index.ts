@@ -27,6 +27,7 @@ import { root } from "../../../packages/adapters/src";
 import path from "node:path";
 import { lifecycle } from "./lifecycle";
 import { tailscaleCommand, tailscaleBrowserUrl } from "./tailscale";
+import { networkCommand, pairCommand } from "./network";
 import { pick, parseSelector } from "./selection";
 import { selectFeeds, feedQuery } from "./feeds";
 import { checkMacUpdates, compareVersions, downloadMacUpdate } from "../../../packages/installer/src/mac-update";
@@ -43,7 +44,11 @@ Usage: devdeck <command> [options]
   update check|download        Find/download a verified Mac installer
        [--channel beta|stable] [--key-file FILE] [--output DIRECTORY]
   ui | tui | mcp               Open the dashboard, terminal UI or MCP server
-  ui [--tailscale] [--json]    Open the dashboard or print its URL as JSON
+  ui [--address URL|--tailscale] [--json]  Open the dashboard or print its login URL
+  network enable|status|disable Configure ordinary IP/port access
+       [--host 0.0.0.0] [--port PORT] [--allow-host HOST,HOST]
+       [--allow-origin URL,URL] [--portal URL] [--cert FILE --key FILE]
+  pair [--revoke]               Issue a local portal pairing code or revoke access
   tailscale enable|status|disable  Manage private HTTPS access over Tailscale
        [--allow-user LOGIN,LOGIN] [--https-port PORT]
   discover                     Find connected targets and capture cards
@@ -104,9 +109,16 @@ const optionTypes: Record<string, { type: "string" | "boolean" }> =
       "output",
       "allow-user",
       "https-port",
+      "host",
+      "port",
+      "allow-host",
+      "allow-origin",
+      "portal",
+      "cert",
+      "address",
     ].map((k) => [k, { type: "string" }]),
   );
-for (const key of ["json", "help", "clipboard", "yes", "mux", "browser", "version", "tailscale"])
+for (const key of ["json", "help", "clipboard", "yes", "mux", "browser", "version", "tailscale", "revoke"])
   optionTypes[key] = { type: "boolean" };
 try {
   const { values: v, positionals: p } = parseArgs({
@@ -175,6 +187,18 @@ try {
       const store = new ConfigStore(path.join(dataDirectory(), "config.json"));
       await store.load();
       result = { file: store.file, config: store.config };
+    } else if (command === "network") {
+      result = await networkCommand(p[1] || "status", {
+        ...(v.host !== undefined ? { host: String(v.host) } : {}),
+        ...(v.port !== undefined ? { port: String(v.port) } : {}),
+        ...(v["allow-host"] !== undefined ? { allowHost: String(v["allow-host"]) } : {}),
+        ...(v["allow-origin"] !== undefined ? { allowOrigin: String(v["allow-origin"]) } : {}),
+        ...(v.portal !== undefined ? { portal: String(v.portal) } : {}),
+        ...(v.cert !== undefined ? { cert: String(v.cert) } : {}),
+        ...(v.key !== undefined ? { key: String(v.key) } : {}),
+      });
+    } else if (command === "pair") {
+      result = await pairCommand(Boolean(v.revoke));
     } else if (command === "tailscale") {
       const action = p[1] || "status";
       const access = await tailscaleCommand(action, {
@@ -184,11 +208,12 @@ try {
       if (action === "status" && !access.healthy) process.exitCode = 1;
       result = access;
     } else if (command === "ui") {
-      const url = v.tailscale ? await tailscaleBrowserUrl() : await browserUrl();
+      if (v.tailscale && v.address) throw new DeckError("arguments", "Use --address or --tailscale, not both.");
+      const url = v.tailscale ? await tailscaleBrowserUrl() : await browserUrl(undefined, v.address ? String(v.address) : undefined);
       if (v.json) result = { url };
       else {
         spawn("/usr/bin/open", [url], { stdio: "ignore" });
-        result = `Opened ${v.tailscale ? "Tailscale" : "local"} dashboard.`;
+        result = `Opened ${v.tailscale ? "Tailscale" : v.address ? "network" : "local"} dashboard.`;
       }
     } else if (command === "feeds" || command === "view") {
       const cards = await callOperation("capture-cards.list");

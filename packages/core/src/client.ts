@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { DeckError, type Operation } from "./local/types";
 import { dataDirectory } from "./local/paths";
+import { endpointSchema } from "./hub";
 export async function endpoint() {
   return validateEndpoint(JSON.parse(
     await readFile(path.join(dataDirectory(), "endpoint.json"), "utf8"),
@@ -63,19 +64,23 @@ export async function callService(route: "health" | "inventory") {
   if (!res.ok) throw new Error(`Device Deck returned ${res.status}`);
   return res.json();
 }
-export async function browserUrl(query?: URLSearchParams) {
+export async function browserUrl(query?: URLSearchParams, address?: string) {
   const ep = await endpoint();
+  const origin = address ? endpointSchema.parse(address) : ep.url;
   const res = await fetch(`${ep.url}/v1/browser-ticket`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${ep.token}`,
       "Content-Type": "application/json",
     },
-    body: "{}",
+    body: JSON.stringify(address ? { address: origin } : {}),
     signal: AbortSignal.timeout(3000),
     redirect: "error",
   });
-  if (!res.ok) throw new Error("Unable to open local dashboard.");
+  if (!res.ok) {
+    const body = await res.json();
+    throw new Error(body.message || "Unable to open dashboard.");
+  }
   const { ticket } = await res.json();
-  return `${ep.url}/${query?.size ? `?${query}` : ""}#ticket=${ticket}`;
+  return `${origin}/${query?.size ? `?${query}` : ""}#ticket=${ticket}`;
 }

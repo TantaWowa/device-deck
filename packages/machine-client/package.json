@@ -1,0 +1,6 @@
+{
+  "name": "@device-deck/machine-client",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts"
+}

@@ -1,0 +1,15 @@
+{
+  "id": "/app/",
+  "name": "Device Deck",
+  "short_name": "Device Deck",
+  "description": "Your machines, live feeds and remotes.",
+  "start_url": "/app/",
+  "scope": "/app/",
+  "display": "standalone",
+  "background_color": "#f4f6f1",
+  "theme_color": "#132c27",
+  "icons": [
+    { "src": "/app/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/app/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
