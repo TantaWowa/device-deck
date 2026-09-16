@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events";
 import { performance } from "node:perf_hooks";
 import { videoProfiles, type H264Frame, type LiveVideoSource, type VideoProfile } from "../../core/src/live";
+import { H264GopBuffer } from "../../core/src/h264-bootstrap";
 import { start, stop, type ProcessHandle } from "../../adapters/src/process";
 import { annexB, H264AccessUnitParser, h264Keyframe, h264Nals } from "./h264";
 
@@ -46,6 +47,9 @@ class ImageVideoEncoder implements LiveVideoSource {
   private closing?: Promise<void>;
   private ready = false;
   private parameters?: Buffer;
+  private readonly bootstrap = new H264GopBuffer();
+  private detachSourceClose?: () => void;
+  private finishAttempt?: (reason: string) => void;
   constructor(private ffmpeg: string, private input: ImageVideoInput, private profile: VideoProfile) {
     const size = imageSize(input.first), settings = videoProfiles[profile];
     this.inputSize = size;
@@ -66,9 +70,17 @@ class ImageVideoEncoder implements LiveVideoSource {
   async start() {
     const encoders = process.platform === "darwin" ? ["h264_videotoolbox", "libx264"] : ["libx264"];
     let error: unknown;
+    // Keep monitoring the source while a failed encoder is stopping, too. A
+    // capture close in that gap must not be hidden by priming its replacement.
+    this.detachSourceClose = this.input.onClose((reason) => {
+      this.stopped = reason;
+      this.finishAttempt?.(reason);
+    });
     for (const encoder of encoders) {
+      if (this.stopped) { error = new Error(this.stopped); break; }
       try {
         await this.attempt(encoder);
+        if (this.stopped) throw new Error(this.stopped);
         this.ready = true;
         return this;
       } catch (e) {
@@ -85,6 +97,8 @@ class ImageVideoEncoder implements LiveVideoSource {
     throw error;
   }
   private attempt(encoder: string) {
+    this.parameters = undefined;
+    this.bootstrap.reset();
     const settings = videoProfiles[this.profile];
     const png = this.input.first[0] === 137;
     const handle = this.handle = start(this.ffmpeg, [
@@ -111,10 +125,13 @@ class ImageVideoEncoder implements LiveVideoSource {
     const parser = new H264AccessUnitParser(), timestamps: bigint[] = [];
     let nextInput = -Infinity, lastTimestamp = 0n, settled = false;
     return new Promise<void>((resolve, reject) => {
+      let primeTimer: ReturnType<typeof setInterval> | undefined;
+      let latestImage = this.input.first;
       const finish = (reason: string) => {
-        if (!settled) { settled = true; clearTimeout(timeout); reject(new Error(reason)); }
+        if (!settled) { settled = true; clearTimeout(timeout); clearInterval(primeTimer); reject(new Error(reason)); }
         else if (this.ready) void this.shutdown(reason);
       };
+      this.finishAttempt = finish;
       // Some hardware encoders buffer multiple frames despite realtime mode.
       // Prefer the bounded, zero-latency software path when that happens.
       const timeout = setTimeout(() => finish(handle.log() || "Live video encoder did not produce a keyframe."), encoder === "h264_videotoolbox" ? 1500 : 5000);
@@ -129,6 +146,7 @@ class ImageVideoEncoder implements LiveVideoSource {
             return;
           }
         } catch (e) { finish((e as Error).message); return; }
+        latestImage = image;
         nextInput = Number.isFinite(nextInput) ? Math.max(nextInput + 1000 / this.fps, now) : now + 1000 / this.fps;
         timestamps.push(BigInt(Math.round(now * 1000)));
         // image2pipe buffers 4096 bytes before yielding, stalling tiny/static
@@ -149,23 +167,31 @@ class ImageVideoEncoder implements LiveVideoSource {
             const parameters = h264Nals(data).filter((nal) => [7, 8].includes(nal[0] & 31));
             if (parameters.some((nal) => (nal[0] & 31) === 7) && parameters.some((nal) => (nal[0] & 31) === 8))
               this.parameters = annexB(parameters);
-            if (keyframe && !settled) { settled = true; clearTimeout(timeout); resolve(); }
-            this.events.emit("frame", { data, timestampUs, keyframe } satisfies H264Frame);
+            const frame = { data, timestampUs, keyframe } satisfies H264Frame;
+            this.bootstrap.push(frame);
+            if (keyframe && !settled) { settled = true; clearTimeout(timeout); clearInterval(primeTimer); resolve(); }
+            this.events.emit("frame", frame);
           }
         } catch (e) { finish((e as Error).message); }
       };
       handle.child.stdout.on("data", output);
-      this.detach.push(() => { clearTimeout(timeout); handle.child.stdout.off("data", output); });
-      this.detach.push(this.input.onFrame(send), this.input.onClose(finish));
+      this.detach.push(() => { clearTimeout(timeout); clearInterval(primeTimer); handle.child.stdout.off("data", output); });
+      // Slow native screenshot capture must not stall encoder startup: multipart
+      // decoding and the access-unit parser need a following frame boundary.
+      // Prime PNG only, at its real sampling limit and through the same bounded
+      // input queue. Fresh captures take over entirely once the first IDR arrives.
+      if (png) primeTimer = setInterval(() => { if (!settled) send(latestImage); }, 1000 / this.fps);
+      this.detach.push(this.input.onFrame(send));
       void handle.completed.then(() => finish(handle.log() || "Live video encoder stopped."));
       send(this.input.first);
     });
   }
   onFrame(listener: (frame: H264Frame) => void) {
     this.events.on("frame", listener);
-    // Configuration is safe to replay. Replaying an old IDR while skipping its
-    // dependent frames would corrupt decoding, so viewers await the next IDR.
+    // A late viewer needs the complete current dependency chain, including the
+    // startup IDR when the next native screenshot has not arrived yet.
     if (this.parameters) listener({ data: this.parameters, timestampUs: 0n, keyframe: false });
+    this.bootstrap.replay(listener);
     return () => { this.events.off("frame", listener); };
   }
   onClose(listener: (reason: string) => void) {
@@ -180,9 +206,14 @@ class ImageVideoEncoder implements LiveVideoSource {
   private shutdown(reason: string) {
     return this.closing ??= (async () => {
       this.stopped = reason;
+      this.detachSourceClose?.();
+      this.detachSourceClose = undefined;
+      this.finishAttempt = undefined;
       this.detach.splice(0).forEach((detach) => detach());
       this.events.emit("closed", reason);
       this.events.removeAllListeners();
+      this.parameters = undefined;
+      this.bootstrap.reset();
       if (this.handle) {
         this.handle.child.stdin.end();
         await stop(this.handle);
