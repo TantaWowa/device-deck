@@ -20,7 +20,18 @@ test("input class does not depend on names, online state or installed gesture he
   assert.equal(deviceInputMode({ ...device, inputMode: "remote", connection: { type: "adb", serial: "emulator-5554", port: 5037 } }), "remote");
   assert.equal(deviceInputMode({ ...device, inputMode: "remote", connection: { type: "simulator", os: "ios", udid: "phone" } }), "touch");
   assert.equal(deviceInputMode({ ...device, connection: { type: "simulator", os: "tvos", udid: "tv" } }), "remote");
-  assert.equal(deviceInputMode({ ...device, inputMode: "remote", connection: { type: "apple-device", udid: "iphone" } }), "touch");
+  assert.equal(deviceInputMode({ ...device, connection: { type: "apple-device", udid: "iphone" } }), "touch");
+});
+test("devicectl Apple TVs retain remote classification from metadata or a legacy hardware model without reclassifying phones", () => {
+  const apple = { ...device, name: "Bedroom", platform: "Apple" as const, connection: { type: "apple-device" as const, udid: "physical" } };
+  const namedLikeTv = { ...apple, name: "Apple TV" };
+  assert.equal(deviceInputMode({ ...apple, model: "", inputMode: "remote" }), "remote");
+  for (const model of ["Apple TV 4K (3rd generation)", "AppleTV14,1"])
+    assert.equal(deviceInputMode({ ...apple, model }), "remote");
+  for (const model of ["iPhone 17 Pro Max", "iPhone18,2", "iPad Pro", "iPad16,3"])
+    assert.equal(deviceInputMode({ ...namedLikeTv, model, inputMode: "remote" }), "touch");
+  assert.equal(deviceInputMode({ ...namedLikeTv, model: "" }), "touch");
+  assert.equal(supportsRemoteKey({ ...apple, inputMode: "remote" }, "Home"), false, "device class does not grant a missing Companion input transport");
 });
 test("remote appearance never grants input to a capture-only connection", () => {
   assert.equal(remoteProfile(device), "Fire TV");

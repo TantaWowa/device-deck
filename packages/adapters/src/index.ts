@@ -2,7 +2,7 @@ import { ANDROID_GESTURES, startScrcpy } from "./scrcpy";
 import { androidBootReady, androidFeatures, avdInputMode } from "./android-state";
 import { IOS_GESTURES, startIdbInteractive } from "./interactive";
 import type { InteractiveSource, VideoProfile } from "../../core/src/live";
-import { androidKeys, rokuKeys, hidKeys } from "../../core/src/remote";
+import { androidKeys, rokuKeys, hidKeys, deviceInputMode } from "../../core/src/remote";
 import { controlSimulator, simulatorState, wakeSimulator } from "./simulator";
 import { AndroidEmulators, isAndroidEmulator } from "./android-emulator";
 import {
@@ -43,6 +43,16 @@ export type Discovery = {
   sources: SourceConfig[];
   diagnostics: string[];
 };
+export function appleHardwareInputMode(hardware: {
+  platform?: string;
+  deviceType?: string;
+  productType?: string;
+  marketingName?: string;
+} = {}): "touch" | "remote" {
+  if (hardware.platform?.toLowerCase() === "tvos" || hardware.deviceType?.toLowerCase() === "appletv" || /^AppleTV\d/i.test(hardware.productType || "")) return "remote";
+  if (hardware.platform?.toLowerCase() === "ios" || /^(?:iphone|ipad|ipod)$/i.test(hardware.deviceType || "")) return "touch";
+  return deviceInputMode({ connection: { type: "apple-device", udid: "metadata" }, model: hardware.marketingName || hardware.productType || "" }) === "remote" ? "remote" : "touch";
+}
 export class Adapters {
   readonly emulators: AndroidEmulators;
   private inputModes = new Map<string, "touch" | "remote">();
@@ -257,7 +267,7 @@ export class Adapters {
         const dir = await mkdtemp(path.join(os.tmpdir(), "deck-discovery-"));
         try {
           const file = path.join(dir, "devices.json");
-          await run("xcrun", [
+          await this.execute("xcrun", [
             "devicectl",
             "list",
             "devices",
@@ -270,7 +280,8 @@ export class Adapters {
             devices.push({
               id: uid("apple", d.identifier),
               name: d.deviceProperties?.name || "Apple device",
-              model: d.hardwareProperties?.marketingName || "",
+              model: d.hardwareProperties?.marketingName || d.hardwareProperties?.productType || "",
+              inputMode: appleHardwareInputMode(d.hardwareProperties),
               platform: "Apple",
               kind: "physical",
               visibility: "local",
@@ -484,7 +495,7 @@ export class Adapters {
         const dir = await mkdtemp(path.join(os.tmpdir(), "deck-device-"));
         try {
           const file = path.join(dir, "d.json");
-          await run("xcrun", [
+          await this.execute("xcrun", [
             "devicectl",
             "list",
             "devices",
@@ -494,16 +505,16 @@ export class Adapters {
           ]);
           const list =
             JSON.parse(await readFile(file, "utf8")).result?.devices || [];
-          result.online = list.some(
-            (x: any) =>
-              x.identifier === c.udid &&
-              ["connected", "available"].includes(
-                x.connectionProperties?.tunnelState ||
-                  x.deviceProperties?.connectionState,
-              ),
-          );
+          const found = list.find((x: any) => x.identifier === c.udid);
+          result.online = Boolean(found && ["connected", "available"].includes(found.connectionProperties?.tunnelState || found.deviceProperties?.connectionState));
+          if (found?.hardwareProperties) {
+            result.inputMode = appleHardwareInputMode(found.hardwareProperties);
+            result.model = found.hardwareProperties.marketingName || found.hardwareProperties.productType || result.model;
+          }
           result.healthDetail =
-            "Touch input on physical iPhones and iPads is not supported by this adapter. A connected USB capture feed is view-only; use an iOS simulator for touch control.";
+            deviceInputMode(result) === "remote"
+              ? "This Apple TV was discovered by Xcode. Configure and pair an Apple TV Companion connection for remote input. A connected USB capture feed is view-only."
+              : "Touch input on physical iPhones and iPads is not supported by this adapter. A connected USB capture feed is view-only; use an iOS simulator for touch control.";
         } finally {
           await rm(dir, { recursive: true, force: true });
         }

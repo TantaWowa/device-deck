@@ -1,10 +1,16 @@
 import type { DeviceConfig } from "./local/types";
 
 /** Device class survives offline states and missing input helpers. */
-export function deviceInputMode(d: Pick<DeviceConfig, "connection" | "inputMode">): "touch" | "remote" | "none" {
+export function deviceInputMode(d: Pick<DeviceConfig, "connection" | "inputMode"> & Partial<Pick<DeviceConfig, "model">>): "touch" | "remote" | "none" {
   switch (d.connection.type) {
     case "simulator": return d.connection.os === "ios" ? "touch" : "remote";
-    case "apple-device": return "touch";
+    case "apple-device": {
+      // Older devicectl discoveries have no inputMode. Its hardware model is
+      // trustworthy classification metadata; the user's device name is not.
+      if (/^Apple\s?TV(?:\b|\d)/i.test(d.model || "")) return "remote";
+      if (/^(?:iPhone|iPad|iPod)(?:\b|\d)/i.test(d.model || "")) return "touch";
+      return d.inputMode || "touch";
+    }
     case "roku":
     case "apple-tv": return "remote";
     case "adb": return d.inputMode || "touch";
