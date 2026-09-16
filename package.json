@@ -13,6 +13,7 @@
   "scripts": {
     "qa:live-video": "node scripts/qa-live-video.mjs",
     "qa:touch-feedback": "node scripts/qa-touch-feedback.mjs",
+    "qa:ios-video": "node --import tsx scripts/qa-ios-native-video.mjs",
     "qa:captures": "node scripts/qa-captures.mjs",
     "qa:portal-captures": "node scripts/qa-portal-captures.mjs",
     "dev": "vite apps/website --host 127.0.0.1 --port 5173 --strictPort",

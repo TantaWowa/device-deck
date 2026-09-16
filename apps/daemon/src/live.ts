@@ -123,7 +123,14 @@ export class LiveStreams {
         await own(acquired.release);
         input = acquired.source;
       }
-      const source = input && target.device?.connection.type === "adb" ? input : await this.backend.video(target, args.profile);
+      // A touchscreen controller must see its actual native display, even if a
+      // view-only feed has an external USB source assigned to the same device.
+      const nativeIosControl = args.control && target.device?.connection.type === "simulator" && target.device.connection.os === "ios";
+      const videoTarget = nativeIosControl ? { ...target, source: {
+        id: target.source?.kind === "native" ? target.source.id : `native-control-${target.device!.id}`,
+        name: `${target.device!.name} native screen`, kind: "native" as const, deviceId: target.device!.id,
+      } } : target;
+      const source = input && target.device?.connection.type === "adb" ? input : await this.backend.video(videoTarget, args.profile);
       entry.source = source;
       if (source !== input) await own(() => source.close());
       await validate();

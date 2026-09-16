@@ -4,6 +4,7 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import type { H264Frame, LiveVideoSource, VideoProfile } from "../../core/src/live";
 import { encodeLiveImages, type ImageVideoInput } from "./video";
+import { startIosSimulatorVideo } from "./ios-video";
 export { H264Packetizer } from "./h264";
 import {
   type DeviceConfig,
@@ -188,12 +189,15 @@ export class CaptureEngine {
     };
   }
   async live(d: DeviceConfig | null, s: SourceConfig, profile: VideoProfile = "balanced"): Promise<LiveVideoSource> {
-    const key = `${s.kind}:${s.uniqueId ?? d?.id ?? s.id}:${profile}`;
+    const nativeIos = s.kind === "native" && d?.connection.type === "simulator" && d.connection.os === "ios";
+    const key = `${s.kind}:${s.uniqueId ?? d?.id ?? s.id}:${profile}${nativeIos ? `:${JSON.stringify(d.connection)}:${this.adapters.tool("idb")}:${this.adapters.tool("ffmpeg")}` : ""}`;
     let shared = this.liveStreams.get(key);
     if (!shared) {
       shared = {
         sourceId: s.id, users: 0, closed: false,
-        source: this.liveInput(d, s).then((input) => encodeLiveImages(this.adapters.tool("ffmpeg"), input, profile)),
+        source: nativeIos
+          ? startIosSimulatorVideo(d, this.adapters.tool("idb"), this.adapters.tool("ffmpeg"), profile)
+          : this.liveInput(d, s).then((input) => encodeLiveImages(this.adapters.tool("ffmpeg"), input, profile)),
       };
       this.liveStreams.set(key, shared);
       const entry = shared;
@@ -225,7 +229,7 @@ export class CaptureEngine {
       return detach;
     };
     return {
-      width: video.width, height: video.height, fps: video.fps,
+      get width() { return video.width; }, get height() { return video.height; }, get fps() { return video.fps; },
       onFrame: (listener) => subscribe<H264Frame>((fn) => video.onFrame(fn), listener),
       onClose: (listener) => subscribe<string>((fn) => video.onClose(fn), listener),
       close: async () => {

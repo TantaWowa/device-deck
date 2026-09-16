@@ -194,7 +194,7 @@ Errors use an HTTP status and `{error,message,details?}`. Common codes are `no-m
 
 ## Live video and touch operations
 
-`streams.open` accepts exactly one of `deviceId` or `sourceId`, a complete browser SDP `offer`, and an optional `profile` (`low`, `balanced`, or `high`; default `balanced`). Set `control:true` only with `deviceId`, `sessionId` and its `leaseToken`. View-only streams do not require a reservation. The response is `{id, token, answer, capabilities, width, height, mode}`; `mode` is `live` or `snapshots` for the simulator's limited-refresh source. Keep the stream token private.
+`streams.open` accepts exactly one of `deviceId` or `sourceId`, a complete browser SDP `offer`, and an optional `profile` (`low`, `balanced`, or `high`; default `balanced`). Set `control:true` only with `deviceId`, `sessionId` and its `leaseToken`. View-only streams do not require a reservation. The response is `{id, token, answer, capabilities, width, height, mode}`; `mode` is `live` for native iOS/Android and USB video, or `snapshots` for a limited-refresh source such as tvOS simulator screenshots. Keep the stream token private.
 
 Use `{id,token}` with `streams.ping` every five seconds and with `streams.close` when finished. Viewers expire after 15 seconds without a heartbeat. Heartbeats recheck access; the server also checks live access and session validity periodically. Closing a viewer cancels its input and releases unused media resources, but does not release the reservation or stop a recording.
 
@@ -222,7 +222,7 @@ For scripted gestures, reserve a device first, then use the generic CLI `call` c
 
 `control.pointer` accepts `{sessionId,leaseToken,event}` with the same pointer event shape as the data channel. It is available only when continuous drag is advertised, currently touchscreen Android. `control.stop` releases its contacts and source without ending the reservation. Scripted input is refused while a browser owns touch control for that session. Opening browser control ends the scripted controller. Idle scripted controllers expire after 15 seconds.
 
-MCP exposes the same operations as `streams_open`, `streams_ping`, `streams_close`, `control_start`, `control_pointer`, `control_stop` and `remote_gesture`. iOS only advertises completed tap/swipe/long-press gestures through idb, and its video source samples screenshots at up to 2 fps. It does not accept continuous drag or multitouch.
+MCP exposes the same operations as `streams_open`, `streams_ping`, `streams_close`, `control_start`, `control_pointer`, `control_stop` and `remote_gesture`. iOS simulators use native H.264 video and advertise completed tap/swipe/long-press gestures through idb. They do not accept continuous drag or multitouch.
 
 ## MCP walkthrough
 

@@ -16,7 +16,7 @@ Maintenance locks are distinct from reservations. Maintenance on a reserved devi
 
 Each device has a command queue. Different devices can work concurrently. A logical device and its video source are separate records. USB sources use stable AVFoundation unique IDs; native screens belong to their own device. Ambiguous bindings are rejected.
 
-USB preview, screenshots and recording consume one helper stream per physical source. The web preview uses periodic images. Native simulator screenshots and videos use simctl; ADB uses screencap/screenrecord. Android's exact child PID is captured from stdout immediately at process creation. Its UUID-specific command identity is rechecked before signalling it.
+USB preview, screenshots and recording consume one helper stream per physical source. Web previews receive H.264 over WebRTC. Android live video comes from scrcpy; iOS simulator live video comes from idb and is normalized for browser decoding. Simulator screenshots and recordings use simctl; ADB screenshots and recordings use screencap/screenrecord. The tvOS live source remains sampled screenshots with an explicit limited-refresh label. Android's exact child PID is captured from stdout immediately at process creation. Its UUID-specific command identity is rechecked before signalling it.
 
 Native simulator recordVideo can omit elapsed time while a screen is static. Finalization repeats the last real frame to the requested stop time, preserving the source picture and input timeline. A partial playable file after an unexpected exit remains interrupted. USB disconnects end encoder input and trigger session cleanup.
 

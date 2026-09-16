@@ -43,8 +43,9 @@ export async function available(command: string) {
     return false;
   }
 }
-export function start(command: string, args: string[]) {
-  const child = spawn(command, args, { stdio: ["pipe", "pipe", "pipe"] });
+export function start(command: string, args: string[], options: { env?: NodeJS.ProcessEnv } = {}) {
+  // Per-helper overrides retain the host's SDK/tool discovery environment.
+  const child = spawn(command, args, { stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, ...options.env } });
   let stderr = "",
     stdout = "",
     error: Error | undefined,

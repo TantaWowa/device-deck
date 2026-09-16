@@ -69,7 +69,15 @@ class FixtureAdapters extends Adapters {
   }
 }
 const adapters = new FixtureAdapters(() => config);
-const capture = new CaptureEngine(adapters, helper);
+// The synthetic Apple screen uses the same generated video as the other test
+// devices. It must never start idb against a real simulator during browser QA.
+class FixtureCapture extends CaptureEngine {
+  override live(d: DeviceConfig | null, s: SourceConfig, profile: VideoProfile = "balanced") {
+    return super.live(d?.connection.type === "simulator" && d.connection.os === "ios" ? null : d,
+      d?.connection.type === "simulator" && d.connection.os === "ios" ? source : s, profile);
+  }
+}
+const capture = new FixtureCapture(adapters, helper);
 const deck = new DeckService(directory, undefined, adapters, capture, new LocalDevelopmentLicense());
 await deck.init();
 config = structuredClone(deck.config.config);

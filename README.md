@@ -135,12 +135,13 @@ For scripts, `reserve --json` returns a session ID and secret lease token. Every
 | -------------------------------------- | ----------------------------------- | ---------------------------------- | ------------------------------------------------------------ |
 | Roku                                   | ECP keys and Unicode text           | Explicit USB input                 | Network ECP must permit control; stable Roku serial required |
 | Android, Android TV, Fire TV, emulator | ADB keys/text; scrcpy gestures on touchscreen devices | Native H.264 live video; native or USB capture | Authorized ADB; Android 5+ for live video; pinned server bundled |
-| iOS and tvOS simulator                 | idb keys/text; iOS tap, swipe and long press | Limited-refresh video from simctl screenshots; native recording | Booted simulator, Xcode; idb client and companion for input |
+| iOS simulator                         | idb keys/text, tap, swipe and long press | Native idb H.264 live video; native recording | Booted simulator, Xcode, idb client and companion, ffmpeg |
+| tvOS simulator                        | idb keys/text | Limited-refresh video from simctl screenshots; native recording | Booted simulator, Xcode; idb client and companion for input |
 | USB capture only                       | No remote input                     | USB preview, screenshot, recording | Stable capture card identity                                 |
 | Physical Apple TV                      | Companion keys and text             | Explicit USB input                 | pyatv and PIN pairing                                        |
 | Other physical Apple devices           | Discovery only                      | No native adapter                  | No unsupported operation is advertised                       |
 
-Native Android recordings stop at 175 seconds, below screenrecord's 180-second limit. Other sources use the configured limit. Live previews use browser video elements. Android touch includes continuous drag and multitouch when advertised; iOS touch supports completed gestures over a preview sampled up to twice a second. An explicit view-only snapshot fallback is available when video cannot connect. USB preview and recording share one capture-helper stream selected by stable AVFoundation unique ID, never enumeration index. Capture video is silent in this release.
+Native Android recordings stop at 175 seconds, below screenrecord's 180-second limit. Other sources use the configured limit. Live previews use browser video elements. Android touch includes continuous drag and multitouch when advertised; iOS simulators support completed gestures over native H.264 video. An explicit view-only snapshot fallback is available when video cannot connect. USB preview and recording share one capture-helper stream selected by stable AVFoundation unique ID, never enumeration index. Capture video is silent in this release.
 
 The verified hardware matrix, real proof files and limits are recorded in [validation](docs/validation.md). Implemented adapter paths do not imply that every device model has been tested.
 

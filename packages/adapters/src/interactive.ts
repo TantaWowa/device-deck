@@ -55,8 +55,8 @@ export async function startIdbInteractive(
   return {
     get width() { return screen.width; }, get height() { return screen.height; },
     capabilities: control ? [...IOS_GESTURES] : [],
-    // iOS video uses the separately managed screenshot source. idb provides only
-    // bounded gestures: no continuous drag/multitouch capability is advertised.
+    // Native iOS video is shared separately by CaptureEngine. This adapter
+    // supplies bounded gestures, not continuous drag/multitouch.
     onFrame: () => () => {},
     onClose(listener) { closers.add(listener); return () => { closers.delete(listener); }; },
     async pointer(event) {

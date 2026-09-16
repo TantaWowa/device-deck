@@ -15,7 +15,7 @@ TV devices use the feed's **Remote** button for directional keys, Home and text.
 | USB capture card | Shared native capture, encoded on the Mac; up to 15 fps | Depends on the device's separate control adapter |
 | Android phone, tablet or touchscreen emulator | Native scrcpy H.264; up to 30 fps in High detail | Tap, swipe, long press, continuous drag and multiple contacts |
 | Android TV, Fire TV or emulator without a touchscreen feature | Native scrcpy H.264 or assigned USB capture | Remote keys/text; touchscreen gestures are not advertised |
-| iOS simulator | Screenshots sampled up to twice per second, then encoded as video | Completed tap, swipe and long press through idb |
+| iOS simulator | Native idb H.264 video; up to 30 fps in High detail | Completed tap, swipe and long press through idb |
 | tvOS simulator | Screenshots sampled up to twice per second, then encoded as video | Existing remote keys/text; no touchscreen gestures |
 | Roku or physical Apple TV | Assigned USB capture | Existing remote keys/text; no touchscreen gestures |
 | Other physical Apple device | No native video adapter | No touch adapter |
@@ -24,17 +24,21 @@ The USB path still uses JPEG frames inside the Mac's shared capture pipeline. Th
 
 Android uses the device's encoder and forwards its H.264 packets without a Mac video re-encode. A control viewer always displays that native Android screen, including when the device has a USB card assigned, so touch coordinates match the controlled display. A view-only viewer uses the assigned USB source when present.
 
-The iOS/tvOS label is **Limited-refresh video · simulator snapshots**. Video transport does not turn the screenshot source into full-motion simulator capture. A slow simulator may provide fewer than two frames per second. The separate **Use snapshot preview** recovery option uses individual HTTP images and is view only.
+iOS simulators use `idb video-stream` against the exact configured UDID. The Mac converts that native H.264 stream to the browser's supported H.264 profile and shares it between viewers at the same quality setting. This path does not call `simctl` screenshots or encode still images. A touch controller always sees the native simulator screen, even if an external capture source is assigned for view-only use. Missing video tools produce an error; they do not silently select screenshots.
+
+A read-only browser check of the running iPhone simulator delivered 588×1280 video at 15 fps for five seconds on Balanced. A concurrent Low-bandwidth viewer delivered 294×640 at 10 fps while Balanced continued at 15 fps. The command audit recorded no screenshot calls and confirmed both native capture and encoder processes stopped after their last viewer closed. Evidence is saved locally under `outputs/ios-native-video-actual/`; these loopback measurements do not measure cross-machine Tailscale latency.
+
+tvOS retains the label **Limited-refresh video · simulator snapshots**. Its source samples screenshots at up to two frames per second. The separate **Use snapshot preview** recovery option uses individual HTTP images and is view only.
 
 ## Quality and remote access
 
-| Viewer setting | Maximum long edge | Target video bitrate | Maximum Android frame rate |
+| Viewer setting | Maximum long edge | Target video bitrate | Maximum Android / iOS simulator frame rate |
 | --- | --- | --- | --- |
 | Low bandwidth | 640 px | 0.5 Mbps | 10 fps |
 | Balanced | 1280 px | 1.5 Mbps | 15 fps |
 | High detail | 1280 px | 4 Mbps | 30 fps |
 
-USB capture remains limited to 15 fps and simulator screenshots to 2 fps. These are ceilings, not measured guarantees; encoder support, source activity and network capacity affect the result. High detail raises the bitrate and Android frame rate; it does not enable 1080p. Streams use H.264 Baseline and are silent. Each additional viewer consumes its own outbound network bandwidth, even when it shares an encoder.
+USB capture remains limited to 15 fps and tvOS simulator screenshots to 2 fps. These are ceilings, not measured guarantees; encoder support, source activity and network capacity affect the result. High detail raises the bitrate and native-video frame rate; it does not enable 1080p. Streams use H.264 Baseline and are silent. Each additional viewer consumes its own outbound network bandwidth, even when it shares an encoder.
 
 The authenticated HTTP connection carries signaling. Media and input use a separate encrypted WebRTC connection. Device Deck includes LAN, loopback and Tailscale IPv4 addresses in its connection candidates and binds UDP ports **49152–49251** on the host Mac. The viewing machine must be able to reach those ports over its permitted network path. For Tailscale, the relevant tailnet policy and host firewall must allow that traffic; reaching the HTTPS page through Serve alone does not prove that media can connect.
 
@@ -62,7 +66,7 @@ Android needs authorized ADB access and Android 5.0/API 21 or later, following t
 
 The build downloads the exact **scrcpy-server 4.1** asset recorded in `scripts/distribution/scrcpy.json` and verifies its SHA-256. The runtime verifies the checksum again. It creates a unique device-side server file and ADB forward for each source, addresses the selected ADB server and frozen transport ID, and requires verified hardware/AVD identity. A physical USB serial must match `ro.serialno` unless a hardware ID is already stored; network ADB connections need a discovered hardware ID. Cleanup removes only that source's resources and never runs `adb kill-server`. A missing or altered bundled server produces a rebuild/reinstall error; runtime viewing does not install an unpinned replacement.
 
-USB and simulator video need the configured ffmpeg executable. The Mac encoder tries VideoToolbox and falls back to libx264 if available. Apple simulator controls require the [idb client and companion](https://github.com/facebook/idb), installed together with `brew install facebook/fb/idb`, plus a booted simulator. The adapter refuses iOS touch when idb cannot report its exact UDID and pixel/point dimensions.
+USB and simulator video need the configured ffmpeg executable. iOS native video also needs its H.264 decoder and libx264 encoder. The USB and screenshot encoder tries VideoToolbox and falls back to libx264 if available. Native iOS video and Apple simulator controls require the [idb client and companion](https://github.com/facebook/idb), installed together with `brew install facebook/fb/idb`, plus a booted simulator. The adapters validate the exact simulator UDID and screen dimensions before opening video or touch.
 
 See [API and CLI examples](api.md#live-video-and-touch-operations) and [source provenance](source-provenance.md). Protocol, identity, cleanup and coordinate tests cover the implemented contracts. A read-only capture on the existing `Hosanna_Phone_API_36` emulator verified 720×1280 Constrained Baseline level 3.1 output and restoration of ADB forwards, source processes and server files. Its 6.5-second static-screen sample contained 11 media frames; that is not a motion-frame-rate or end-to-end latency benchmark. The evidence and remuxed sample are saved locally under `outputs/live-video-qa/android-readonly-native-*`. No device input was sent during that proof. This does not establish physical Android, iOS touch, rotation or remote-network performance proof.
 
@@ -71,6 +75,8 @@ A read-only check of the running local daemon's UGREEN/Roku USB source delivered
 Real Google TV browser validation also covers joining after the initial keyframe on a static screen. Apple TV, iPhone and Android phone emulator browser validation covers cold launch, automatic feed display, decoded video and Home from the controls-only remote. Apple controls used idb 1.5.9, and the iPhone also accepted a swipe through the lease-protected gesture API. Its first cold boot took almost three minutes, so Apple startup allows four minutes and both browser clients keep the launch request alive for five. Launch failures explain that startup has not completed rather than returning an empty command error. Evidence is saved under `outputs/live-video-qa/real-emulator-workflow.json` and the adjacent screenshots.
 
 ## Repeatable browser validation
+
+Run `npm run qa:ios-video` to test the native iOS video path with an isolated H.264-producing idb fixture. It checks moving browser video, shared viewing and touch sessions, late viewers, quality profiles, process cleanup and the absence of screenshot calls. To run its read-only check on an already booted, unreserved simulator, set `QA_IOS_NATIVE_UDID` to its exact UDID. This mode refuses device input and does not boot or close the simulator.
 
 Run `npm run qa:touch-feedback` to check contact markers, swipe trails, release fade, cancellation, rejection messages and disabled input on desktop and mobile. This command starts and stops its own synthetic fixture; it does not contact real devices.
 

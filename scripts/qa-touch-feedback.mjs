@@ -106,11 +106,18 @@ function at(frame, x, y) { return { x: frame.left + frame.width * x, y: frame.to
 async function expectContact(feed, target) {
   const circle = feed.locator('.deck-touch-trace[data-touch-phase="active"] .deck-touch-contact');
   await expect(circle).toHaveCount(1);
-  const position = await circle.evaluate((element) => {
+  const readPosition = () => circle.evaluate((element) => {
     const matrix = element.getScreenCTM();
     const point = new DOMPoint(element.cx.baseVal.value, element.cy.baseVal.value).matrixTransform(matrix);
     return { x: point.x, y: point.y };
   });
+  // Feedback deliberately batches pointer samples into animation frames. The
+  // last browser input can finish before that frame paints under encoder load.
+  await expect.poll(async () => {
+    const position = await readPosition();
+    return Math.max(Math.abs(position.x - target.x), Math.abs(position.y - target.y));
+  }, { message: "Rendered touch feedback must reach the final input coordinates" }).toBeLessThanOrEqual(2);
+  const position = await readPosition();
   assert.ok(Math.abs(position.x - target.x) <= 2 && Math.abs(position.y - target.y) <= 2,
     `Feedback ${JSON.stringify(position)} must align with browser contact ${JSON.stringify(target)}.`);
   return position;

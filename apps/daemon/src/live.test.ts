@@ -28,6 +28,68 @@ function client() {
   return new RTCPeerConnection({ bundlePolicy: "max-bundle", iceServers: [], iceAdditionalHostAddresses: ["127.0.0.1"], iceUseIpv6: false, codecs: { video: [new RTCRtpCodecParameters({ mimeType: "video/H264", clockRate: 90000, payloadType: 96, parameters: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f" })] } });
 }
 
+test("iOS simulator streams use native video independently of touch and never show an assigned USB image to a controller", { timeout: 25000 }, async () => {
+  const ios: DeviceConfig = { ...device, platform: "Apple", kind: "virtual", connection: { type: "simulator", os: "ios", udid: "fixture-ios" } };
+  for (const control of [false, true]) {
+    let videoClosed = 0, inputClosed = 0, inputOpened = 0, gestures = 0;
+    const video = { width: 588, height: 1280, fps: 15, onFrame: () => () => {}, onClose: () => () => {}, close: async () => { videoClosed++; } };
+    const input: InteractiveSource = { ...video, capabilities: ["tap", "swipe", "longPress"],
+      close: async () => { inputClosed++; }, pointer: async () => {}, gesture: async () => { gestures++; } };
+    const streams = new LiveStreams({
+      resolve: () => ({ device: ios, source: control
+        ? { id: "external", kind: "usb", name: "External feed", uniqueId: "fixture" }
+        : { id: "native", kind: "native", name: "iPhone screen", deviceId: ios.id }, validate() {} }),
+      video: async (target, profile) => {
+        assert.equal(target.source?.kind, "native");
+        assert.equal(target.source?.deviceId, ios.id);
+        assert.equal(profile, "balanced");
+        return video;
+      },
+      interactive: async () => { inputOpened++; return input; },
+    });
+    const peer = client();
+    try {
+      peer.addTransceiver("video", { direction: "recvonly" });
+      const channel = peer.createDataChannel("control", { ordered: true });
+      await peer.setLocalDescription(await peer.createOffer());
+      const stream = await streams.open({ deviceId: ios.id, offer: peer.localDescription!.sdp, control, ...(control ? credentials : {}) });
+      assert.equal(stream.mode, "live");
+      assert.equal(stream.width, 588);
+      assert.equal(stream.height, 1280);
+      assert.deepEqual(stream.capabilities, control ? input.capabilities : []);
+      assert.equal(inputOpened, control ? 1 : 0);
+      await peer.setRemoteDescription({ type: "answer", sdp: stream.answer });
+      await until(() => channel.readyState === "open");
+      if (control) {
+        channel.send(JSON.stringify({ type: "gesture", gesture: { type: "swipe", x: 200, y: 900, toX: 200, toY: 200, width: 588, height: 1280, durationMs: 300 } }));
+        await until(() => gestures === 1);
+      }
+      await streams.closeStream(stream);
+      assert.equal(videoClosed, 1);
+      assert.equal(inputClosed, control ? 1 : 0);
+    } finally { await peer.close(); await streams.close(); }
+  }
+});
+
+test("failed native iOS video startup releases gesture input and reports the failure", { timeout: 10000 }, async () => {
+  let closed = 0;
+  const ios: DeviceConfig = { ...device, platform: "Apple", kind: "virtual", connection: { type: "simulator", os: "ios", udid: "fixture-ios" } };
+  const streams = new LiveStreams({
+    resolve: () => ({ device: ios, source: { id: "native", kind: "native", name: "iPhone screen", deviceId: ios.id }, validate() {} }),
+    video: async () => { throw new Error("Native iOS video helper unavailable"); },
+    interactive: async () => ({ width: 588, height: 1280, capabilities: ["tap"], onFrame: () => () => {}, onClose: () => () => {},
+      close: async () => { closed++; }, pointer: async () => {}, gesture: async () => {} }),
+  });
+  const peer = client();
+  try {
+    peer.addTransceiver("video", { direction: "recvonly" });
+    peer.createDataChannel("control", { ordered: true });
+    await peer.setLocalDescription(await peer.createOffer());
+    await assert.rejects(streams.open({ deviceId: ios.id, offer: peer.localDescription!.sdp, control: true, ...credentials }), /Native iOS video helper unavailable/);
+    assert.equal(closed, 1);
+  } finally { await peer.close(); await streams.close(); }
+});
+
 test("real WebRTC data channel sends a drag before up and lease loss cancels contacts", { timeout: 20000 }, async () => {
   const f = fixture(), peer = client();
   try {
