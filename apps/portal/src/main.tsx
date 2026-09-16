@@ -52,7 +52,8 @@ function MachineCard({ machine, cloud, cached, onOpen, onEdit, onRemove }: {
   }, [machine.id, machine.endpoint, machine.publicKey.x, cloud, cached, check]);
   return <article className="machine-card">
     <div className="machine-card-top"><span className="machine-icon"><Monitor size={27} /></span><div className="machine-menu"><button className="icon-button" aria-label={`Options for ${machine.name}`} aria-expanded={menu} onClick={() => setMenu(!menu)}><MoreHorizontal size={21} /></button>{menu && <div className="menu-popover"><button onClick={() => { setMenu(false); onEdit(); }}><Settings2 size={16} />Edit machine</button><button onClick={() => { setMenu(false); setCheck((value) => value + 1); }}><RefreshCw size={16} />Check connection</button><a href={`${machine.endpoint}/`} target="_blank" rel="noreferrer"><ExternalLink size={16} />Open standalone</a><button className="danger-text" onClick={() => { setMenu(false); onRemove(); }}><Trash2 size={16} />Remove machine</button></div>}</div></div>
-    <h2>{machine.name}</h2><p className="machine-address">{machine.endpoint}</p>
+    <h2><a href={`${machine.endpoint}/`} target="_blank" rel="noreferrer" title="Open full machine dashboard in a new tab">{machine.name}</a></h2>
+    <p className="machine-address"><a href={`${machine.endpoint}/`} target="_blank" rel="noreferrer" title="Open full machine dashboard in a new tab">{machine.endpoint}</a></p>
     <div className={`connection-state ${observation?.state || "unknown"}`}><span className="status-dot" />{observationLabel(observation)}</div>
     <p className="machine-check-time">{cached ? "Saved machine · connection not checked" : observation?.checkedAt ? `Checked ${new Date(observation.checkedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : "Connection is checked from your browser"}</p>
     {observation?.state === "unreachable" && <p className="machine-error-detail">{observation.detail}</p>}
