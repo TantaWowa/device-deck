@@ -1,16 +1,17 @@
 import type { Artifact, Device, Session } from "./local/types";
+import { deviceFormFactor } from "./device-form-factor";
 
 export type CaptureSortColumn = "name" | "device" | "kind" | "createdAt" | "bytes" | "status";
 export type CaptureSort = { column: CaptureSortColumn; direction: "ascending" | "descending" };
 export type CaptureFilters = {
   search: string; deviceId: string; platform: string; kind: string; trash: boolean;
-  deviceKind?: string; health?: string; reservation?: string; visibility?: string;
+  deviceKind?: string; formFactor?: string; health?: string; reservation?: string; visibility?: string;
 };
-export type CaptureDevice = Pick<Device, "id" | "name" | "platform"> & Partial<Pick<Device, "kind" | "online" | "locked" | "visibility">>;
+export type CaptureDevice = Pick<Device, "id" | "name" | "platform"> & Partial<Pick<Device, "kind" | "online" | "locked" | "visibility" | "connection" | "inputMode" | "model">>;
 export type CaptureSession = Pick<Session, "deviceId" | "state">;
 export type CaptureVariant = "file" | "clean" | "log";
-export const emptyCaptureFilters: CaptureFilters = { search: "", deviceId: "", platform: "", kind: "", trash: false, deviceKind: "", health: "", reservation: "", visibility: "" };
-export const hasCaptureFilters = (filters: CaptureFilters) => Boolean(filters.search.trim() || filters.deviceId || filters.platform || filters.kind || filters.deviceKind || filters.health || filters.reservation || filters.visibility);
+export const emptyCaptureFilters: CaptureFilters = { search: "", deviceId: "", platform: "", kind: "", trash: false, deviceKind: "", formFactor: "", health: "", reservation: "", visibility: "" };
+export const hasCaptureFilters = (filters: CaptureFilters) => Boolean(filters.search.trim() || filters.deviceId || filters.platform || filters.kind || filters.deviceKind || filters.formFactor || filters.health || filters.reservation || filters.visibility);
 const collator = new Intl.Collator(undefined, { sensitivity: "base", numeric: true });
 
 export function captureIsBusy(artifact: Pick<Artifact, "status">) {
@@ -28,6 +29,7 @@ export function visibleCaptures(artifacts: readonly Artifact[], devices: readonl
       (!filters.platform || device?.platform === filters.platform) &&
       (!filters.kind || artifact.kind === filters.kind) &&
       (!filters.deviceKind || device?.kind === filters.deviceKind) &&
+      (!filters.formFactor || deviceFormFactor(device) === filters.formFactor) &&
       (!filters.visibility || device?.visibility === filters.visibility) &&
       (!filters.health || (filters.health === "online" ? device?.online === true : filters.health === "offline" && device?.online === false)) &&
       (!filters.reservation || Boolean(device && (filters.reservation === "locked"

@@ -1,6 +1,7 @@
 import { Search, X } from "lucide-react";
 import type { Artifact } from "../../../../packages/core/src/local/types";
 import { emptyCaptureFilters, hasCaptureFilters, type CaptureDevice, type CaptureFilters as CaptureFilterValues } from "../../../../packages/core/src/capture-library";
+import { deviceFormFactor } from "../../../../packages/core/src/device-form-factor";
 import "./capture-filters.css";
 
 type FilterOption = readonly [value: string, label: string, count?: number];
@@ -29,12 +30,13 @@ export function CaptureFilters({ value, onChange, devices, artifacts }: {
   const library = artifacts.filter((artifact) => !artifact.purgedAt && Boolean(artifact.deletedAt) === value.trash);
   const deviceMap = new Map(devices.map((device) => [device.id, device]));
   const historicalIds = [...new Set(artifacts.filter((artifact) => !artifact.purgedAt && !deviceMap.has(artifact.deviceId)).map((artifact) => artifact.deviceId))];
-  const options = [...devices.map((device) => ({ id: device.id, name: device.name, platform: String(device.platform) })), ...historicalIds.map((id) => ({ id, name: `${id} · removed`, platform: "" }))].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }));
+  const options = [...devices.map((device) => ({ id: device.id, name: device.name, platform: String(device.platform), kind: device.kind, formFactor: deviceFormFactor(device) })), ...historicalIds.map((id) => ({ id, name: `${id} · removed`, platform: "", kind: undefined, formFactor: deviceFormFactor() }))].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }));
   const platforms: FilterOption[] = [["", "All platforms"], ["Apple", "Apple"], ["Roku", "Roku"], ["Android", "Android"], ["Other", "Other"]].map(([platform, label]) => [platform, label, library.filter((artifact) => !platform || deviceMap.get(artifact.deviceId)?.platform === platform).length]);
   return <div className="capture-filter-bar" aria-label="Capture filters">
     <div className="capture-filter-primary">
       <FilterGroup label="Platform" ariaLabel="Filter capture platform" value={value.platform} options={platforms} onChange={(platform) => update({ platform, deviceId: value.deviceId && platform && deviceMap.get(value.deviceId)?.platform !== platform ? "" : value.deviceId })} />
-      <FilterGroup label="Device type" ariaLabel="Filter capture device type" value={value.deviceKind || ""} options={[["", "All types"], ["virtual", "Sim"], ["physical", "Real"]]} onChange={(deviceKind) => update({ deviceKind })} />
+      <FilterGroup label="Device type" ariaLabel="Filter capture device type" value={value.formFactor || ""} options={[["", "All types"], ["tv", "TV"], ["phone", "Phone & tablet"], ["other", "Other"]]} onChange={(formFactor) => update({ formFactor, deviceId: value.deviceId && formFactor && deviceFormFactor(deviceMap.get(value.deviceId)) !== formFactor ? "" : value.deviceId })} />
+      <FilterGroup label="Environment" ariaLabel="Filter capture environment" value={value.deviceKind || ""} options={[["", "All"], ["virtual", "Sim"], ["physical", "Real"]]} onChange={(deviceKind) => update({ deviceKind, deviceId: value.deviceId && deviceKind && deviceMap.get(value.deviceId)?.kind !== deviceKind ? "" : value.deviceId })} />
       <label className="capture-filter-search"><Search size={15} aria-hidden="true" /><input type="search" aria-label="Search captures" placeholder="Search name, device or tags" value={value.search} onChange={(event) => update({ search: event.target.value })} />{value.search && <button type="button" aria-label="Clear capture search" onClick={() => update({ search: "" })}><X size={14} /></button>}</label>
     </div>
     <div className="capture-filter-secondary">
@@ -44,7 +46,7 @@ export function CaptureFilters({ value, onChange, devices, artifacts }: {
     </div>
     <div className="capture-filter-specific">
       <FilterGroup label="Capture type" ariaLabel="Filter capture type" value={value.kind} options={[["", "All captures"], ["screenshot", "Screenshots"], ["recording", "Recordings"]]} onChange={(kind) => update({ kind })} />
-      <label className="capture-filter-device"><span className="capture-filter-label">Device</span><select aria-label="Capture device" value={value.deviceId} onChange={(event) => update({ deviceId: event.target.value })}><option value="">All devices</option>{options.filter((device) => !value.platform || device.platform === value.platform).map((device) => <option key={device.id} value={device.id}>{device.name}</option>)}</select></label>
+      <label className="capture-filter-device"><span className="capture-filter-label">Device</span><select aria-label="Capture device" value={value.deviceId} onChange={(event) => update({ deviceId: event.target.value })}><option value="">All devices</option>{options.filter((device) => (!value.platform || device.platform === value.platform) && (!value.formFactor || device.formFactor === value.formFactor) && (!value.deviceKind || device.kind === value.deviceKind)).map((device) => <option key={device.id} value={device.id}>{device.name}</option>)}</select></label>
       <button type="button" className="capture-filter-reset" disabled={!hasCaptureFilters(value)} onClick={() => onChange({ ...emptyCaptureFilters, trash: value.trash })}>Reset filters</button>
     </div>
   </div>;

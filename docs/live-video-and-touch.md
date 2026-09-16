@@ -6,6 +6,8 @@ Feeds and device previews receive silent H.264 video over WebRTC and render it i
 
 Open **Feeds**, then **Start simulator**. Search the configured Apple simulators and Android emulators, and choose **Launch & show feed**. Device Deck waits for startup, creates a native feed if needed, and opens that screen. For an emulator already running, choose **Show feed**. Devices that are starting report **Booting…** in the device list and feed; control remains unavailable until startup finishes. **Choose feeds** holds the full searchable selection list; stopped simulators are not selected by default.
 
+Use **Device type** to choose **TV**, **Phone & tablet**, or **Other** in Devices, Feeds and Captures. In Feeds, this filters both the displayed screens and the selection list; switching back to all types restores hidden selections. Captures applies the same categories in tiled and list views. The existing real-device and simulator filters are separate from device type. Device type uses discovered hardware metadata and stays the same while a device is offline or booting; unassigned inputs appear under Other.
+
 TV devices use the feed's **Remote** button for directional keys, Home and text. The floating remote contains controls only. Phones and tablets show an **Enable touch** switch directly under their video. Their device class is preserved while offline or booting, so missing input tools never turn a phone into a TV remote. If a simulator is not listed, discover and add it in **Devices** first; installed offline Android AVDs can be discovered without booting them.
 
 ## What each source provides

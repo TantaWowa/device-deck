@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import type { Artifact } from "./local/types";
-import { captureBatches, captureDownloadName, captureStorage, emptyCaptureFilters, formatCaptureBytes, hasCaptureFilters, visibleCaptures, visibleCaptureSelection, type CaptureFilters, type CaptureSortColumn } from "./capture-library";
+import { captureBatches, captureDownloadName, captureStorage, emptyCaptureFilters, formatCaptureBytes, hasCaptureFilters, visibleCaptures, visibleCaptureSelection, type CaptureDevice, type CaptureFilters, type CaptureSortColumn } from "./capture-library";
 
 const capture = (id: string, overrides: Partial<Artifact> = {}): Artifact => ({
   id, deviceId: "roku", sessionId: "session", owner: "QA", sourceId: "source", name: id,
@@ -93,4 +93,27 @@ test("removed or unknown device state remains visible unfiltered but does not ma
   assert.equal(hasCaptureFilters({ ...emptyCaptureFilters, trash: true }), false);
   assert.equal(hasCaptureFilters({ ...emptyCaptureFilters, health: "online" }), true);
   assert.equal(hasCaptureFilters({ ...emptyCaptureFilters, search: "  " }), false);
+});
+
+test("TV and phone/tablet capture filters intersect platform and environment while retaining unknown captures", () => {
+  const devices: CaptureDevice[] = [
+    { id: "android-tv", name: "Living room", platform: "Android", kind: "physical", inputMode: "remote", connection: { type: "adb", serial: "tv", port: 5037 } },
+    { id: "android-phone", name: "Google TV", platform: "Android", kind: "virtual", inputMode: "touch", connection: { type: "adb", serial: "phone", port: 5037 } },
+    { id: "apple-tv", name: "Meeting TV", platform: "Apple", kind: "virtual", connection: { type: "simulator", os: "tvos", udid: "tv" } },
+    { id: "ipad", name: "Meeting TV", platform: "Apple", kind: "physical", model: "iPad16,3", connection: { type: "apple-device", udid: "ipad" } },
+    { id: "camera", name: "USB capture", platform: "Other", kind: "physical", connection: { type: "capture" } },
+    { id: "legacy", name: "Old Android", platform: "Android" },
+  ];
+  const items = [...devices.map((device) => capture(device.id, { deviceId: device.id })), capture("removed", { deviceId: "removed" })];
+  const find = (changes: Partial<CaptureFilters>) => visibleCaptures(items, devices, { ...filters, ...changes }, sort).map((artifact) => artifact.id);
+  assert.deepEqual(find({}), items.map((artifact) => artifact.id), "older saved filters without formFactor remain unfiltered");
+  assert.deepEqual(find({ formFactor: "tv" }), ["android-tv", "apple-tv"]);
+  assert.deepEqual(find({ formFactor: "phone" }), ["android-phone", "ipad"]);
+  assert.deepEqual(find({ formFactor: "tv", deviceKind: "virtual" }), ["apple-tv"]);
+  assert.deepEqual(find({ formFactor: "phone", platform: "Android", deviceKind: "virtual" }), ["android-phone"]);
+  assert.deepEqual(find({ formFactor: "phone", deviceKind: "physical" }), ["ipad"]);
+  assert.deepEqual(find({ formFactor: "other" }), ["camera", "legacy", "removed"]);
+  assert.deepEqual(find({ formFactor: "other", deviceKind: "physical" }), ["camera"]);
+  assert.equal(hasCaptureFilters({ ...emptyCaptureFilters, formFactor: "phone" }), true);
+  assert.equal(hasCaptureFilters({ ...emptyCaptureFilters, formFactor: "" }), false);
 });

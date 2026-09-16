@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import path from "node:path";
 import { expect } from "@playwright/test";
 
-export async function captureViewCase({ page, openLibrary, output, label }) {
+export async function captureViewCase({ page, openLibrary, output, label, otherCaptureIds = [] }) {
   const files = [], thumbnails = [];
   // Force a fresh network response even when earlier capture-toasts mounted the
   // library and populated the browser's thumbnail cache.
@@ -39,7 +39,19 @@ export async function captureViewCase({ page, openLibrary, output, label }) {
     assert.ok(thumbnails.some((item) => item.url.includes("/seed-1/thumbnail") && item.status === 200 && item.type.startsWith("image/jpeg")));
     await page.screenshot({ path: path.join(output, `${label}-capture-tiles-desktop.png`), fullPage: true });
 
-    const selectedFilters = [["platform", "Android"], ["device type", "Real"], ["connection", "Online"], ["availability", "Available"], ["visibility", "Local"], ["type", "Recordings"]];
+    await library.getByRole("checkbox", { name: "Select Alpha screenshot", exact: true }).check();
+    const formFactors = [["TV", ["seed-0", "seed-2"]], ["Phone & tablet", ["seed-1", "seed-3"]], ["Other", otherCaptureIds]];
+    for (const [value, expected] of formFactors) {
+      await library.getByRole("group", { name: "Filter capture device type", exact: true }).getByRole("button", { name: value, exact: true }).click();
+      await expect.poll(async () => (await tileIds()).filter((id) => id.startsWith("seed-")).sort()).toEqual(expected);
+      await library.getByRole("button", { name: "List view", exact: true }).click();
+      await expect.poll(() => library.locator("tbody tr[data-capture-id]").evaluateAll((rows) => rows.map((row) => row.getAttribute("data-capture-id")).filter((id) => id.startsWith("seed-")).sort())).toEqual(expected);
+      await expect(library.getByRole("group", { name: "Filter capture device type", exact: true }).getByRole("button", { name: value, exact: true })).toHaveAttribute("aria-pressed", "true");
+      await library.getByRole("button", { name: "Tiled view", exact: true }).click();
+    }
+    await library.getByRole("button", { name: "Reset filters", exact: true }).click();
+    await expect(library.getByRole("checkbox", { name: "Select Alpha screenshot", exact: true })).not.toBeChecked();
+    const selectedFilters = [["platform", "Android"], ["device type", "Phone & tablet"], ["environment", "Real"], ["connection", "Online"], ["availability", "Available"], ["visibility", "Local"], ["type", "Recordings"]];
     for (const [group, value] of selectedFilters)
       await library.getByRole("group", { name: `Filter capture ${group}`, exact: true }).getByRole("button", { name: value, exact: true }).click();
     await library.getByRole("combobox", { name: "Capture device", exact: true }).selectOption("android");
@@ -50,7 +62,7 @@ export async function captureViewCase({ page, openLibrary, output, label }) {
       await expect(library.getByRole("group", { name: `Filter capture ${group}`, exact: true }).getByRole("button", { name: value, exact: true })).toHaveAttribute("aria-pressed", "true");
     await library.getByRole("button", { name: "Tiled view", exact: true }).click();
     await expect.poll(tileIds).toEqual(["seed-1"]);
-    for (const [group, absent, present] of [["device type", "Sim", "Real"], ["connection", "Offline", "Online"], ["availability", "Locked", "Available"], ["visibility", "Shared", "Local"]]) {
+    for (const [group, absent, present] of [["environment", "Sim", "Real"], ["connection", "Offline", "Online"], ["availability", "Locked", "Available"], ["visibility", "Shared", "Local"]]) {
       await library.getByRole("group", { name: `Filter capture ${group}`, exact: true }).getByRole("button", { name: absent, exact: true }).click();
       await expect.poll(tileIds).toEqual([]);
       await library.getByRole("group", { name: `Filter capture ${group}`, exact: true }).getByRole("button", { name: present, exact: true }).click();

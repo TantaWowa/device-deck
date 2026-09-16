@@ -67,7 +67,7 @@ export async function exerciseDeviceTable(
   await expect(page.getByText("More filters", { exact: true })).toHaveCount(0);
   for (const group of [
     "Filter platform",
-    "Filter device type",
+    "Filter device environment",
     "Filter connection",
     "Filter availability",
     "Filter visibility",
@@ -86,7 +86,7 @@ export async function exerciseDeviceTable(
   await expect(names).toHaveText(["Apple TV simulator"]);
   await reset.click();
   await choose("Filter platform", "Apple 2");
-  await choose("Filter device type", "Sim");
+  await choose("Filter device environment", "Sim");
   await expect(names).toHaveText(["Apple TV simulator", "iPhone 16 simulator"]);
   await reset.click();
   const searchBounds = await search.boundingBox();

@@ -5,6 +5,8 @@ import type { Artifact, Device, Session, Snapshot } from "../../../packages/core
 import { createMachineTransport } from "../../../packages/machine-client/src";
 import { canLaunchSimulator } from "../../../packages/core/src/local/types";
 import { deviceInputMode } from "../../../packages/core/src/remote";
+import { deviceFormFactor } from "../../../packages/core/src/device-form-factor";
+import { DeviceTypeFilter } from "../../web/src/local/DeviceTypeFilter";
 import { deviceConnectionLabel, deviceIsBooting as isBooting } from "../../../packages/core/src/device-table";
 import { LivePreview } from "../../web/src/local/LivePreview";
 import { FloatingRemote } from "../../web/src/local/FloatingRemote";
@@ -49,6 +51,7 @@ export function MachineWorkspace({ machine, cloud, owner, leases, onBack }: {
   const [feedPickerOpen, setFeedPickerOpen] = useState(false);
   const [feedPickerMode, setFeedPickerMode] = useState<"all" | "simulators">("all");
   const [feedSearch, setFeedSearch] = useState("");
+  const [formFactor, setFormFactor] = useState("");
   const [revealingDevice, setRevealingDevice] = useState<string>();
   const [launchingDevice, setLaunchingDevice] = useState<string>();
   const [sessionOwner, setSessionOwner] = useState(owner);
@@ -277,7 +280,9 @@ export function MachineWorkspace({ machine, cloud, owner, leases, onBack }: {
     return { source, device, route: source.kind === "usb" ? `/v1/source-preview/${encodeURIComponent(source.id)}` : id ? `/v1/preview/${encodeURIComponent(id)}` : "" };
   }).filter((feed) => feed.route) || [];
   const chosenFeeds = selectedFeeds ?? feeds.filter((feed) => feed.source.status === "connected").map((feed) => feed.source.id);
-  const visibleFeeds = feeds.filter((feed) => chosenFeeds.includes(feed.source.id));
+  const matchesType = (target?: Device) => !formFactor || deviceFormFactor(target) === formFactor;
+  const visibleFeeds = feeds.filter((feed) => chosenFeeds.includes(feed.source.id) && matchesType(feed.device));
+  const visibleDevices = snapshot?.devices.filter(matchesType) || [];
   const visibleFeedKey = visibleFeeds.map((feed) => `${feed.source.id}:${feed.device?.id || ""}`).join(",");
   useEffect(() => {
     touchGeneration.current++;
@@ -286,10 +291,11 @@ export function MachineWorkspace({ machine, cloud, owner, leases, onBack }: {
   }, [tab, visibleFeedKey]);
   const simulators = snapshot?.devices.filter(canLaunchSimulator) || [];
   const query = feedSearch.trim().toLocaleLowerCase();
-  const listedFeeds = feeds.filter((feed) => (feedPickerMode !== "simulators" || Boolean(feed.device && canLaunchSimulator(feed.device))) && `${feed.source.name} ${feed.device?.name || ""}`.toLocaleLowerCase().includes(query));
-  const unboundSimulators = simulators.filter((simulator) => !feeds.some((feed) => feed.device?.id === simulator.id) && simulator.name.toLocaleLowerCase().includes(query));
+  const listedFeeds = feeds.filter((feed) => matchesType(feed.device) && (feedPickerMode !== "simulators" || Boolean(feed.device && canLaunchSimulator(feed.device))) && `${feed.source.name} ${feed.device?.name || ""}`.toLocaleLowerCase().includes(query));
+  const unboundSimulators = simulators.filter((simulator) => matchesType(simulator) && !feeds.some((feed) => feed.device?.id === simulator.id) && simulator.name.toLocaleLowerCase().includes(query));
   const showFeed = (id: string) => { setSelectedFeeds((ids) => [...new Set([...(ids ?? chosenFeeds), id])]); setTab("feeds"); setFeedPickerOpen(false); };
   const openDeviceFeed = (target: Device) => {
+    setFormFactor("");
     const feed = feeds.find((item) => item.device?.id === target.id);
     setTab("feeds");
     if (feed) showFeed(feed.source.id);
@@ -315,6 +321,7 @@ export function MachineWorkspace({ machine, cloud, owner, leases, onBack }: {
     const target = snapshot.devices.find((d) => d.id === revealingDevice);
     const source = snapshot.sources.find((s) => s.id === target?.captureSourceId || s.deviceId === revealingDevice);
     if (!target?.online || !source) return;
+    setFormFactor((current) => !current || deviceFormFactor(target) === current ? current : "");
     setSelectedFeeds((ids) => [...new Set([...(ids ?? snapshot.sources.filter((s) => s.status === "connected").map((s) => s.id)), source.id])]);
     setRevealingDevice(undefined); setNotice(`${target.name} is ready in Feeds.`);
   }, [revealingDevice, snapshot]);
@@ -329,6 +336,7 @@ export function MachineWorkspace({ machine, cloud, owner, leases, onBack }: {
       {tab === "feeds" && snapshot && <>
         <div className="portal-feed-toolbar" ref={feedPicker}>
           <div><strong>{visibleFeeds.length} {visibleFeeds.length === 1 ? "feed" : "feeds"}</strong><span>Choose a screen, then start a session to control it.</span></div>
+          <DeviceTypeFilter value={formFactor} onChange={setFormFactor} />
           <button className="secondary" aria-expanded={feedPickerOpen && feedPickerMode === "all"} onClick={() => feedPickerOpen && feedPickerMode === "all" ? setFeedPickerOpen(false) : chooseFeeds("all")}>Choose feeds<ChevronDown size={15} /></button>
           {simulators.length > 0 && <button className="secondary" onClick={() => chooseFeeds("simulators")}><Play size={15} />Start simulator</button>}
           {feedPickerOpen && <div className="portal-feed-picker" role="dialog" aria-label="Choose feeds">
@@ -364,13 +372,13 @@ export function MachineWorkspace({ machine, cloud, owner, leases, onBack }: {
               <div className="portal-phone-capture-actions"><button className="secondary" disabled={busy || !ready || reserved || !feedDevice.capabilities.includes("screenshot")} onClick={() => void capture("captures.screenshot", feedDevice)}><Camera size={16} />Screenshot</button><button className="secondary" disabled={busy || !ready || reserved || !feedDevice.capabilities.includes("screenshot")} onClick={() => screenshotToClipboard(feedDevice)}><Clipboard size={16} />Screenshot to clipboard</button><button className={activeRecording ? "danger" : "secondary"} disabled={busy || !ready || reserved || !feedDevice.capabilities.includes("record")} onClick={() => void capture(activeRecording ? "recordings.stop" : "recordings.start", feedDevice)}>{activeRecording ? <Square size={16} /> : <Film size={16} />}{activeRecording ? "Stop recording" : "Record"}</button></div>
             </div>}
           </article>;
-        })}</div> : <div className="empty-panel"><Monitor size={38} /><h2>{feeds.length || simulators.length ? "Choose a feed to get started" : "No feeds configured yet"}</h2><p>{feeds.length || simulators.length ? "Show a connected screen or launch a simulator from the feed picker." : "Add devices or capture cards on this machine to see their live screens here."}</p>{feeds.length || simulators.length ? <button className="secondary" onClick={() => chooseFeeds("all")}>Choose feeds</button> : <a className="secondary" href={`${machine.endpoint}/`} target="_blank" rel="noreferrer">Open machine setup <ExternalLink size={15} /></a>}</div>}
+        })}</div> : <div className="empty-panel"><Monitor size={38} /><h2>{formFactor ? "No selected feeds match this device type" : feeds.length || simulators.length ? "Choose a feed to get started" : "No feeds configured yet"}</h2><p>{feeds.length || simulators.length ? "Show a connected screen or launch a simulator from the feed picker." : "Add devices or capture cards on this machine to see their live screens here."}</p>{formFactor && <button className="secondary" onClick={() => setFormFactor("")}>Show all device types</button>}{feeds.length || simulators.length ? <button className="secondary" onClick={() => chooseFeeds("all")}>Choose feeds</button> : <a className="secondary" href={`${machine.endpoint}/`} target="_blank" rel="noreferrer">Open machine setup <ExternalLink size={15} /></a>}</div>}
       </>}
-      {tab === "devices" && snapshot && <div className="device-grid">{snapshot.devices.length ? snapshot.devices.map((item) => {
+      {tab === "devices" && snapshot && <><div className="portal-feed-toolbar"><DeviceTypeFilter value={formFactor} onChange={setFormFactor} /></div><div className="device-grid">{visibleDevices.length ? visibleDevices.map((item) => {
         const session = snapshot.sessions.find((entry) => entry.deviceId === item.id && entry.state !== "closed");
         const touch = deviceInputMode(item) === "touch", remote = deviceInputMode(item) === "remote";
         return <article className="device-card" key={item.id}><div className="device-card-top"><span className="machine-icon">{touch ? <Smartphone size={25} /> : <Tv size={25} />}</span><span className={`pill ${item.online && !isTransitioning(item) ? "good" : "muted"}`}>{launchingDevice === item.id ? "Booting…" : isTransitioning(item) ? deviceConnectionLabel(item) : item.locked ? "Locked" : deviceConnectionLabel(item)}</span></div><h2>{item.name}</h2><p>{item.platform} · {item.kind}</p><small>{launchingDevice === item.id || isBooting(item) ? "Waiting for the device to finish booting." : item.simulatorState === "stopping" ? "Waiting for the device to stop." : session ? `Reserved by ${session.owner}` : item.healthDetail || "Available"}</small><button className="primary" onClick={(event) => remote ? selectRemote(item.id, event.currentTarget) : openDeviceFeed(item)}>{remote ? <Radio size={17} /> : <Monitor size={17} />}{remote ? "Open remote" : "Open device screen"}</button></article>;
-      }) : <div className="empty-panel"><Tv size={38} /><h2>No devices configured</h2><p>Discover or add devices from the machine's standalone dashboard.</p></div>}</div>}
+      }) : <div className="empty-panel"><Tv size={38} /><h2>{formFactor ? "No devices match this device type" : "No devices configured"}</h2>{formFactor ? <button className="secondary" onClick={() => setFormFactor("")}>Show all device types</button> : <p>Discover or add devices from the machine's standalone dashboard.</p>}</div>}</div></>}
       {tab === "captures" && notice && !remoteId && <p className="notice" role="status">{notice}</p>}
       {tab === "captures" && snapshot && <CaptureLibrary
         artifacts={snapshot.artifacts}

@@ -15,6 +15,7 @@ import { LocalDevelopmentLicense } from "./local-license";
 const directory = await mkdtemp(path.join(os.tmpdir(), "deck-live-qa-"));
 const capturesMode = process.env.QA_CAPTURES === "1";
 const phoneControlsMode = process.env.QA_PHONE_CONTROLS === "1";
+const formFactorMode = process.env.QA_FORM_FACTOR === "1";
 let config: Config;
 const events: unknown[] = [];
 const running = new Set(["usb", "android"]);
@@ -92,6 +93,11 @@ config.devices = [
   { id: "apple-sim", name: "Synthetic Apple simulator", platform: "Apple", kind: "virtual", model: "QA", visibility: "local", connection: { type: "simulator", udid: "ea415a3a-39fa-4dcb-a028-a5260f5156c3", os: "ios" }, captureSourceId: null },
 ];
 config.sources = [source, { id: "qa-native", kind: "native", name: "Synthetic Android screen", deviceId: "android" }];
+if (formFactorMode) {
+  running.add("other");
+  config.devices.push({ id: "other", name: "Synthetic Other", platform: "Other", kind: "physical", model: "QA camera", visibility: "local", connection: { type: "capture" }, captureSourceId: "qa-other" });
+  config.sources.push({ id: "qa-other", kind: "usb", name: "Synthetic Other feed", uniqueId: "qa-only-other" });
+}
 if (phoneControlsMode) {
   config.devices.find((device) => device.id === "apple-sim")!.captureSourceId = "qa-ios";
   config.sources.push({ id: "qa-ios", kind: "native", name: "Synthetic iPhone screen", deviceId: "apple-sim" });
@@ -103,10 +109,12 @@ if (capturesMode) {
   await run("ffmpeg", ["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=1", "-frames:v", "1", image]);
   await run("ffmpeg", ["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=15", "-t", "1", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-movflags", "+faststart", video]);
   const seedNames = ["Alpha screenshot", "Bravo recording", "Charlie screenshot", "Delta screenshot", "Trashed screenshot"];
+  if (formFactorMode) seedNames.push("Echo screenshot");
   for (let index = 0; index < seedNames.length; index++) {
     const recording = index === 1, id = `seed-${index}`, file = path.join(config.settings.folder, `${id}.${recording ? "mp4" : "png"}`);
     await copyFile(recording ? video : image, file);
     const artifact = { id, deviceId: index % 2 ? "android" : "usb", sessionId: "synthetic-history", owner: "Capture QA", sourceId: index % 2 ? "qa-native" : source.id, name: seedNames[index], path: file, logPath: `${file}.json`, kind: recording ? "recording" as const : "screenshot" as const, mode: "clean" as const, tags: [index % 2 ? "regression" : "payments"], createdAt: Date.now() - (index + 1) * 60_000, duration: recording ? 1 : 0, bytes: (await stat(file)).size, status: "completed" as const, origin: "API" as const, ...(index === 4 ? { deletedAt: Date.now() } : {}) };
+    if (index === 5) { artifact.deviceId = "other"; artifact.sourceId = "qa-other"; }
     deck.store.putArtifact(artifact);
     await writeFile(artifact.logPath, JSON.stringify({ schemaVersion: 1, artifact, inputs: [] }));
   }
@@ -122,7 +130,7 @@ const base = `http://127.0.0.1:${port}`;
 const ticket = await fetch(`${base}/v1/browser-ticket`, { method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: "{}" }).then((r) => r.json());
 const evidence = path.resolve(process.env.QA_LIVE_OUTPUT || (capturesMode ? "outputs/capture-qa" : "outputs/live-video-qa"));
 await mkdir(evidence, { recursive: true });
-const info = { base, url: `${base}/#ticket=${ticket.ticket}`, directory, token, capturesMode, phoneControlsMode, pid: process.pid };
+const info = { base, url: `${base}/#ticket=${ticket.ticket}`, directory, token, capturesMode, phoneControlsMode, formFactorMode, pid: process.pid };
 await writeFile(path.join(evidence, "fixture.json"), JSON.stringify(info));
 const timer = setInterval(() => void writeFile(path.join(evidence, "inputs.json"), JSON.stringify(events, null, 2)), 250);
 console.log(`LIVE_QA_READY ${JSON.stringify(info)}`);

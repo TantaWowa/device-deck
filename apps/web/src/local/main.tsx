@@ -11,6 +11,8 @@ import { FeedActions, type FeedAction } from "./FeedActions";
 import { DiscoveryDevices } from "./DiscoveryDevices";
 import { registerDiscoveredDevices } from "../../../../packages/core/src/discovery";
 import { supportsWake, deviceInputMode } from "../../../../packages/core/src/remote";
+import { deviceFormFactor } from "../../../../packages/core/src/device-form-factor";
+import { DeviceTypeFilter } from "./DeviceTypeFilter";
 import {
   deviceConnectionLabel,
   deviceAvailabilityLabel,
@@ -219,6 +221,7 @@ function App() {
       health: "",
       reservation: "",
       kind: "",
+      formFactor: "",
       visibility: "",
     }),
     [selected, setSelected] = useState<string[]>([]),
@@ -372,6 +375,7 @@ function App() {
       (!filter.platform || d.platform === filter.platform) &&
       (!filter.health || (filter.health === "online" ? d.online : !d.online)) &&
       (!filter.kind || d.kind === filter.kind) &&
+      (!filter.formFactor || deviceFormFactor(d) === filter.formFactor) &&
       (!filter.visibility || d.visibility === filter.visibility) &&
       (!filter.reservation ||
         (filter.reservation === "locked"
@@ -775,11 +779,11 @@ function App() {
                     }
                   />
                   <DeviceFilterGroup
-                    label="Type"
-                    ariaLabel="Filter device type"
+                    label="Environment"
+                    ariaLabel="Filter device environment"
                     value={filter.kind}
                     options={[
-                      ["", "All types"],
+                      ["", "All environments"],
                       ["virtual", "Sim"],
                       ["physical", "Real"],
                     ]}
@@ -787,6 +791,7 @@ function App() {
                       setFilter((prev) => ({ ...prev, kind }))
                     }
                   />
+                  <DeviceTypeFilter value={filter.formFactor} onChange={(formFactor) => setFilter((prev) => ({ ...prev, formFactor }))} />
                   <label className="live-search device-name-search">
                     <Search size={16} aria-hidden="true" />
                     <input
@@ -850,6 +855,7 @@ function App() {
                         health: "",
                         reservation: "",
                         kind: "",
+                        formFactor: "",
                         visibility: "",
                       })
                     }
@@ -869,7 +875,7 @@ function App() {
                       const view = data.config.savedViews.find(
                         (v) => v.name === e.target.value,
                       );
-                      if (view) setFilter({ ...filter, ...view.filters });
+                      if (view) setFilter({ ...filter, formFactor: "", ...view.filters });
                     }}
                   >
                     <option value="">Saved views</option>

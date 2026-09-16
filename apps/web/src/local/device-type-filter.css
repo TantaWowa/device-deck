@@ -1,0 +1,3 @@
+.device-type-filter { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; color: inherit; font-size: 12px; }
+.device-type-filter select { width: auto; max-width: 100%; margin: 0; padding: 8px 28px 8px 10px; border: 1px solid #b6c0b1; border-radius: 7px; background: #fff; color: #293728; font: inherit; }
+.device-type-filter select:focus-visible { outline: 2px solid #5278a4; outline-offset: 2px; }
