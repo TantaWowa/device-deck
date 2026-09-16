@@ -311,7 +311,7 @@ test("simulator transitions keep inventory responsive, block reservation/config 
     await cleanup();
   }
 });
-test("Android lifecycle persists a verified AVD identity and current serial before acting; reservations prevent even preflight", async () => {
+test("Android lifecycle persists a verified AVD identity without replacing its saved serial; reservations prevent even preflight", async () => {
   const { deck, adapters, cleanup } = await setup();
   const observed: DeviceConfig[] = [];
   let preflights = 0;
@@ -387,8 +387,45 @@ test("Android lifecycle persists a verified AVD identity and current serial befo
     });
     assert.equal(
       observed[1].connection.type === "adb" && observed[1].connection.serial,
-      "emulator-5560",
+      "emulator-5554",
     );
+  } finally {
+    await cleanup();
+  }
+});
+
+test("a cold-launched AVD can reserve and close without persisting a live port occupied by a legacy config row", async () => {
+  const { deck, adapters, cleanup } = await setup();
+  let running = false;
+  const actions: string[] = [];
+  adapters.prepareSimulator = async (d) => !running ? d : {
+    ...d,
+    connection: { type: "adb", serial: "emulator-5554", port: 5037, avdName: "Hosanna_Phone_API_35" },
+  };
+  adapters.verifyIdentity = async (d) => {
+    assert(running);
+    return { ...d, connection: { type: "adb", serial: "emulator-5554", port: 5037, avdName: "Hosanna_Phone_API_35" } };
+  };
+  adapters.simulator = async (d, action) => {
+    assert.equal(d.connection.type === "adb" && d.connection.serial, "avd-phone-35");
+    actions.push(action);
+    running = action === "launch";
+    return { deviceId: d.id, action, state: running ? "booted" : "shutdown", changed: true, serial: "emulator-5554" };
+  };
+  try {
+    const c = structuredClone(deck.config.config);
+    c.devices[0].connection = { type: "adb", serial: "avd-phone-35", port: 5037, avdName: "Hosanna_Phone_API_35" };
+    c.devices[1].connection = { type: "adb", serial: "emulator-5554", port: 5037 };
+    await deck.execute("config.save", { config: c, revision: deck.config.revision });
+    const revision = deck.config.revision;
+    await deck.execute("devices.simulator", { deviceId: "one", action: "launch" });
+    const lease = await reserve(deck);
+    await deck.execute("sessions.release", { sessionId: lease.session.id, leaseToken: lease.leaseToken });
+    await deck.execute("devices.simulator", { deviceId: "one", action: "close", confirmed: true });
+    assert.deepEqual(actions, ["launch", "close"]);
+    assert.deepEqual(deck.config.config.devices.map((d) => d.connection), c.devices.map((d) => d.connection));
+    assert.equal(deck.config.revision, revision, "Live port changes do not rewrite saved configuration");
+    assert.equal(deck.store.lockReason("one"), undefined);
   } finally {
     await cleanup();
   }

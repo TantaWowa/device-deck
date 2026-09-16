@@ -358,6 +358,7 @@ export class DeckService {
             const configured = this.device(d.id);
             const resolved = await this.adapters.verifyIdentity(configured);
             if (
+              configured.connection.type !== "adb" ||
               resolved.connection.type !== "adb" ||
               !resolved.connection.avdName
             )
@@ -366,14 +367,18 @@ export class DeckService {
                 "Wait for this emulator's AVD identity to become available before reserving it. Discover again or set its exact AVD name in Edit device.",
                 409,
               );
+            const connection = {
+              ...configured.connection,
+              avdName: configured.connection.avdName || resolved.connection.avdName,
+            };
             if (
               JSON.stringify(configured.connection) !==
-              JSON.stringify(resolved.connection)
+              JSON.stringify(connection)
             ) {
               const next = structuredClone(this.config.config);
               next.devices = next.devices.map((device) =>
                 device.id === d.id
-                  ? { ...device, connection: resolved.connection }
+                  ? { ...device, connection }
                   : device,
               );
               await this.config.save(
@@ -579,7 +584,10 @@ export class DeckService {
             // Learn an existing emulator's AVD only from its exact live ADB transport.
             const resolved = await this.adapters.prepareSimulator(device);
             const next = structuredClone(this.config.config);
-            let configured = { ...device, connection: resolved.connection };
+            const connection = device.connection.type === "adb" && resolved.connection.type === "adb"
+              ? { ...device.connection, ...(resolved.connection.avdName ? { avdName: device.connection.avdName || resolved.connection.avdName } : {}) }
+              : resolved.connection;
+            let configured = { ...device, connection };
             if (args.action === "launch" && !configured.captureSourceId) {
               let source = next.sources.find((s) => s.kind === "native" && s.deviceId === device.id);
               if (!source) {

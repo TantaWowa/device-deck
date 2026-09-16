@@ -191,6 +191,26 @@ test("legacy emulator serials can learn their exact AVD and close, but cannot la
   );
 });
 
+test("preparing and closing a known AVD keeps its stored placeholder when its live port belongs to a legacy row", async () => {
+  const known: DeviceConfig = {
+    ...device,
+    connection: { type: "adb", serial: "avd-phone-35", avdName: "TV_API_35", port: 5038 },
+  };
+  const legacy: DeviceConfig = {
+    ...device,
+    id: "legacy-phone",
+    connection: { type: "adb", serial: "emulator-5554", port: 5038 },
+  };
+  const f = fixture([{ serial: "emulator-5554", state: "device", name: "TV_API_35", booted: true }]);
+  f.config.devices = [known, legacy];
+  assert.deepEqual(await f.emulator.prepare(known), known);
+  const live = await f.emulator.resolve(known);
+  assert.equal(live?.connection.type === "adb" && live.connection.serial, "emulator-5554");
+  await f.emulator.control(await f.emulator.prepare(known), "close");
+  assert.deepEqual(f.calls.filter((call) => call.args.includes("kill")).map((call) => call.args), [["-P", "5038", "-s", "emulator-5554", "emu", "kill"]]);
+  assert.deepEqual(f.config.devices, [known, legacy]);
+});
+
 test("a reused serial cannot turn a legacy row into a second control identity for a configured AVD", async () => {
   const legacy: DeviceConfig = {
     ...device,

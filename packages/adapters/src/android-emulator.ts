@@ -218,7 +218,11 @@ export class AndroidEmulators {
         "This emulator's AVD identity is not available yet. Wait and refresh before launching or closing it.",
         409,
       );
-    return found ? this.resolved(d, found) : d;
+    // Persist the AVD identity, never its temporary console-port serial. A
+    // stopped AVD may boot on a port saved by a different legacy device row.
+    return found?.avdName && d.connection.type === "adb" && !d.connection.avdName
+      ? { ...d, connection: { ...d.connection, avdName: found.avdName } }
+      : d;
   }
   async inspect(d: DeviceConfig) {
     const found = await this.locate(d);
