@@ -15,7 +15,6 @@
 .deck-control-session-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .deck-control-session-actions > span { font-size: 11px; color: #7c926f; }
 .deck-control-session-actions input { flex: 1; min-width: 90px; width: 100%; }
-.portal-remote-preview .deck-live-preview { aspect-ratio: auto; height: min(42dvh, 400px); }
 @media (max-width: 640px) { .deck-live-status { flex-wrap: wrap; } .deck-live-preview .deck-live-status select { font-size: 12px; min-height: 30px; } .deck-control-session .deck-live-preview { height: 35dvh; min-height: 200px; } }
 .deck-live-preview.live-screen { align-items: stretch; justify-content: flex-start; }
 .deck-control-session-actions > button { border: 1px solid #c5d0dc; border-radius: 6px; padding: 6px 10px; min-height: 34px; cursor: pointer; }

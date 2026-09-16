@@ -1,4 +1,0 @@
-.portal-capture-actions button:last-child { grid-column: 1 / -1; }
-@media (min-width: 641px) {
-  .machine-workspace:has(.portal-remote-sheet) .capture-toasts { left: 20px; right: auto; }
-}

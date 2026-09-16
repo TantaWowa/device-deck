@@ -78,7 +78,9 @@ page.on("response", (response) => {
 async function openRemote() {
   await page.getByRole("button", { name: /^Feeds/ }).click();
   await page.locator('[data-feed-source="qa-usb"]').getByRole("button", { name: "Remote", exact: true }).click();
-  return page.getByRole("dialog", { name: "Remote for Synthetic USB", exact: true });
+  const remote = page.getByRole("region", { name: "Remote for Synthetic USB", exact: true });
+  await remote.getByRole("button", { name: "Remote menu", exact: true }).click();
+  return remote;
 }
 async function screenshot(remote, clipboard = false) {
   const response = page.waitForResponse((item) => item.url().endsWith("/operations/captures.screenshot"));

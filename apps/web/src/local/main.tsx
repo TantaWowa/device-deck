@@ -70,6 +70,8 @@ import type {
 import { api, bootstrap } from "./api";
 import "../style.css";
 import "./style.css";
+import "./remote-control.css";
+import "./floating-remote.css";
 type Lease = { session: Session; leaseToken: string };
 type Tab =
   | "Feeds"

@@ -7,12 +7,13 @@ import { canLaunchSimulator } from "../../../packages/core/src/local/types";
 import { deviceInputMode } from "../../../packages/core/src/remote";
 import { deviceConnectionLabel, deviceIsBooting as isBooting } from "../../../packages/core/src/device-table";
 import { LivePreview } from "../../web/src/local/LivePreview";
+import { FloatingRemote } from "../../web/src/local/FloatingRemote";
+import { popupAnchor, type PopupAnchor } from "../../web/src/local/anchored-popup";
 import { RemoteControl } from "../../web/src/local/RemoteControl";
 import { CaptureLibrary } from "../../web/src/local/CaptureLibrary";
 import { CaptureToasts, copyImageToClipboard, useCaptureFeedback } from "../../web/src/local/capture-feedback";
 import { connectionMessage, ControlGate, needsStandalone } from "./model";
 import type { CloudClient } from "./cloud";
-import "./capture-workspace.css";
 import "./touch-workspace.css";
 
 type Transport = ReturnType<typeof createMachineTransport>;
@@ -42,6 +43,7 @@ export function MachineWorkspace({ machine, cloud, owner, leases, onBack }: {
   const [refreshing, setRefreshing] = useState(false);
   const [tab, setTab] = useState<"feeds" | "devices" | "captures">("feeds");
   const [remoteId, setRemoteId] = useState<string>();
+  const [remoteRequest, setRemoteRequest] = useState<{ anchor: PopupAnchor }>();
   const [touchSessions, setTouchSessions] = useState<Record<string, string>>({});
   const [selectedFeeds, setSelectedFeeds] = useState<string[] | null>(null);
   const [feedPickerOpen, setFeedPickerOpen] = useState(false);
@@ -52,14 +54,12 @@ export function MachineWorkspace({ machine, cloud, owner, leases, onBack }: {
   const [sessionOwner, setSessionOwner] = useState(owner);
   const [capturePreviewId, setCapturePreviewId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [mobile, setMobile] = useState(() => matchMedia("(max-width: 640px)").matches);
   const lifecycle = useRef(new AbortController());
   const gate = useRef(new ControlGate());
   const alive = useRef(true);
   const refreshingRef = useRef(false);
   const refreshQueued = useRef(false);
   const touchGeneration = useRef(0);
-  const remotePanel = useRef<HTMLElement>(null);
   const feedPicker = useRef<HTMLDivElement>(null);
   const standalone = needsStandalone(machine.endpoint, location.protocol);
   const captureFeedback = useCaptureFeedback(snapshot?.artifacts);
@@ -67,12 +67,6 @@ export function MachineWorkspace({ machine, cloud, owner, leases, onBack }: {
     transport.getBlob(`/v1/artifacts/${encodeURIComponent(item.id)}/${variant}`, signal), [transport]);
   const getCaptureThumbnail = useCallback((item: Artifact, signal?: AbortSignal) =>
     transport.getBlob(`/v1/artifacts/${encodeURIComponent(item.id)}/thumbnail`, signal), [transport]);
-  useEffect(() => {
-    const query = matchMedia("(max-width: 640px)");
-    const changed = () => setMobile(query.matches);
-    query.addEventListener("change", changed);
-    return () => query.removeEventListener("change", changed);
-  }, []);
   const refresh = async () => {
     if (standalone || lifecycle.current.signal.aborted) return;
     if (refreshingRef.current) { refreshQueued.current = true; return; }
@@ -127,7 +121,10 @@ export function MachineWorkspace({ machine, cloud, owner, leases, onBack }: {
       window.removeEventListener("offline", cancelControls); document.removeEventListener("visibilitychange", visibility);
     };
   }, [transport]);
-  const selectRemote = (id?: string) => { gate.current.cancel(); setBusy(false); setNotice(""); setRemoteId(id); };
+  const selectRemote = (id?: string, trigger?: HTMLElement) => {
+    gate.current.cancel(); setBusy(false); setNotice(""); setRemoteId(id);
+    setRemoteRequest(id && trigger ? { anchor: popupAnchor(trigger) } : undefined);
+  };
   useEffect(() => {
     if (!feedPickerOpen) return;
     const close = (event: PointerEvent) => { if (!feedPicker.current?.contains(event.target as Node)) setFeedPickerOpen(false); };
@@ -136,21 +133,6 @@ export function MachineWorkspace({ machine, cloud, owner, leases, onBack }: {
     feedPicker.current?.querySelector<HTMLInputElement>("input[type=search]")?.focus();
     return () => { document.removeEventListener("pointerdown", close); document.removeEventListener("keydown", escape); };
   }, [feedPickerOpen]);
-  useEffect(() => {
-    if (!remoteId) return;
-    const previous = document.activeElement;
-    remotePanel.current?.querySelector<HTMLButtonElement>('button[aria-label="Close remote"]')?.focus();
-    const keydown = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !event.defaultPrevented) { event.preventDefault(); selectRemote(); }
-      if (event.key !== "Tab") return;
-      const buttons = [...(remotePanel.current?.querySelectorAll<HTMLElement>('button:not(:disabled),input:not(:disabled),select:not(:disabled),a[href]') || [])].filter((item) => item.getClientRects().length);
-      const first = buttons[0], last = buttons.at(-1);
-      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
-      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
-    };
-    document.addEventListener("keydown", keydown);
-    return () => { document.removeEventListener("keydown", keydown); if (previous instanceof HTMLElement && previous.isConnected) previous.focus(); };
-  }, [remoteId]);
   const device = snapshot?.devices.find((item) => item.id === remoteId && deviceInputMode(item) === "remote");
   const activeSession = snapshot?.sessions.find((session) => session.deviceId === remoteId && session.state !== "closed" && session.expiresAt > Date.now());
   const leaseKey = device ? `${machine.id}:${device.id}` : "";
@@ -373,7 +355,7 @@ export function MachineWorkspace({ machine, cloud, owner, leases, onBack }: {
           const activeRecording = snapshot.recordings.some((item) => item.deviceId === feedDevice?.id);
           return <article className="feed-card" data-feed-source={source.id} key={source.id}>
             {feedDevice && (isTransitioning(feedDevice) || launchingDevice === feedDevice.id) ? <div className="portal-feed-booting" role="status"><LoaderCircle className="spin" size={28} /><strong>{feedDevice.simulatorState === "stopping" ? "Stopping…" : "Booting…"}</strong><span>{feedDevice.name} · {feedDevice.healthDetail}</span></div> : source.status === "missing" ? <div className="portal-feed-booting" role="status"><Monitor size={28} /><strong>{feedDevice?.simulatorState === "shutdown" ? "Stopped" : feedDevice && !feedDevice.online ? "Device offline" : "Input unavailable"}</strong><span>{feedDevice?.healthDetail || "Connect this capture input to resume."}</span>{feedDevice && canLaunchSimulator(feedDevice) && !feedDevice.online && <button className="primary" disabled={busy || feedDevice.locked || feedDevice.simulatorState === "unavailable" || Boolean(error)} onClick={() => void launchFeed(feedDevice)}><Play size={15} />Launch &amp; show feed</button>}</div> : <MachinePreview transport={transport} route={enabled && feedDevice ? `/v1/preview/${encodeURIComponent(feedDevice.id)}` : route} label={source.name} active={source.kind === "usb" || Boolean(feedDevice?.online)} lease={enabled ? lease : null} inputEnabled={!busy && !remoteId} onControlLost={() => { touchGeneration.current++; if (feedDevice) setTouchSessions((sessions) => { if (!sessions[feedDevice.id]) return sessions; const next = { ...sessions }; delete next[feedDevice.id]; return next; }); }} />}
-            <footer><div><strong>{source.name}</strong><span>{feedDevice?.name || "Unassigned input"}</span></div>{feedDevice && deviceInputMode(feedDevice) === "remote" && <button className="secondary" onClick={() => selectRemote(feedDevice.id)}><Radio size={16} />Remote</button>}</footer>
+            <footer><div><strong>{source.name}</strong><span>{feedDevice?.name || "Unassigned input"}</span></div>{feedDevice && deviceInputMode(feedDevice) === "remote" && <button className="secondary" onClick={(event) => selectRemote(feedDevice.id, event.currentTarget)}><Radio size={16} />Remote</button>}</footer>
             {feedDevice && touchDevice && <div className="portal-feed-control" aria-label={`Touch controls for ${feedDevice.name}`}><span>{reserved ? `Reserved by ${session!.owner}. Enabling touch requires taking over their session.` : enabled ? "Touch enabled · Your reservation" : ours ? "Touch off · Your reservation remains active" : "View only · Enabling touch reserves this device for 15 minutes."}</span>
               {!session && <input aria-label={`Control session owner for ${feedDevice.name}`} value={sessionOwner} maxLength={128} onChange={(event) => setSessionOwner(event.target.value)} />}
               <button type="button" className="secondary portal-touch-switch" role="switch" aria-label="Enable touch" aria-checked={enabled} disabled={!enabled && (busy || !ready || !feedDevice.capabilities.includes("touch") || !sessionOwner.trim() || Boolean(session && session.state !== "active"))} onClick={() => enabled ? disableFeedControl(feedDevice) : void startFeedControl(feedDevice, reserved)}><span aria-hidden="true" />Enable touch</button>
@@ -387,7 +369,7 @@ export function MachineWorkspace({ machine, cloud, owner, leases, onBack }: {
       {tab === "devices" && snapshot && <div className="device-grid">{snapshot.devices.length ? snapshot.devices.map((item) => {
         const session = snapshot.sessions.find((entry) => entry.deviceId === item.id && entry.state !== "closed");
         const touch = deviceInputMode(item) === "touch", remote = deviceInputMode(item) === "remote";
-        return <article className="device-card" key={item.id}><div className="device-card-top"><span className="machine-icon">{touch ? <Smartphone size={25} /> : <Tv size={25} />}</span><span className={`pill ${item.online && !isTransitioning(item) ? "good" : "muted"}`}>{launchingDevice === item.id ? "Booting…" : isTransitioning(item) ? deviceConnectionLabel(item) : item.locked ? "Locked" : deviceConnectionLabel(item)}</span></div><h2>{item.name}</h2><p>{item.platform} · {item.kind}</p><small>{launchingDevice === item.id || isBooting(item) ? "Waiting for the device to finish booting." : item.simulatorState === "stopping" ? "Waiting for the device to stop." : session ? `Reserved by ${session.owner}` : item.healthDetail || "Available"}</small><button className="primary" onClick={() => remote ? selectRemote(item.id) : openDeviceFeed(item)}>{remote ? <Radio size={17} /> : <Monitor size={17} />}{remote ? "Open remote" : "Open device screen"}</button></article>;
+        return <article className="device-card" key={item.id}><div className="device-card-top"><span className="machine-icon">{touch ? <Smartphone size={25} /> : <Tv size={25} />}</span><span className={`pill ${item.online && !isTransitioning(item) ? "good" : "muted"}`}>{launchingDevice === item.id ? "Booting…" : isTransitioning(item) ? deviceConnectionLabel(item) : item.locked ? "Locked" : deviceConnectionLabel(item)}</span></div><h2>{item.name}</h2><p>{item.platform} · {item.kind}</p><small>{launchingDevice === item.id || isBooting(item) ? "Waiting for the device to finish booting." : item.simulatorState === "stopping" ? "Waiting for the device to stop." : session ? `Reserved by ${session.owner}` : item.healthDetail || "Available"}</small><button className="primary" onClick={(event) => remote ? selectRemote(item.id, event.currentTarget) : openDeviceFeed(item)}>{remote ? <Radio size={17} /> : <Monitor size={17} />}{remote ? "Open remote" : "Open device screen"}</button></article>;
       }) : <div className="empty-panel"><Tv size={38} /><h2>No devices configured</h2><p>Discover or add devices from the machine's standalone dashboard.</p></div>}</div>}
       {tab === "captures" && notice && !remoteId && <p className="notice" role="status">{notice}</p>}
       {tab === "captures" && snapshot && <CaptureLibrary
@@ -404,11 +386,38 @@ export function MachineWorkspace({ machine, cloud, owner, leases, onBack }: {
         onOpenFolder={() => transport.operation("captures.openFolder", {}, AbortSignal.timeout(15_000))}
       />}
     </>}
-    {device && <><button className="remote-backdrop" aria-label="Close remote" onClick={() => selectRemote()} /><aside ref={remotePanel} className="portal-remote-sheet" role="dialog" aria-modal="true" aria-label={`Remote for ${device.name}`}><header><div><span className="eyebrow">REMOTE CONTROL</span><h2>{device.name}</h2></div><button className="icon-button" aria-label="Close remote" onClick={() => selectRemote()}><X /></button></header><div className="portal-remote-content">
-      <div className="deck-control-session-actions">
-        {!activeSession && <input aria-label="Control session owner" value={sessionOwner} maxLength={128} onChange={(event) => setSessionOwner(event.target.value)} />}
-        {!device.online && canLaunchSimulator(device) && <button className="primary" disabled={busy || device.locked || Boolean(error) || Boolean(activeSession)} onClick={() => { selectRemote(); void launchFeed(device); }}>Launch &amp; show feed</button>}
-      </div><p className="remote-session-label">{occupied ? `Reserved by ${activeSession.owner}` : ownLease ? `Your reservation · ${recording ? "recording" : "active"}` : "First command reserves this device for 15 minutes."}</p>{occupied && <button className="secondary full-width" disabled={busy} onClick={() => void takeover()}>Take over control</button>}<RemoteControl key={device.id} preferenceScope={machine.id} compact={mobile} device={device} enabled={Boolean(canControl)} busy={busy} sendKey={(key) => remoteInput({ key })} sendText={(text) => remoteInput({ text })} wakeEnabled={!device.locked && !error} wake={wake} /><div className="portal-capture-actions"><button className="secondary" disabled={!canControl || busy || !device.capabilities.includes("screenshot")} onClick={() => void capture("captures.screenshot")}><Camera size={17} />Screenshot</button><button className="secondary" disabled={!canControl || busy || !device.capabilities.includes("screenshot")} onClick={() => screenshotToClipboard()}><Clipboard size={17} />Screenshot to clipboard</button><button className={recording ? "danger" : "secondary"} disabled={!canControl || busy || !device.capabilities.includes("record")} onClick={() => void capture(recording ? "recordings.stop" : "recordings.start")}>{recording ? <Square size={17} /> : <Film size={17} />}{recording ? "Stop recording" : "Record"}</button></div>{ownLease && <button className="text-button full-width" disabled={busy} onClick={() => void endSession()}>{recording ? "End session & save recording" : "End session"}</button>}{notice && <p className="remote-notice" role="status">{notice === "Command sent." && <Check size={16} />}{notice}</p>}</div></aside></>}
+    {device && remoteRequest && <FloatingRemote
+      key={`${machine.id}:${device.id}`}
+      storageKey={`${machine.id}:${device.id}`}
+      requestKey={remoteRequest}
+      anchor={remoteRequest.anchor}
+      title={device.name}
+      initialMenu={Boolean(occupied || device.locked || !device.online || error)}
+      onClose={() => selectRemote()}
+    >{(menu) => <>
+      {menu && <div className="remote-options">
+        {error && <p className="control-warning" role="alert">{error}</p>}
+        <div className="control-session">
+          <div className="control-session-title"><strong>{occupied ? `Reserved by ${activeSession.owner}` : ownLease ? "Your reservation" : "Available to reserve"}</strong><span>{device.locked ? "Locked" : device.online ? "Online" : "Offline"}</span></div>
+          <p>{activeSession ? `${activeSession.owner} · ${recording ? "recording" : activeSession.state} · until ${time(activeSession.expiresAt)}` : "First command reserves this device for 15 minutes."}</p>
+          {!activeSession && <div className="control-reserve-fields"><label>Owner<input aria-label="Control session owner" value={sessionOwner} maxLength={128} onChange={(event) => setSessionOwner(event.target.value)} /></label></div>}
+          {!device.online && canLaunchSimulator(device) && <button className="primary" disabled={busy || device.locked || Boolean(error) || Boolean(activeSession)} onClick={() => { selectRemote(); void launchFeed(device); }}>Launch &amp; show feed</button>}
+          {occupied && <button className="primary" disabled={busy} onClick={() => void takeover()}>Take over control</button>}
+          {ownLease && <button disabled={busy} onClick={() => void endSession()}>{recording ? "End session & save recording" : "End session"}</button>}
+        </div>
+        <div className="control-capture">
+          <h3>Quick capture</h3>
+          <button disabled={!canControl || busy || !device.capabilities.includes("screenshot")} onClick={() => void capture("captures.screenshot")}><Camera size={17} />Screenshot</button>
+          <button disabled={!canControl || busy || !device.capabilities.includes("screenshot")} onClick={() => screenshotToClipboard()}><Clipboard size={17} />Screenshot to clipboard</button>
+          <button className={recording ? "danger" : "primary"} disabled={!canControl || busy || !device.capabilities.includes("record")} onClick={() => void capture(recording ? "recordings.stop" : "recordings.start")}>
+            {recording ? <Square size={17} /> : <Film size={17} />}{recording ? "Stop recording" : "Record"}
+          </button>
+          <small>Closing the popup keeps your session and recording running. Captures are saved in the library.</small>
+        </div>
+      </div>}
+      <RemoteControl key={device.id} preferenceScope={machine.id} device={device} enabled={Boolean(canControl && !menu)} busy={busy} sendKey={(key) => remoteInput({ key })} sendText={(text) => remoteInput({ text })} wakeEnabled={!menu && !device.locked && !error} wake={wake} />
+      {notice && <p className="control-notice" role="status">{notice === "Command sent." && <Check size={16} />}{notice}</p>}
+    </>}</FloatingRemote>}
     <CaptureToasts toasts={captureFeedback.toasts} dismiss={captureFeedback.dismiss} onOpen={(id) => { selectRemote(); setTab("captures"); setCapturePreviewId(id); }} />
   </div>;
 }

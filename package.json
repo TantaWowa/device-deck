@@ -52,6 +52,7 @@
     "test:portal": "node --import tsx --test apps/cloud/src/*.test.ts apps/portal/src/*.test.ts packages/machine-client/src/*.test.ts apps/daemon/src/hub-integration.test.ts apps/daemon/src/network.test.ts",
     "deploy:portal": "node scripts/deploy-portal.mjs",
     "qa:portal": "node --import tsx scripts/qa-portal.ts",
+    "qa:portal-remote": "node scripts/qa-portal-remote.mjs",
     "qa:portal-pwa": "node scripts/qa-portal-pwa.mjs"
   },
   "dependencies": {

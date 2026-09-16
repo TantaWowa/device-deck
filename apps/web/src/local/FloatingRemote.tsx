@@ -178,13 +178,14 @@ export function FloatingRemote({
         <strong title={title}>{title}</strong>
         <button
           type="button"
+          data-remote-action
           aria-label="Remote menu"
           aria-expanded={menu}
           onClick={() => setMenu((v) => !v)}
         >
           <Menu size={17} />
         </button>
-        <button type="button" aria-label="Close remote" onClick={onClose}>
+        <button type="button" data-remote-action aria-label="Close remote" onClick={onClose}>
           <X size={17} />
         </button>
       </header>
