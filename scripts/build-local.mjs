@@ -3,6 +3,7 @@ import { build as vite } from "vite";
 import { mkdir, rename, readFile, writeFile, rm } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
 import { parseArgs } from "node:util";
+import { prepareScrcpy } from "./prepare-scrcpy.mjs";
 const { values } = parseArgs({ options: { mode: { type: "string", default: "live" } } });
 const mode = values.mode;
 if (!["live", "test"].includes(mode)) throw new Error("Use --mode live or --mode test.");
@@ -12,6 +13,7 @@ if (!trust?.productId || trust.mode !== mode || !/^[a-f0-9]{64}$/.test(trust.pub
 // Remove stale success metadata before starting any part of the build.
 await rm("build/build-metadata.json", { force: true });
 await mkdir("build/native", { recursive: true });
+await prepareScrcpy();
 execFileSync(
   "swiftc",
   [

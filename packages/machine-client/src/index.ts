@@ -23,16 +23,16 @@ export function createMachineTransport(options: MachineTransportOptions) {
   let pendingGrant: Promise<MachineGrant> | undefined;
   let currentGrant: MachineGrant | undefined;
 
-  function signalFor(signal?: AbortSignal): AbortSignal {
-    return AbortSignal.any([lifetime.signal, AbortSignal.timeout(30_000), ...(signal ? [signal] : [])]);
+  function signalFor(signal?: AbortSignal, timeoutMs = 30_000): AbortSignal {
+    return AbortSignal.any([lifetime.signal, AbortSignal.timeout(timeoutMs), ...(signal ? [signal] : [])]);
   }
-  async function checkedFetch(path: string, init: RequestInit, signal?: AbortSignal) {
+  async function checkedFetch(path: string, init: RequestInit, signal?: AbortSignal, timeoutMs = 30_000) {
     lifetime.signal.throwIfAborted();
     // Paths are data, never alternate origins or protocol-relative URLs.
     const url = new URL(path, endpoint);
     if (!path.startsWith('/v1/') || url.origin !== endpoint || !url.pathname.startsWith('/v1/') || url.hash)
       throw new Error('Invalid machine API path.');
-    return request(url.href, { ...init, signal: signalFor(signal), credentials: 'omit', redirect: 'error', cache: 'no-store' });
+    return request(url.href, { ...init, signal: signalFor(signal, timeoutMs), credentials: 'omit', redirect: 'error', cache: 'no-store' });
   }
   async function errorFor(response: Response): Promise<Error> {
     const body = await response.json().catch(() => undefined);
@@ -63,8 +63,8 @@ export function createMachineTransport(options: MachineTransportOptions) {
     }
     return pendingGrant;
   }
-  async function authorized(path: string, init: RequestInit, signal?: AbortSignal) {
-    const requestSignal = signalFor(signal);
+  async function authorized(path: string, init: RequestInit, signal?: AbortSignal, timeoutMs = 30_000) {
+    const requestSignal = signalFor(signal, timeoutMs);
     requestSignal.throwIfAborted();
     // A shared refresh can outlive one caller. Stop that caller immediately and
     // never dispatch its request when a slow connection later recovers.
@@ -77,7 +77,7 @@ export function createMachineTransport(options: MachineTransportOptions) {
     const headers = new Headers(init.headers);
     headers.set('Authorization', `Bearer ${credential.token}`);
     headers.set('X-Device-Deck', 'local');
-    const response = await checkedFetch(path, { ...init, headers }, requestSignal);
+    const response = await checkedFetch(path, { ...init, headers }, requestSignal, timeoutMs);
     if (!response.ok) {
       if (response.status === 401 || response.status === 403) currentGrant = undefined;
       // A request may have reached the device. Never replay controls automatically.
@@ -91,7 +91,7 @@ export function createMachineTransport(options: MachineTransportOptions) {
         ? AbortSignal.any([AbortSignal.timeout(3_000), ...(signal ? [signal] : [])]) : signal;
       const response = await authorized(`/v1/operations/${encodeURIComponent(name)}`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(args),
-      }, deadline);
+      }, deadline, name === 'devices.simulator' ? 300_000 : 30_000);
       return response.json() as Promise<T>;
     },
     async getBlob(path: string, signal?: AbortSignal): Promise<Blob> {

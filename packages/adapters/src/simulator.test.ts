@@ -95,6 +95,15 @@ test("simulator launch and close are idempotent without affecting another booted
   );
   assert.equal(booted.calls.filter((c) => c.args[1] === "shutdown").length, 1);
 });
+test("a simulator whose system app never becomes ready reports launch failure instead of success", async () => {
+  const base = fixture();
+  const execute: typeof run = async (command, args, timeout) => {
+    if (args[1] === "bootstatus") throw new Error("Timed out after 240 seconds.");
+    return base.execute(command, args, timeout);
+  };
+  await assert.rejects(controlSimulator(simulator, "launch", execute), /system screen must be ready.*240 seconds/);
+  assert(!base.calls.some((call) => call.command === "/usr/bin/open"));
+});
 test("missing simulator/runtime and physical or Android targets never reach boot or shutdown", async () => {
   const calls: string[][] = [];
   const missing: typeof run = async (_command, args) => {

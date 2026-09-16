@@ -2,6 +2,9 @@ import { EventEmitter } from "node:events";
 import { writeFile, readFile, mkdir, stat, rename, rm } from "node:fs/promises";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
+import type { H264Frame, LiveVideoSource, VideoProfile } from "../../core/src/live";
+import { encodeLiveImages, type ImageVideoInput } from "./video";
+export { H264Packetizer } from "./h264";
 import {
   type DeviceConfig,
   type SourceConfig,
@@ -38,8 +41,12 @@ class UsbStream extends EventEmitter {
   latest?: Buffer;
   buffer = Buffer.alloc(0);
   error = "";
+  users = 0;
+  closeWhenUnused = false;
+  private closing?: Promise<void>;
   constructor(id: string, cameraHelper: string) {
     super();
+    this.setMaxListeners(0);
     this.handle = start(cameraHelper, ["stream", id]);
     this.handle.child.stdout.on("data", (data: Buffer) => {
       this.buffer = Buffer.concat([this.buffer, data]);
@@ -86,14 +93,23 @@ class UsbStream extends EventEmitter {
     });
   }
   async close() {
-    await stop(this.handle);
-    this.removeAllListeners();
+    return this.closing ??= (async () => {
+      await stop(this.handle);
+      this.removeAllListeners();
+    })();
   }
 }
+type SharedLiveVideo = {
+  sourceId: string;
+  source: Promise<LiveVideoSource>;
+  users: number;
+  closed: boolean;
+};
 export class CaptureEngine {
   private streams = new Map<string, UsbStream>();
   private frames = new Map<string, { at: number; data: Buffer }>();
   private pending = new Map<string, Promise<Buffer>>();
+  private liveStreams = new Map<string, SharedLiveVideo>();
   constructor(
     readonly adapters: Adapters,
     readonly cameraHelper = helper,
@@ -106,6 +122,123 @@ export class CaptureEngine {
       this.streams.set(s.uniqueId, stream);
     }
     return stream;
+  }
+  private retainUsb(s: SourceConfig) {
+    const stream = this.usb(s);
+    stream.users++;
+    let released = false;
+    return {
+      stream,
+      release: async (closeWhenUnused = false) => {
+        if (released) return;
+        released = true;
+        stream.closeWhenUnused ||= closeWhenUnused;
+        if (--stream.users === 0 && stream.closeWhenUnused) {
+          if (this.streams.get(s.uniqueId!) === stream) this.streams.delete(s.uniqueId!);
+          await stream.close();
+        }
+      },
+    };
+  }
+  private async liveInput(d: DeviceConfig | null, s: SourceConfig): Promise<ImageVideoInput> {
+    if (s.kind === "usb") {
+      const { stream, release } = this.retainUsb(s);
+      try {
+        const first = await stream.frame();
+        return {
+          first,
+          fps: 15, // The shared native camera helper currently captures 720p at 15fps.
+          onFrame: (listener) => {
+            stream.on("frame", listener);
+            return () => { stream.off("frame", listener); };
+          },
+          onClose: (listener) => {
+            const stopped = () => listener(stream.error || "USB capture source disconnected.");
+            stream.on("stopped", stopped);
+            if (stream.error) queueMicrotask(stopped);
+            return () => { stream.off("stopped", stopped); };
+          },
+          close: () => release(true),
+        };
+      } catch (e) { await release(true); throw e; }
+    }
+    if (!d) fail("source-missing", "A native screen needs its configured device.", 404);
+    // Native screenshot adapters are a compatibility fallback. Their actual
+    // sampling rate remains explicit; they are never advertised as 30fps video.
+    const first = await this.preview(d, s, 0), events = new EventEmitter();
+    let closed = false, timer: ReturnType<typeof setTimeout> | undefined;
+    const sample = async () => {
+      const started = performance.now();
+      try {
+        const frame = await this.preview(d, s, 0);
+        if (!closed) events.emit("frame", frame);
+      } catch (e) {
+        if (!closed) events.emit("closed", (e as Error).message);
+        closed = true;
+      }
+      if (!closed) timer = setTimeout(() => { void sample(); }, Math.max(0, 500 - (performance.now() - started)));
+    };
+    timer = setTimeout(() => { void sample(); }, 500);
+    return {
+      first,
+      fps: 2,
+      onFrame: (listener) => { events.on("frame", listener); return () => { events.off("frame", listener); }; },
+      onClose: (listener) => { events.on("closed", listener); return () => { events.off("closed", listener); }; },
+      close: async () => { closed = true; clearTimeout(timer); events.removeAllListeners(); },
+    };
+  }
+  async live(d: DeviceConfig | null, s: SourceConfig, profile: VideoProfile = "balanced"): Promise<LiveVideoSource> {
+    const key = `${s.kind}:${s.uniqueId ?? d?.id ?? s.id}:${profile}`;
+    let shared = this.liveStreams.get(key);
+    if (!shared) {
+      shared = {
+        sourceId: s.id, users: 0, closed: false,
+        source: this.liveInput(d, s).then((input) => encodeLiveImages(this.adapters.tool("ffmpeg"), input, profile)),
+      };
+      this.liveStreams.set(key, shared);
+      const entry = shared;
+      void entry.source.then((video) => video.onClose(() => {
+        entry.closed = true;
+        if (this.liveStreams.get(key) === entry) this.liveStreams.delete(key);
+      })).catch(() => {
+        entry.closed = true;
+        if (this.liveStreams.get(key) === entry) this.liveStreams.delete(key);
+      });
+    }
+    const entry = shared;
+    entry.users++;
+    let video: LiveVideoSource;
+    try { video = await entry.source; }
+    catch (e) { entry.users--; throw e; }
+    if (entry.closed) {
+      entry.users--;
+      await video.close();
+      fail("capture-failed", "Live capture source closed before it became ready.", 502);
+    }
+    let released = false;
+    const listeners = new Set<() => void>();
+    const subscribe = <T>(add: (listener: (event: T) => void) => () => void, listener: (event: T) => void) => {
+      if (released) return () => {};
+      const off = add(listener);
+      const detach = () => { off(); listeners.delete(detach); };
+      listeners.add(detach);
+      return detach;
+    };
+    return {
+      width: video.width, height: video.height, fps: video.fps,
+      onFrame: (listener) => subscribe<H264Frame>((fn) => video.onFrame(fn), listener),
+      onClose: (listener) => subscribe<string>((fn) => video.onClose(fn), listener),
+      close: async () => {
+        if (released) return;
+        released = true;
+        for (const detach of listeners) detach();
+        if (--entry.users === 0) {
+          entry.closed = true;
+          if (this.liveStreams.get(key) === entry) this.liveStreams.delete(key);
+          await video.close();
+        }
+      },
+    };
   }
   async preview(d: DeviceConfig | null, s: SourceConfig, interval = 750) {
     if (s.kind !== "usb" && !d)
@@ -120,10 +253,12 @@ export class CaptureEngine {
     let pending = this.pending.get(key);
     if (!pending) {
       pending = (async () => {
-        const data =
-          s.kind === "usb"
-            ? await this.usb(s).frame()
-            : await this.adapters.screenshot(d!);
+        const data = await (async () => {
+          if (s.kind !== "usb") return this.adapters.screenshot(d!);
+          const { stream, release } = this.retainUsb(s);
+          try { return await stream.frame(); }
+          finally { await release(); }
+        })();
         if (!(
           (data[0] === 137 && data.subarray(1, 4).toString() === "PNG") ||
           (data[0] === 255 && data[1] === 216)
@@ -189,8 +324,10 @@ export class CaptureEngine {
       startedMono = performance.now();
     let sourceStopped: (() => void) | undefined;
     if (s.kind === "usb") {
-      const stream = this.usb(s);
-      const first = await stream.frame();
+      const { stream, release } = this.retainUsb(s);
+      let first: Buffer;
+      try { first = await stream.frame(); }
+      catch (e) { await release(); throw e; }
       handle = start(this.adapters.tool("ffmpeg"), [
         "-hide_banner",
         "-loglevel",
@@ -238,6 +375,7 @@ export class CaptureEngine {
       detach = () => {
         stream.off("frame", frame);
         stream.off("stopped", sourceStopped!);
+        void release();
       };
       try {
         await ready(handle);
@@ -521,6 +659,12 @@ export class CaptureEngine {
     await run(this.cameraHelper, ["clipboard", file]);
   }
   async closeSource(s: SourceConfig) {
+    const live = [...this.liveStreams.entries()].filter(([, entry]) => entry.sourceId === s.id);
+    for (const [key, entry] of live) {
+      entry.closed = true;
+      this.liveStreams.delete(key);
+    }
+    await Promise.allSettled(live.map(async ([, entry]) => (await entry.source).close()));
     if (s.kind === "usb" && s.uniqueId) {
       const stream = this.streams.get(s.uniqueId);
       if (stream) {
@@ -532,6 +676,10 @@ export class CaptureEngine {
     if (s.deviceId) this.frames.delete(s.deviceId);
   }
   async close() {
+    const live = [...this.liveStreams.values()];
+    this.liveStreams.clear();
+    for (const entry of live) entry.closed = true;
+    await Promise.allSettled(live.map(async (entry) => (await entry.source).close()));
     await Promise.all([...this.streams.values()].map((s) => s.close()));
     this.streams.clear();
   }

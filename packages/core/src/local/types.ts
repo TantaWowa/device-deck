@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { reportRequestSchema, type UsageReport } from "../reports";
 import type { LicenseStatus } from "../../../licensing/src";
+import { streamOpenSchema, streamCredentialSchema, gestureInputSchema, pointerInputSchema, type GestureCapability } from "../live";
 export const capabilitySchema = z.enum([
   "preview",
   "key",
@@ -8,6 +9,7 @@ export const capabilitySchema = z.enum([
   "screenshot",
   "record",
   "restart",
+  "touch",
 ]);
 export type Capability = z.infer<typeof capabilitySchema>;
 export const deviceSchema = z
@@ -172,6 +174,7 @@ export type Device = DeviceConfig & {
   locked: boolean;
   lockReason?: string;
   capabilities: Capability[];
+  gestureCapabilities?: GestureCapability[];
 };
 export const supportsSimulatorLifecycle = (d: DeviceConfig) =>
   d.kind === "virtual" &&
@@ -353,6 +356,13 @@ export const operations = {
       ...remoteInputFields,
     })
     .strict(),
+  "remote.gesture": z.object({ ...leaseFields, gesture: gestureInputSchema }).strict(),
+  "control.start": z.object(leaseFields).strict(),
+  "control.pointer": z.object({ ...leaseFields, event: pointerInputSchema }).strict(),
+  "control.stop": z.object(leaseFields).strict(),
+  "streams.open": streamOpenSchema,
+  "streams.ping": streamCredentialSchema,
+  "streams.close": streamCredentialSchema,
   "remote.override": z
     .object({
       deviceId: z.string().min(1),

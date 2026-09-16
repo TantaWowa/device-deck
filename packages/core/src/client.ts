@@ -40,7 +40,7 @@ export async function callOperation(
       "X-Device-Deck-Client": origin,
     },
     body: JSON.stringify(args),
-    signal: AbortSignal.timeout(180000),
+    signal: AbortSignal.timeout(operation === "devices.simulator" ? 300000 : 180000),
     redirect: "error",
   });
   const body = await response.json();

@@ -80,7 +80,12 @@ export async function controlSimulator(
           throw error;
       }
     }
-    await execute("xcrun", ["simctl", "bootstatus", udid, "-b"], 120000);
+    try {
+      // A first iOS boot can spend several minutes starting SpringBoard.
+      await execute("xcrun", ["simctl", "bootstatus", udid, "-b"], 240000);
+    } catch (error) {
+      fail("simulator-not-ready", `${device.name} did not finish starting. Its system screen must be ready before opening the feed. Wait for Simulator to finish, then open its feed, or close and relaunch this simulator from Devices. ${(error as Error).message}`, 502);
+    }
     const developer = (await execute("xcode-select", ["-p"])).stdout
       .toString()
       .trim();

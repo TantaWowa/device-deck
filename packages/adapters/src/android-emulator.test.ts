@@ -28,6 +28,8 @@ type Entry = {
   booted?: boolean;
   consoleEmpty?: boolean;
   bootName?: string;
+  displayReady?: boolean;
+  bootAnimation?: boolean;
 };
 function fixture(initial: Entry[] = []) {
   const state = {
@@ -72,6 +74,12 @@ function fixture(initial: Entry[] = []) {
         output = entry.bootName || "";
       } else if (args.slice(4).join(" ") === "shell getprop sys.boot_completed")
         output = entry.booted ? "1\n" : "\n";
+      else if (args.slice(4).join(" ") === "shell getprop init.svc.bootanim")
+        output = entry.bootAnimation ? "running\n" : "stopped\n";
+      else if (args.slice(4).join(" ") === "exec-out screencap -p") {
+        const image = entry.displayReady === false ? Buffer.alloc(0) : Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aHSkAAAAASUVORK5CYII=", "base64");
+        return { stdout: image, stderr: "" };
+      }
       else if (args.slice(4).join(" ") === "emu kill") {
         state.entries = state.entries.filter((e) => e !== entry);
         output = "OK\n";
@@ -181,6 +189,25 @@ test("legacy emulator serials can learn their exact AVD and close, but cannot la
     !f.calls.some((c) => c.args[0] === "-list-avds"),
     "Closing a known serial does not require the emulator executable",
   );
+});
+
+test("a reused serial cannot turn a legacy row into a second control identity for a configured AVD", async () => {
+  const legacy: DeviceConfig = {
+    ...device,
+    id: "old-phone",
+    connection: { type: "adb", serial: "emulator-5554", port: 5038 },
+  };
+  const f = fixture([{ serial: "emulator-5554", state: "device", name: "TV_API_35", booted: true }]);
+  f.config.devices = [device, legacy];
+  for (const action of [
+    () => f.emulator.resolve(legacy),
+    () => f.emulator.prepare(legacy),
+    () => f.emulator.inspect(legacy),
+    () => f.emulator.control(legacy, "close"),
+  ]) await assert.rejects(action, /now belongs to Android TV \(TV_API_35\)/);
+  assert.equal((await f.emulator.resolve(device))?.id, device.id);
+  assert.equal(f.launches.length, 0);
+  assert(!f.calls.some((call) => call.args.includes("kill")));
 });
 
 test("booting emulators are not falsely marked stopped or launched twice; unverified AVD identity blocks control", async () => {
@@ -343,4 +370,19 @@ test("empty emulator console output falls back to the boot AVD property on the e
     );
   }
   assert(!f.calls.some((c) => c.args.includes("kill")));
+});
+
+
+test("Launch waits for both boot animation completion and a capturable display", async () => {
+  const f = fixture([{ serial: "emulator-5554", state: "device", name: "TV_API_35", booted: true, bootAnimation: true }]);
+  await assert.rejects(f.emulator.control(device, "launch"), /display is not ready/);
+  assert.equal(f.launches.length, 0, "An existing booting emulator is never duplicated");
+  assert.equal(f.calls.some((c) => c.args.includes("screencap")), false, "Do not declare the boot animation a ready screen");
+  f.state.entries[0].bootAnimation = false;
+  f.state.entries[0].displayReady = false;
+  await assert.rejects(f.emulator.control(device, "launch"), /display is not ready/);
+  assert(f.calls.some((c) => c.args.includes("screencap")));
+  f.state.entries[0].displayReady = true;
+  assert.equal((await f.emulator.control(device, "launch")).state, "booted");
+  assert.equal(f.launches.length, 0);
 });

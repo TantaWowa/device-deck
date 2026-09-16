@@ -21,10 +21,13 @@ export async function run(
       stderr: Buffer.from(stderr).toString(),
     };
   } catch (e) {
-    const err = e as Error & { stderr?: Buffer | string };
+    const err = e as Error & { stderr?: Buffer | string; killed?: boolean };
+    const detail = String(err.stderr || "").trim() || (err.killed
+      ? `Timed out after ${Math.round(timeout / 1000)} seconds.`
+      : err.message);
     throw new DeckError(
       "adapter-failed",
-      `${command}: ${String(err.stderr || err.message).slice(-1800)}`,
+      `${command}: ${detail.slice(-1800)}`,
       502,
     );
   }

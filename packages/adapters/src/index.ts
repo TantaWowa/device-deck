@@ -1,3 +1,6 @@
+import { adbTouchscreen, ANDROID_GESTURES, startScrcpy } from "./scrcpy";
+import { IOS_GESTURES, startIdbInteractive } from "./interactive";
+import type { InteractiveSource, VideoProfile } from "../../core/src/live";
 import { androidKeys, rokuKeys, hidKeys } from "../../core/src/remote";
 import { controlSimulator, simulatorState, wakeSimulator } from "./simulator";
 import { AndroidEmulators, isAndroidEmulator } from "./android-emulator";
@@ -392,7 +395,13 @@ export class Adapters {
           "get-state",
         ]);
         result.online = stdout.toString().trim() === "device";
-        if (result.online) result.capabilities.push("key", "text", "restart");
+        if (result.online) {
+          result.capabilities.push("key", "text", "restart");
+          if (existsSync(path.join(root, "build/native/scrcpy-server-v4.1")) && await adbTouchscreen(this.tool("adb"), this.adb(d))) {
+            result.gestureCapabilities = [...ANDROID_GESTURES];
+            result.capabilities.push("touch");
+          }
+        }
       }
       if (c.type === "roku") {
         const info = await this.rokuInfo(c.host);
@@ -418,8 +427,13 @@ export class Adapters {
           if (
             (await available(this.tool("idb"))) &&
             (await available("idb_companion"))
-          )
+          ) {
             result.capabilities.push("key", "text");
+            if (c.os === "ios") {
+              result.gestureCapabilities = [...IOS_GESTURES];
+              result.capabilities.push("touch");
+            }
+          }
         }
       }
       if (c.type === "apple-tv") {
@@ -648,6 +662,13 @@ export class Adapters {
       "unsupported-capability",
       "Remote input is not available for this device.",
     );
+  }
+  async startInteractive(d: DeviceConfig, control = true, profile: VideoProfile = "balanced"): Promise<InteractiveSource> {
+    if (d.connection.type === "adb") {
+      d = await this.verifyIdentity(d);
+      return startScrcpy(d, this.tool("adb"), path.join(root, "build/native/scrcpy-server-v4.1"), control, profile);
+    }
+    return startIdbInteractive(d, this.tool("idb"), control);
   }
   async pair(d: DeviceConfig) {
     if (d.connection.type !== "apple-tv")

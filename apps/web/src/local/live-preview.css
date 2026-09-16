@@ -1,0 +1,21 @@
+.deck-live-preview.live-screen { position: relative; display: flex; flex-direction: column; min-height: 180px; overflow: hidden; background: #101912; color: #f5f7f2; aspect-ratio: 16 / 9; }
+.deck-live-preview > video, .deck-live-preview > img { display: block; width: 100%; height: 100%; min-height: 0; flex: 1; object-fit: contain; background: #0c100d; user-select: none; }
+.deck-live-preview.deck-touch-enabled > video { touch-action: none; cursor: crosshair; }
+.deck-live-placeholder { position: absolute; inset: 0 0 34px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 16px; text-align: center; background: #122019ed; font-size: 12px; }
+.deck-live-placeholder > span { max-width: 480px; opacity: .8; line-height: 1.5; }
+.deck-live-recovery { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
+.deck-live-preview .deck-live-recovery button, .deck-live-preview .deck-live-status button { min-height: 30px; padding: 5px 8px; color: #eef6e8; background: #344f3d; border: 1px solid #769681; border-radius: 5px; font-size: 10px; display: inline-flex; align-items: center; gap: 5px; }
+.deck-live-status { position: relative; flex: none; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 9px; background: #1b2c21; font-size: 10px; line-height: 1.4; }
+.deck-live-status label { display: inline-flex; align-items: center; gap: 5px; margin: 0; font-size: 10px; }
+.deck-live-preview .deck-live-status select { width: auto; min-height: 24px; height: auto; margin: 0; padding: 2px; background: #223f2b; color: #eff5e8; border: 1px solid #627565; border-radius: 4px; font-size: 10px; }
+.deck-touch-help, .deck-live-error { flex: none; padding: 7px 9px; font-size: 11px; line-height: 1.5; background: #203a28; }
+.deck-live-error { color: #ffdebb; background: #5b3422; }
+.deck-control-session { display: flex; flex-direction: column; gap: 9px; margin-bottom: 14px; }
+.deck-control-session .deck-live-preview { border-radius: 7px; min-height: 240px; height: min(48vh, 420px); aspect-ratio: auto; }
+.deck-control-session-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.deck-control-session-actions > span { font-size: 11px; color: #7c926f; }
+.deck-control-session-actions input { flex: 1; min-width: 90px; width: 100%; }
+.portal-remote-preview .deck-live-preview { aspect-ratio: auto; height: min(42dvh, 400px); }
+@media (max-width: 640px) { .deck-live-status { flex-wrap: wrap; } .deck-live-preview .deck-live-status select { font-size: 12px; min-height: 30px; } .deck-control-session .deck-live-preview { height: 35dvh; min-height: 200px; } }
+.deck-live-preview.live-screen { align-items: stretch; justify-content: flex-start; }
+.deck-control-session-actions > button { border: 1px solid #c5d0dc; border-radius: 6px; padding: 6px 10px; min-height: 34px; cursor: pointer; }

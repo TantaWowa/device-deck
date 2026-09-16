@@ -162,6 +162,28 @@ code { font: 11px ui-monospace, SFMono-Regular, monospace; background: #e0e8d7; 
 .feed-card footer strong { display: block; font-size: 13px; }
 .feed-card footer span { color: #8a9980; font-size: 10px; }
 .feed-card footer .secondary { min-height: 42px; padding: 9px 12px; font-size: 11px; }
+.portal-feed-toolbar { position: relative; display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 18px; }
+.portal-feed-toolbar > div:first-child { flex: 1; min-width: 200px; }
+.portal-feed-toolbar > div:first-child strong { display: block; font-size: 14px; }
+.portal-feed-toolbar > div:first-child span { display: block; color: #7c8e70; font-size: 11px; margin-top: 5px; }
+.portal-feed-picker { position: absolute; z-index: 20; top: calc(100% + 8px); right: 0; width: min(490px, 100%); padding: 14px; background: #fffefa; border: 1px solid #dce5d4; border-radius: 13px; box-shadow: 0 15px 50px #183f2424; }
+.portal-feed-picker > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; font-size: 14px; }
+.portal-feed-search { display: flex; align-items: center; gap: 9px; border: 1px solid #dce5d4; border-radius: 7px; padding: 0 11px; color: #6e8262; }
+.portal-feed-search input { width: 100%; min-width: 0; min-height: 43px; border: 0; outline: none; background: transparent; color: #294333; font: inherit; font-size: 13px; }
+.portal-feed-options { max-height: min(420px, 55dvh); overflow-y: auto; overscroll-behavior: contain; margin-top: 10px; }
+.portal-feed-option { display: flex; align-items: center; gap: 10px; padding: 10px 2px; border-bottom: 1px solid #edf0e7; }
+.portal-feed-option:last-child { border-bottom: 0; }
+.portal-feed-option label, .portal-feed-option-name { display: flex; align-items: center; flex: 1; gap: 10px; min-width: 0; cursor: pointer; }
+.portal-feed-option input { width: 17px; height: 17px; flex-shrink: 0; accent-color: #42663c; }
+.portal-feed-option strong { display: block; font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.portal-feed-option small { display: block; color: #87967e; font-size: 10px; line-height: 1.6; }
+.portal-feed-option button { flex-shrink: 0; max-width: 130px; font-size: 10px; line-height: 1.5; padding: 8px; }
+.portal-feed-none { color: #809174; font-size: 12px; text-align: center; padding: 20px 0; }
+.portal-feed-launch-status { display: flex; align-items: center; gap: 8px; color: #638155; font-size: 11px; line-height: 1.5; margin: 10px 0 0; }
+.portal-feed-launch-status svg { flex-shrink: 0; }
+.portal-feed-control { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 10px; padding: 10px 16px 14px; border-top: 1px solid #e8eddf; }
+.portal-feed-control > span { margin-right: auto; color: #7a8b6f; font-size: 10px; }
+.portal-feed-control button { min-height: 40px; font-size: 11px; padding: 8px 10px; }
 .device-grid { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 20px; }
 .device-card { background: #fffefa; border: 1px solid #dbe5d4; border-radius: 13px; padding: 21px; display: flex; flex-direction: column; }
 .device-card h2 { font-size: 20px; margin-bottom: 5px; }
@@ -244,3 +266,8 @@ code { font: 11px ui-monospace, SFMono-Regular, monospace; background: #e0e8d7; 
   .capture-list .machine-icon { width: 41px; height: 41px; flex-shrink: 0; }
 }
 @media (prefers-reduced-motion: reduce) { *, *:before, *:after { animation: none !important; transition: none !important; scroll-behavior: auto !important; } }
+
+/* Live video stays on the feed surface; the remote sheet contains controls. */
+.feed-card > .deck-live-preview { border-radius: 0; }
+.portal-remote-content .deck-control-session-actions { margin-bottom: 12px; }
+.portal-remote-content .deck-control-session-actions input { background: #fffefa; border: 1px solid #dce5d4; border-radius: 6px; padding: 8px; color: #294333; }

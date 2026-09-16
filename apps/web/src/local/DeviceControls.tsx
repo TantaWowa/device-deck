@@ -193,7 +193,7 @@ export function DeviceControls({
         sessionId: result.session.id,
         leaseToken: result.leaseToken,
       });
-    else setNotice("Device reserved. Remote and capture controls are ready.");
+    else setNotice("Device reserved. Choose a control or capture action.");
     return { sessionId: result.session.id, leaseToken: result.leaseToken };
   };
   const send = (payload: { key?: string; text?: string; wake?: true }) => {

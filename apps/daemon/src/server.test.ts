@@ -237,6 +237,31 @@ test("simulator lifecycle refuses occupied/recording devices and requires close 
     await cleanup();
   }
 });
+test("launching a simulator provisions a missing feed once and preserves existing capture assignments", async () => {
+  const { deck, adapters, cleanup } = await setup();
+  adapters.simulator = async (d, action) => ({ deviceId: d.id, action, state: "booted", changed: true });
+  try {
+    await useSimulator(deck);
+    const c = structuredClone(deck.config.config);
+    c.devices[0].captureSourceId = null;
+    c.sources = c.sources.filter((s) => s.deviceId !== "one");
+    await deck.execute("config.save", { config: c, revision: deck.config.revision });
+    const result = await deck.execute("devices.simulator", { deviceId: "one", action: "launch" });
+    const sourceId = deck.config.config.devices[0].captureSourceId;
+    assert.deepEqual(result, { deviceId: "one", action: "launch", state: "booted", changed: true, sourceId });
+    assert.deepEqual(deck.config.config.sources.find((s) => s.id === sourceId), {
+      id: "native-one", name: "one screen", kind: "native", deviceId: "one",
+    });
+    await deck.execute("devices.simulator", { deviceId: "one", action: "launch" });
+    assert.equal(deck.config.config.sources.filter((s) => s.deviceId === "one").length, 1);
+    const assigned = structuredClone(deck.config.config);
+    assigned.sources.push({ id: "usb", name: "External capture", kind: "usb", uniqueId: "usb-camera" });
+    assigned.devices[0].captureSourceId = "usb";
+    await deck.execute("config.save", { config: assigned, revision: deck.config.revision });
+    const existing = await deck.execute("devices.simulator", { deviceId: "one", action: "launch" });
+    assert.deepEqual(existing, { deviceId: "one", action: "launch", state: "booted", changed: true, sourceId: "usb" });
+  } finally { await cleanup(); }
+});
 test("simulator transitions keep inventory responsive, block reservation/config races and unlock after failure", async () => {
   const { deck, adapters, cleanup } = await setup();
   let started!: () => void, finish!: () => void;

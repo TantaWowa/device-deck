@@ -255,7 +255,14 @@ export function createService(
             throw new DeckError("unauthorized", "Machine access expired or was revoked before the request completed. Reconnect from your machines page.", 401);
           reply(
             200,
-            await deck.execute(operation as Operation, value, origin),
+            await deck.execute(operation as Operation, value, origin, async () => {
+              if (hub) return authority.authorize(apiToken);
+              if (remote) return Boolean(deck.config.config.tailscale?.origin === tailscale.origin &&
+                typeof login === "string" && deck.config.config.tailscale.allowedUsers.includes(login));
+              if (native) return true;
+              const current = browsers.get(cookie);
+              return Boolean(current && current.host === req.headers.host && current.expiresAt > Date.now());
+            }),
           );
           return;
         }

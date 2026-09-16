@@ -17,6 +17,7 @@ import {
 } from "../../../../packages/core/src/device-table";
 import { CapturePreview } from "./CapturePreview";
 import { FeedViewer } from "./FeedViewer";
+import { FeedPreview } from "./FeedPreview";
 import { Reports } from "../components/Reports";
 import { License, LicenseReminder } from "../components/License";
 import { CaptureCards, type CardView } from "../components/CaptureCards";
@@ -477,7 +478,7 @@ function App() {
     intent: FeedAction,
     anchor: PopupAnchor,
   ) => {
-    const device = data.devices.find((d) => d.captureSourceId === source.id);
+    const device = data.devices.find((d) => d.captureSourceId === source.id || d.id === source.deviceId);
     if (intent === "identify") {
       setControl(null);
       setIdentify({
@@ -633,24 +634,43 @@ function App() {
           <FeedViewer
             sources={data.sources}
             devices={data.devices}
+            launchSimulator={async (device) => {
+              await api("devices.simulator", { deviceId: device.id, action: "launch" }, AbortSignal.timeout(150_000));
+              const latest = await api<Snapshot>("inventory");
+              setData(latest);
+              return latest;
+            }}
+            renderPreview={(source) => {
+              const device = data.devices.find((entry) => entry.id === source.deviceId || entry.captureSourceId === source.id);
+              return <FeedPreview
+                source={source}
+                device={device}
+                session={device ? activeSession(device.id) : undefined}
+                lease={device ? credentials(device.id) : null}
+                owner={data.config.settings.owner}
+                recording={Boolean(device && data.recordings.some((recording) => recording.deviceId === device.id))}
+                onLease={(value) => { if (device) setLeases((previous) => ({ ...previous, [device.id]: value })); }}
+                refresh={refresh}
+              />;
+            }}
             renderActions={(source) => (
               <FeedActions
                 name={source.name}
                 wakeAvailable={data.devices.some(
                   (d) =>
-                    d.captureSourceId === source.id &&
+                    (d.captureSourceId === source.id || d.id === source.deviceId) &&
                     supportsWake(d) &&
                     !d.locked &&
                     !busy,
                 )}
                 reserved={data.sessions.some(
                   (session) =>
-                    session.sourceId === source.id &&
+                    (session.sourceId === source.id || session.deviceId === source.deviceId) &&
                     session.state !== "closed",
                 )}
                 recording={data.recordings.some(
                   (r) =>
-                    data.devices.find((d) => d.id === r.deviceId)
+                    r.deviceId === source.deviceId || data.devices.find((d) => d.id === r.deviceId)
                       ?.captureSourceId === source.id,
                 )}
                 onAction={(intent, anchor) =>

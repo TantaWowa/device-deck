@@ -155,6 +155,9 @@ To control an already reserved device without taking its reservation, authentica
 | `sessions.takeover`                                                      | Finalize existing session, then acquire with a reason and `confirmed:true`                                 |
 | `devices.bulk`                                                           | Per-device lock/unlock/restart success or failure                                                          |
 | `devices.wake`                                                           | Platform wake attempt without reserving; reserved devices require their current `sessionId` and `confirmed:true` |
+| `streams.open`, `streams.ping`, `streams.close` | Authenticated WebRTC signaling, viewer heartbeat and cleanup |
+| `control.start`, `control.pointer`, `control.stop` | Lease-owned scripted touch source, ordered Android pointer input and contact cleanup |
+| `remote.gesture` | Completed tap, swipe or long press using encoded-frame coordinates |
 | `remote.input`                                                           | One key, text string or x/y tap and dispatch timestamp                                                     |
 | `remote.override`                                                        | Explicit remote input for the expected active session without changing its reservation or recording         |
 | `pairing.start`, `pairing.finish`                                        | Apple TV PIN pairing owned by the current session; request expires after 120 seconds                       |
@@ -167,7 +170,7 @@ Read routes:
 
 - `GET /v1/health`: implementation version, PID and dependency diagnostics.
 - `GET /v1/preview/DEVICE_ID`: current PNG/JPEG from the configured source. This authenticated, read-only observation may share another session's stream; it does not grant control.
-- `GET /v1/source-preview/SOURCE_ID`: current JPEG from a registered USB capture card, including an unassigned card. Requires the same local authentication. A bound card retains its device's maintenance and closing-session checks. The Feeds viewer polls this endpoint at up to 10 fps; there is no audio or reservation requirement for observation.
+- `GET /v1/source-preview/SOURCE_ID`: current JPEG from a registered USB capture card, including an unassigned card. Requires the same local authentication. A bound card retains its device's maintenance and closing-session checks. The explicit snapshot fallback uses this endpoint; normal Feeds viewing uses `streams.open` and H.264 over WebRTC. Observation has no reservation requirement.
 - `GET /v1/artifacts/ID/file`: original capture or annotated export, with byte-range support for video.
 - `GET /v1/artifacts/ID/clean`: clean original when an annotated export exists.
 - `GET /v1/artifacts/ID/log`: JSON manifest with identity, outcome and recording-relative input timestamps.
@@ -175,6 +178,38 @@ Read routes:
 Machine routes require authentication except static UI files, public `/v1/machine` identity, the one-use ticket exchange and the code-plus-signed-token pairing exchange. Portal grants authenticate machine API requests; `/v1/hub/pairing-code`, `/v1/hub/unpair` and browser-ticket creation require a native token over loopback. Every route accessed through the Tailscale origin requires an allowed user identity from Serve. Browser mutation requests also require `X-Device-Deck: local`. Unexpected hosts and origins outside the exact configured allow lists are rejected. Allowed portal origins receive CORS responses for scoped bearer requests. No API token is embedded in the public website or local JS bundle.
 
 Errors use an HTTP status and `{error,message,details?}`. Common codes are `no-match`, `ambiguous-match`, `device-reserved`, `source-reserved`, `device-locked`, `invalid-lease`, `stale-lease`, `config-conflict`, `unsupported-capability`, `capture-failed`, and `cleanup-required`. A failed bulk member appears in that member's result rather than pretending the whole selection succeeded.
+
+## Live video and touch operations
+
+`streams.open` accepts exactly one of `deviceId` or `sourceId`, a complete browser SDP `offer`, and an optional `profile` (`low`, `balanced`, or `high`; default `balanced`). Set `control:true` only with `deviceId`, `sessionId` and its `leaseToken`. View-only streams do not require a reservation. The response is `{id, token, answer, capabilities, width, height, mode}`; `mode` is `live` or `snapshots` for the simulator's limited-refresh source. Keep the stream token private.
+
+Use `{id,token}` with `streams.ping` every five seconds and with `streams.close` when finished. Viewers expire after 15 seconds without a heartbeat. Heartbeats recheck access; the server also checks live access and session validity periodically. Closing a viewer cancels its input and releases unused media resources, but does not release the reservation or stop a recording.
+
+A browser creates a receive-only video transceiver and a reliable, ordered data channel named `control` before producing the offer. It must finish ICE gathering before sending the offer. On that channel, send one of:
+
+```json
+{"type":"pointer","event":{"type":"down","contactId":1,"x":120,"y":300,"width":720,"height":1280}}
+{"type":"gesture","gesture":{"type":"swipe","x":120,"y":900,"toX":120,"toY":300,"width":720,"height":1280,"durationMs":350}}
+{"type":"cancel"}
+```
+
+These are separate messages. Pointer types are `down`, `move`, `up` and `cancel`. A contact must go down before moving or going up. Coordinates are in the current encoded video's pixels, not CSS pixels, screen points or the original device's unscaled resolution. Use the current video dimensions; the server rejects stale Android geometry. A swipe adds `toX`, `toY` and `durationMs`; a long press uses `type:"longPress"` and `durationMs`; a tap needs only its position and dimensions. Supported gesture names come from `capabilities`, never from a guessed platform default.
+
+The server sends `ready` with capabilities/dimensions, `geometry` when the source size changes, and `error` for failed control. Cancel local pointer state on geometry changes. Live media needs host UDP ports 49152–49251 over a permitted LAN/Tailscale path; no public STUN/TURN relay is configured. See [live video and touch](live-video-and-touch.md) for setup, profile limits and platform differences.
+
+For scripted gestures, reserve a device first, then use the generic CLI `call` command. Replace the placeholders below with that reservation's values. `control.start` returns the source's current `width`, `height` and supported gestures; adapt every coordinate example to that result.
+
+```sh
+./devdeck call control.start '{"sessionId":"SESSION_ID","leaseToken":"LEASE_TOKEN"}'
+./devdeck call remote.gesture '{"sessionId":"SESSION_ID","leaseToken":"LEASE_TOKEN","gesture":{"type":"tap","x":120,"y":300,"width":720,"height":1280}}'
+./devdeck call remote.gesture '{"sessionId":"SESSION_ID","leaseToken":"LEASE_TOKEN","gesture":{"type":"swipe","x":120,"y":900,"toX":120,"toY":300,"width":720,"height":1280,"durationMs":350}}'
+./devdeck call remote.gesture '{"sessionId":"SESSION_ID","leaseToken":"LEASE_TOKEN","gesture":{"type":"longPress","x":120,"y":300,"width":720,"height":1280,"durationMs":800}}'
+./devdeck call control.stop '{"sessionId":"SESSION_ID","leaseToken":"LEASE_TOKEN"}'
+```
+
+`control.pointer` accepts `{sessionId,leaseToken,event}` with the same pointer event shape as the data channel. It is available only when continuous drag is advertised, currently touchscreen Android. `control.stop` releases its contacts and source without ending the reservation. Scripted input is refused while a browser owns touch control for that session. Opening browser control ends the scripted controller. Idle scripted controllers expire after 15 seconds.
+
+MCP exposes the same operations as `streams_open`, `streams_ping`, `streams_close`, `control_start`, `control_pointer`, `control_stop` and `remote_gesture`. iOS only advertises completed tap/swipe/long-press gestures through idb, and its video source samples screenshots at up to 2 fps. It does not accept continuous drag or multitouch.
 
 ## MCP walkthrough
 

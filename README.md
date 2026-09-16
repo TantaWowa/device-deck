@@ -8,7 +8,7 @@ The public website includes a separate simulated demo. It never connects to the 
 
 ## Install the Mac application
 
-Use the team `.pkg` from the release operator, then open `/Applications/Device Deck.app`. It includes Node and the native helper. Run `devdeck version`, `devdeck doctor`, `devdeck ui`, or `devdeck tui`; `devdeck service install` enables launch at login. Recording and USB screenshots currently need `brew install ffmpeg`. Team builds use TEST licenses and an unsigned installer; signed/notarized public builds use LIVE licenses. See [installation and update details](docs/macos-distribution.md).
+Use the team `.pkg` from the release operator, then open `/Applications/Device Deck.app`. It includes Node and the native helper. Run `devdeck version`, `devdeck doctor`, `devdeck ui`, or `devdeck tui`; `devdeck service install` enables launch at login. Recording, USB live video, simulator video and USB screenshots currently need `brew install ffmpeg`. Team builds use TEST licenses and an unsigned installer; signed/notarized public builds use LIVE licenses. See [installation and update details](docs/macos-distribution.md).
 
 ## Build from source
 
@@ -79,13 +79,13 @@ Roku, Fire TV, Android TV, Apple TV, Samsung and LG visual styles are available.
 
 ### Watch capture feeds
 
-Open **Feeds** to watch registered USB inputs without reserving a device. Choose inputs using the checkboxes, then select **Split screen** or **Single feed**. Left/Right switches the selected feed, 1–9 opens a feed, G toggles the grid and F toggles fullscreen. These keys browse pictures; use the device viewer for remote input. The URL retains the layout and selected cards across reloads.
+Open **Feeds** to watch connected inputs without reserving a device. **Choose feeds** opens a searchable list; select the screens you want, then use **Split screen** or **Single feed**. **Start simulator → Launch & show feed** starts a configured Apple simulator or Android emulator and opens its feed when ready. Use **Remote** for buttons, or **Start control session** on a touchscreen feed. The floating remote contains controls only; video stays in the feed. Left/Right switches feeds, 1–9 opens a feed, G toggles the grid and F toggles fullscreen. The URL retains the layout and selected feeds across reloads.
 
 ```sh
 ./devdeck feeds                         # Names, connection state and stable IDs
 ./devdeck view --mux                    # All connected registered USB feeds
 ./devdeck view --sources ugreen-1,ugreen-2,usb-video --mux
-./devdeck view                         # One picture, Left/Right through the feeds
+./devdeck view                         # One feed, Left/Right through the feeds
 ./devdeck view --source ugreen-1        # Just one named card or stable ID
 ./devdeck view --device 'Roku Ultra'    # That device's paired USB feed
 ./devdeck view --mux --json             # Return a one-use browser URL without opening it
@@ -93,14 +93,14 @@ Open **Feeds** to watch registered USB inputs without reserving a device. Choose
 
 `--browser` is accepted explicitly; browser viewing is the default. Source names must match uniquely, so use IDs when multiple cards have the same name. `--sources` accepts a comma-separated list and preserves its order. A selected disconnected card remains visible as disconnected. Viewing newly detected cards registers their stable hardware IDs without assigning a TV. With no selection, configured USB cards are preferred; if none are configured, connected external inputs are selected, which can include USB webcams.
 
-The feed viewer refreshes at up to 10 fps with silent video. It shares each card's native stream with previews and recordings. Actual refresh rate depends on the Mac, USB bandwidth and HDMI signal. A connected card can still output a black picture or a “No Signal” slate when its HDMI source is sleeping or disconnected. Bound cards retain device maintenance and session-release checks.
+The feed viewer receives silent H.264 video over WebRTC, up to the USB capture limit of 15 fps. It shares each card's native capture with previews and recordings. Select **Low bandwidth** for a slower remote connection. Actual frame rate depends on the Mac, USB bandwidth, HDMI signal and network. A connected card can still output a black picture or a “No Signal” slate when its HDMI source is sleeping or disconnected. Bound cards retain device maintenance and session-release checks. See [live video and touch](docs/live-video-and-touch.md) for quality profiles, touch support and the additional UDP connectivity needed over Tailscale.
 
 ### Control a device
 
 1. Open Devices and select **Discover / add devices**. Select several devices and choose **Add selected**, or use **Add all** to register every new device that is ready. Already configured devices are skipped.
 2. Devices use their discovered names, with numbers added for duplicates, and native capture screens are connected automatically. Edit individual names or USB capture bindings afterward as needed. Roku and physical Apple TV input use the network; their video needs an explicitly paired USB capture card.
 3. Open the viewer and reserve the device with an owner label and a reason.
-4. Send supported keys or text, take a screenshot or start recording.
+4. Send supported keys or text, touch a supported Android/iOS device screen, take a screenshot or start recording.
 5. Stop recording, open the resulting file in Captures, and release the device.
 
 The CLI picker offers the same workflow:
@@ -126,19 +126,19 @@ For scripts, `reserve --json` returns a session ID and secret lease token. Every
 | Target                                 | Input                               | Preview / screenshot / recording   | Setup                                                        |
 | -------------------------------------- | ----------------------------------- | ---------------------------------- | ------------------------------------------------------------ |
 | Roku                                   | ECP keys and Unicode text           | Explicit USB input                 | Network ECP must permit control; stable Roku serial required |
-| Android, Android TV, Fire TV, emulator | ADB keys, tap, printable ASCII text | Native ADB or explicit USB input   | ADB authorization; configurable server port                  |
-| iOS and tvOS simulator                 | idb keys, tap and text              | Native simctl                      | Booted simulator, Xcode; idb for input                       |
+| Android, Android TV, Fire TV, emulator | ADB keys/text; scrcpy gestures on touchscreen devices | Native H.264 live video; native or USB capture | Authorized ADB; Android 5+ for live video; pinned server bundled |
+| iOS and tvOS simulator                 | idb keys/text; iOS tap, swipe and long press | Limited-refresh video from simctl screenshots; native recording | Booted simulator, Xcode; idb client and companion for input |
 | USB capture only                       | No remote input                     | USB preview, screenshot, recording | Stable capture card identity                                 |
 | Physical Apple TV                      | Companion keys and text             | Explicit USB input                 | pyatv and PIN pairing                                        |
 | Other physical Apple devices           | Discovery only                      | No native adapter                  | No unsupported operation is advertised                       |
 
-Native Android recordings stop at 175 seconds, below screenrecord's 180-second limit. Other sources use the configured limit. Preview refreshes about once a second and is labelled accordingly. USB preview and recording share one capture-helper stream selected by stable AVFoundation unique ID, never enumeration index. Capture video is silent in this release.
+Native Android recordings stop at 175 seconds, below screenrecord's 180-second limit. Other sources use the configured limit. Live previews use browser video elements. Android touch includes continuous drag and multitouch when advertised; iOS touch supports completed gestures over a preview sampled up to twice a second. An explicit view-only snapshot fallback is available when video cannot connect. USB preview and recording share one capture-helper stream selected by stable AVFoundation unique ID, never enumeration index. Capture video is silent in this release.
 
 The verified hardware matrix, real proof files and limits are recorded in [validation](docs/validation.md). Implemented adapter paths do not imply that every device model has been tested.
 
 ## Dependencies
 
-ADB is needed for Android, ffmpeg and ffprobe for video validation and annotations. The native USB and clipboard helper is included in the release. Simulator input uses the separately installed [official idb client and companion](https://github.com/facebook/idb). Physical Apple TV uses [pyatv](https://pyatv.dev/).
+ADB is needed for Android; ffmpeg provides USB/simulator live encoding, and ffmpeg plus ffprobe provide video validation and annotations. Source builds fetch and verify the pinned scrcpy 4.1 server; release builds bundle it with its Apache-2.0 license. The native USB and clipboard helper is included in the release. Simulator input uses the separately installed [official idb client and companion](https://github.com/facebook/idb). Physical Apple TV uses [pyatv](https://pyatv.dev/).
 
 ```sh
 brew install android-platform-tools ffmpeg facebook/fb/idb-companion

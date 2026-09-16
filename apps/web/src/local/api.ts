@@ -1,7 +1,8 @@
 import type { Operation } from "../../../../packages/core/src/local/types";
-export async function api(operation: Operation, args: unknown = {}) {
+export async function api<T = any>(operation: Operation, args: unknown = {}, signal?: AbortSignal): Promise<T> {
   const response = await fetch(`/v1/operations/${operation}`, {
     method: "POST",
+    signal,
     headers: { "Content-Type": "application/json", "X-Device-Deck": "local" },
     body: JSON.stringify(args),
   });

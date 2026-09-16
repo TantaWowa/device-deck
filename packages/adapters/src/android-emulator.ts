@@ -148,6 +148,19 @@ export class AndroidEmulators {
         409,
       );
     const found = matches[0];
+    if (!c.avdName && found?.avdName) {
+      const owner = this.config().devices.find(
+        (candidate) => candidate.id !== d.id &&
+          candidate.connection.type === "adb" &&
+          candidate.connection.avdName === found.avdName,
+      );
+      if (owner)
+        fail(
+          "emulator-identity-mismatch",
+          `This saved emulator connection now belongs to ${owner.name} (${found.avdName}). Select that device, or configure this device's exact AVD name before controlling it.`,
+          409,
+        );
+    }
     if (
       !found &&
       c.avdName &&
@@ -240,6 +253,22 @@ export class AndroidEmulators {
       resolved,
     };
   }
+  private async displayReady(d: DeviceConfig) {
+    if (d.connection.type !== "adb") return false;
+    const args = ["-P", String(d.connection.port), "-s", d.connection.serial];
+    try {
+      const animation = (await this.execute(this.adb(), [...args, "shell", "getprop", "init.svc.bootanim"], 3000)).stdout.toString().trim();
+      if (animation && animation !== "stopped") return false;
+      // ADB and sys.boot_completed can become ready before SurfaceFlinger can
+      // capture the display. Wait for a complete PNG before returning Launch.
+      const image = (await this.execute(this.adb(), [...args, "exec-out", "screencap", "-p"], 5000)).stdout;
+      return image.length >= 33 &&
+        image.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])) &&
+        image.subarray(12, 16).toString() === "IHDR" &&
+        image.readUInt32BE(16) > 0 && image.readUInt32BE(20) > 0 &&
+        image.subarray(-8, -4).toString() === "IEND";
+    } catch { return false; }
+  }
   async control(d: DeviceConfig, action: "launch" | "close") {
     if (!isAndroidEmulator(d) || d.connection.type !== "adb")
       fail("unsupported-lifecycle", "This target is not an Android emulator.");
@@ -306,7 +335,8 @@ export class AndroidEmulators {
       const inspected = await this.inspect(d);
       if (
         inspected.state === "booted" &&
-        inspected.resolved?.connection.type === "adb"
+        inspected.resolved?.connection.type === "adb" &&
+        await this.displayReady(inspected.resolved)
       )
         return {
           deviceId: d.id,
@@ -319,7 +349,7 @@ export class AndroidEmulators {
     }
     fail(
       "emulator-transition",
-      "Android emulator is still starting. Its process was left running; refresh and wait for Android to finish booting.",
+      "Android emulator is still starting or its display is not ready. Its process was left running; refresh and wait for Android to finish booting.",
       409,
     );
   }

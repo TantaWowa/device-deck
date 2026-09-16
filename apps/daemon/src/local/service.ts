@@ -33,6 +33,8 @@ import {
   type SourceConfig,
 } from "../../../../packages/core/src/local/types";
 import { Store } from "./store";
+import { LiveStreams, type LiveTarget } from "../live";
+import type { StreamOpen } from "../../../../packages/core/src/live";
 import {
   LicenseManager,
   FEATURES,
@@ -49,6 +51,7 @@ export class DeckService {
   readonly adapters: Adapters;
   readonly capture: CaptureEngine;
   readonly licensing: EntitlementService;
+  readonly streams: LiveStreams;
   store!: Store;
   private control = new Map<string, SerialQueue>();
   private global = new SerialQueue();
@@ -78,6 +81,16 @@ export class DeckService {
     this.adapters = adapters || new Adapters(() => this.config.config);
     this.capture = capture || new CaptureEngine(this.adapters);
     this.licensing = licensing || new LicenseManager(directory);
+    this.streams = new LiveStreams({
+      resolve: (args) => this.liveTarget(args),
+      video: (target, profile) => {
+        if (!target.source) fail("source-missing", "Configure a capture source for this device.", 404);
+        return this.capture.live(target.device, target.source, profile);
+      },
+      interactive: (device, profile) => this.adapters.startInteractive(device, true, profile),
+      report: (error) => { this.diagnostics.push(error.message); if (this.diagnostics.length > 100) this.diagnostics.shift(); },
+      helperIdentity: () => JSON.stringify(this.config.config.tools),
+    });
   }
   async init() {
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
@@ -261,6 +274,7 @@ export class DeckService {
     operation: Operation,
     value: unknown,
     origin: Artifact["origin"] = "API",
+    authorize?: () => Promise<boolean>,
   ): Promise<unknown> {
     if (this.shuttingDown)
       fail("service-stopping", "Service is stopping.", 503);
@@ -564,18 +578,21 @@ export class DeckService {
           try {
             // Learn an existing emulator's AVD only from its exact live ADB transport.
             const resolved = await this.adapters.prepareSimulator(device);
-            if (
-              resolved.connection.type === "adb" &&
-              resolved.connection.avdName &&
-              JSON.stringify(resolved.connection) !==
-                JSON.stringify(device.connection)
-            ) {
-              const next = structuredClone(this.config.config);
-              next.devices = next.devices.map((d) =>
-                d.id === device.id
-                  ? { ...d, connection: resolved.connection }
-                  : d,
-              );
+            const next = structuredClone(this.config.config);
+            let configured = { ...device, connection: resolved.connection };
+            if (args.action === "launch" && !configured.captureSourceId) {
+              let source = next.sources.find((s) => s.kind === "native" && s.deviceId === device.id);
+              if (!source) {
+                const base = `native-${device.id}`;
+                let id = base, suffix = 2;
+                while (next.sources.some((s) => s.id === id)) id = `${base}-${suffix++}`;
+                source = { id, name: `${device.name} screen`, kind: "native", deviceId: device.id };
+                next.sources.push(source);
+              }
+              configured = { ...configured, captureSourceId: source.id };
+            }
+            if (JSON.stringify(configured) !== JSON.stringify(device)) {
+              next.devices = next.devices.map((d) => d.id === device.id ? configured : d);
               await this.config.save(next, this.config.revision, (next) =>
                 this.validateChange(next, device.id),
               );
@@ -606,7 +623,7 @@ export class DeckService {
                   ? "Launched simulator"
                   : "Closed simulator",
             });
-            return result;
+            return { ...result, sourceId: device.captureSourceId };
           } finally {
             this.simulatorActions.delete(device.id);
             this.store.lock(device.id, null);
@@ -704,6 +721,27 @@ export class DeckService {
         });
       case "remote.input":
         return this.withLease(args, (s) => this.remoteInput(s, args));
+      case "streams.open":
+        return this.streams.open(args, authorize);
+      case "streams.ping":
+        return this.streams.ping(args);
+      case "streams.close":
+        return this.streams.closeStream(args);
+      case "control.start":
+      case "control.pointer":
+      case "remote.gesture": {
+        return this.withLease(args, async (session) => {
+          const target = this.liveTarget({ deviceId: session.deviceId, control: true, ...args });
+          const controller = await this.streams.script(session.id, target, authorize);
+          if (operation === "control.pointer") controller.control.send({ type: "pointer", event: args.event });
+          if (operation === "remote.gesture") controller.control.send({ type: "gesture", gesture: args.gesture });
+          await controller.control.settled();
+          target.validate();
+          return { capabilities: controller.source.capabilities, width: controller.source.width, height: controller.source.height };
+        });
+      }
+      case "control.stop":
+        return this.withLease(args, async (session) => { await this.streams.stopScript(session.id); return { ok: true }; });
       case "remote.override": {
         const validate = () => {
           this.device(args.deviceId);
@@ -886,6 +924,34 @@ export class DeckService {
       const current = this.store.validate(args.sessionId, args.leaseToken);
       return fn(current);
     });
+  }
+  private liveTarget(args: Pick<StreamOpen, "deviceId" | "sourceId" | "control" | "sessionId" | "leaseToken">): LiveTarget {
+    const device = args.deviceId ? this.device(args.deviceId) : this.config.config.devices.find((d) => d.captureSourceId === args.sourceId) || null;
+    const source = this.config.config.sources.find((s) => s.id === (args.sourceId || device?.captureSourceId));
+    if (args.sourceId && !source) fail("source-missing", "Capture source is no longer configured.", 404);
+    if (!device && !source) fail("source-missing", "Select a configured device or capture source.", 404);
+    const deviceIdentity = JSON.stringify(device);
+    const sourceIdentity = JSON.stringify(source);
+    const toolIdentity = JSON.stringify(this.config.config.tools);
+    const validate = () => {
+      if (this.shuttingDown || this.changingConfig) fail("configuration-changing", "Device configuration is changing. Reconnect the viewer.", 409);
+      if (JSON.stringify(this.config.config.tools) !== toolIdentity) fail("configuration-changing", "Capture tools changed. Reconnect the viewer.", 409);
+      if (device) {
+        if (JSON.stringify(this.device(device.id)) !== deviceIdentity) fail("identity-mismatch", "The device configuration changed. Reconnect the viewer.", 409);
+        if (this.store.lockReason(device.id)) fail("device-locked", "Device is locked for maintenance.", 409);
+        if (this.store.sessions().some((s) => s.deviceId === device.id && s.state === "closing")) fail("session-closing", "The device session is being released.", 409);
+      }
+      if (source && JSON.stringify(this.config.config.sources.find((s) => s.id === source.id)) !== sourceIdentity)
+        fail("source-changed", "The capture source changed. Reconnect the viewer.", 409);
+      if (args.control) {
+        if (!device || !args.sessionId || !args.leaseToken) fail("lease-required", "Start a control session first.", 403);
+        const session = this.store.validate(args.sessionId, args.leaseToken);
+        if (session.deviceId !== device.id) fail("lease-mismatch", "This reservation belongs to another device.", 403);
+        this.checkSessionEntitlement(session);
+      }
+    };
+    validate();
+    return { device, source, validate };
   }
   async preview(
     deviceId: string,
@@ -1249,8 +1315,10 @@ export class DeckService {
     s.state = "closing";
     s.closeReason = reason;
     this.store.putSession(s);
+    const stopInput = this.streams.closeSession(s.id);
     const closing = this.queue(s.deviceId)
       .run(async () => {
+        await stopInput;
         await this.finishRecording(
           s.id,
           interrupted || reason.startsWith("Service") ? reason : undefined,
@@ -1488,6 +1556,7 @@ export class DeckService {
         this.queue(id).run(async () => {}),
       ),
     );
+    await this.streams.close();
     await this.capture.close();
     this.store.close();
   }

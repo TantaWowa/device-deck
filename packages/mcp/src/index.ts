@@ -3,6 +3,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { callOperation, callService, endpoint } from "../../core/src/client";
 import { operations, type Operation } from "../../core/src/local/types";
+import { z } from "zod";
 const server = new McpServer({ name: "device-deck", version });
 const descriptions: Partial<Record<Operation, string>> = {
   "license.status":
@@ -33,6 +34,13 @@ const descriptions: Partial<Record<Operation, string>> = {
     "Explicitly take over an existing session with a reason and confirmed=true. Its recording is finalized before the new reservation.",
   "remote.input":
     "Send exactly one key, text string or x/y tap using a current lease credential. Unsupported keys and platforms return errors.",
+  "control.start": "Start daemon-owned persistent touch control for a credential-owned Android or iOS simulator session. Returns supported gestures and screen dimensions. Android uses pinned scrcpy; iOS uses idb. Idle controllers expire after 15 seconds.",
+  "control.pointer": "Send an ordered down/move/up/cancel contact in encoded screen pixels through an existing or newly started lease-owned Android controller. Movement is continuous and bounded. Send dimensions matching the current display. Never replay after connection loss.",
+  "control.stop": "Cancel active contacts and stop scripted control helpers without releasing the reservation or interrupting recording.",
+  "remote.gesture": "Perform a supported tap, swipe or longPress with the current lease, in encoded screen pixels. width/height must match the displayed image; unsupported platforms are rejected. Release or control.stop cleans up the helper.",
+  "streams.open": "Negotiate an authenticated H264 WebRTC viewer from a browser SDP offer. View-only streams need no reservation; interactive streams require the exact device session and lease. Return an SDP answer and short-lived stream credentials; ping every 5 seconds and close when leaving.",
+  "streams.ping": "Keep this live viewer alive while its original authentication and optional reservation remain valid. Does not renew the reservation.",
+  "streams.close": "Close a live viewer and cancel contacts, releasing its encoder/helper references. Does not release the reservation.",
   "remote.override":
     "Explicitly send one key, text string or x/y tap to an already reserved device without taking its reservation. Requires deviceId, the expected active sessionId, the overriding user's display owner and confirmed=true. Preserves the current reservation and recording; changed or ended sessions reject the override. Capture still requires the owner's lease credential.",
   "captures.screenshot":
@@ -45,11 +53,14 @@ const descriptions: Partial<Record<Operation, string>> = {
     "Validate and atomically save the complete configuration using the revision from config.get. Reserved devices and source bindings cannot change.",
 };
 for (const [operation, schema] of Object.entries(operations)) {
+  let inputSchema: z.ZodTypeAny = schema;
+  while (inputSchema instanceof z.ZodEffects) inputSchema = inputSchema.innerType();
+  if (!(inputSchema instanceof z.ZodObject)) throw new Error(`Operation ${operation} requires an object schema.`);
   server.tool(
     operation.replaceAll(".", "_"),
     descriptions[operation as Operation] ||
       `Device Deck ${operation}. Uses the same validated operation as CLI and web.`,
-    schema.shape,
+    inputSchema.shape,
     async (args: Record<string, unknown>) => {
       try {
         const result = await callOperation(
