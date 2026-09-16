@@ -7,11 +7,11 @@ import { z } from "zod";
 import { atomicWrite, SerialQueue } from "../../../packages/config/src";
 import { DeckError, type Config } from "../../../packages/core/src/local/types";
 import { version } from "../../../packages/core/src/version";
-import { publicKeySchema, hubClaimsSchema, pairMachineRequestSchema, PAIRING_TTL_SECONDS, ACCESS_TTL_SECONDS } from "../../../packages/core/src/hub";
+import { publicKeySchema, hubClaimsSchema, pairMachineRequestSchema, portalOriginSchema, type MachinePairingStatus, PAIRING_TTL_SECONDS, ACCESS_TTL_SECONDS } from "../../../packages/core/src/hub";
 
 const privateKeySchema = publicKeySchema.extend({ d: z.string().regex(/^[A-Za-z0-9_-]{43}$/) });
 const identitySchema = z.object({ id: z.string().uuid(), privateKey: privateKeySchema }).strict();
-const bindingSchema = z.object({ issuer: z.string().url(), pinnedCloudJWK: publicKeySchema, uid: z.string().min(1).max(128), pairingId: z.string().min(1).max(128) }).strict();
+const bindingSchema = z.object({ issuer: portalOriginSchema, pinnedCloudJWK: publicKeySchema, uid: z.string().min(1).max(128), pairingId: z.string().min(1).max(128) }).strict();
 const hash = (value: string) => createHash("sha256").update(value).digest();
 const deny = () => new DeckError("invalid-machine-credential", "Machine access has expired or is not authorized. Reconnect from your machines page.", 401);
 export const isLoopback = (value = "") => ["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(value);
@@ -76,11 +76,16 @@ export class MachineAuthority {
     const { d: _private, ...publicKey } = this.identity!.privateKey;
     return { id: this.identity!.id, name: os.hostname().slice(0, 120), version, publicKey };
   }
+  async pairingStatus(): Promise<MachinePairingStatus> {
+    await this.init();
+    return this.binding
+      ? { paired: true, accountUrl: `${this.binding.issuer}/app/` }
+      : { paired: false };
+  }
   async issueCode(issuer: string | undefined) {
     await this.init();
     if (!issuer) throw new DeckError("portal-not-configured", "Configure a portal with devdeck network enable --portal https://your-portal first.", 409);
-    const url = new URL(issuer);
-    if (url.origin !== issuer || (url.protocol !== "https:" && !(url.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname))))
+    if (!portalOriginSchema.safeParse(issuer).success)
       throw new DeckError("invalid-portal", "The configured portal must use HTTPS or loopback HTTP for development.");
     const response = await this.request(`${issuer}/api/v1/public-key`, { redirect: "error", signal: AbortSignal.timeout(10000) });
     if (!response.ok) throw new DeckError("portal-unavailable", "Could not retrieve the configured portal's signing key.", 502);

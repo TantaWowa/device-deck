@@ -40,6 +40,14 @@ export async function simulatorState(
       Booting: "starting",
       "Shutting Down": "stopping",
     };
+    if (found.state === "Booted") {
+      try {
+        // CoreSimulator reports Booted before SpringBoard finishes startup.
+        // Without -b this only observes the exact UDID; it cannot boot a device.
+        await execute("xcrun", ["simctl", "bootstatus", connection.udid], 2000);
+        return "booted";
+      } catch { return "starting"; }
+    }
     return states[found.state] || "unavailable";
   }
   return "unavailable";

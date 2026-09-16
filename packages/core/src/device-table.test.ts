@@ -2,6 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   deviceConnectionLabel,
+  deviceAvailabilityLabel,
+  deviceIsBooting,
   sortTableDevices,
   type DeviceSortColumn,
 } from "./device-table";
@@ -99,7 +101,7 @@ test("connection sorting uses simulator lifecycle labels and reservation sorting
       deviceConnectionLabel({ online: false }),
       deviceConnectionLabel({ online: true }),
     ],
-    ["Launching…", "Closing…", "Stopped", "Offline", "Online"],
+    ["Booting…", "Closing…", "Stopped", "Offline", "Online"],
   );
   const reserved = [
     {
@@ -124,4 +126,11 @@ test("connection sorting uses simulator lifecycle labels and reservation sorting
     ).map((d) => d.id),
     ["two", "ten"],
   );
+});
+test("physical and virtual booting devices cannot be available even with a stale online flag", () => {
+  for (const device of [{ readiness: "starting" as const }, { simulatorState: "starting" as const }]) {
+    assert.equal(deviceIsBooting(device), true);
+    assert.equal(deviceConnectionLabel({ ...device, online: true }), "Booting…");
+    assert.equal(deviceAvailabilityLabel({ ...device, online: true, locked: false }), "Unavailable");
+  }
 });

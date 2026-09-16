@@ -206,6 +206,10 @@ export function createService(
           });
           return;
         }
+        if (req.method === "GET" && url.pathname === "/v1/hub/status") {
+          reply(200, await authority.pairingStatus());
+          return;
+        }
         if (req.method === "POST" && url.pathname === "/v1/browser-ticket") {
           if (!localNative)
             throw new DeckError(

@@ -13,16 +13,17 @@ type TableDevice = Pick<
   | "online"
   | "locked"
   | "simulatorState"
+  | "readiness"
   | "captureSourceId"
   | "visibility"
 >;
 type TableSession = Pick<Session, "deviceId" | "state" | "owner" | "reason">;
 
 export function deviceConnectionLabel(
-  device: Pick<Device, "online" | "simulatorState">,
+  device: Pick<Device, "online" | "simulatorState" | "readiness">,
 ) {
-  return device.simulatorState === "starting"
-    ? "Launching…"
+  return deviceIsBooting(device)
+    ? "Booting…"
     : device.simulatorState === "stopping"
       ? "Closing…"
       : device.simulatorState === "shutdown"
@@ -33,9 +34,13 @@ export function deviceConnectionLabel(
 }
 
 export function deviceAvailabilityLabel(
-  device: Pick<Device, "locked" | "online">,
+  device: Pick<Device, "locked" | "online" | "readiness" | "simulatorState">,
 ) {
-  return device.locked ? "Locked" : device.online ? "Available" : "Unavailable";
+  return device.locked ? "Locked" : device.online && !deviceIsBooting(device) && device.simulatorState !== "stopping" ? "Available" : "Unavailable";
+}
+
+export function deviceIsBooting(device: Pick<Device, "readiness" | "simulatorState">) {
+  return device.readiness === "starting" || device.simulatorState === "starting";
 }
 
 const collator = new Intl.Collator(undefined, {

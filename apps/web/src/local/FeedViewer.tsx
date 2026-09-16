@@ -2,14 +2,16 @@ import React, { useEffect, useRef, useState } from "react";
 import { Check, ChevronDown, ChevronLeft, ChevronRight, Columns2, ListFilter, LoaderCircle, Maximize, Monitor, Play, Search, X } from "lucide-react";
 import { canLaunchSimulator, supportsSimulatorLifecycle, type Source, type Device, type Snapshot } from "../../../../packages/core/src/local/types";
 import { CapturePreview } from "./CapturePreview";
+import { deviceIsBooting } from "../../../../packages/core/src/device-table";
 import "./feed-workspace.css";
 
-export function FeedViewer({ sources, devices, renderActions, renderPreview, launchSimulator }: {
+export function FeedViewer({ sources, devices, renderActions, renderPreview, launchSimulator, request }: {
   sources: Source[];
   devices: Device[];
   renderActions: (source: Source) => React.ReactNode;
   renderPreview?: (source: Source) => React.ReactNode;
   launchSimulator: (device: Device) => Promise<Snapshot>;
+  request?: { deviceIds: string[] } | null;
 }) {
   const query = new URLSearchParams(location.search);
   const cards = sources.filter((source) => source.kind === "usb" || Boolean(source.deviceId));
@@ -31,6 +33,7 @@ export function FeedViewer({ sources, devices, renderActions, renderPreview, lau
   const pickerButton = useRef<HTMLButtonElement>(null);
   const searchInput = useRef<HTMLInputElement>(null);
   const mounted = useRef(true);
+  const handledRequest = useRef<typeof request>(null);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const deviceFor = (source: Source) => devices.find((device) => device.id === source.deviceId || device.captureSourceId === source.id);
   const feeds = selected.map((id) => cards.find((source) => source.id === id)).filter((source): source is Source => Boolean(source));
@@ -41,15 +44,28 @@ export function FeedViewer({ sources, devices, renderActions, renderPreview, lau
     setSelected((ids) => ids.includes(id) ? ids : [...ids, id]);
     setActive(id); setLayout("single"); setPickerOpen(false);
   };
+  useEffect(() => {
+    if (!request || handledRequest.current === request) return;
+    handledRequest.current = request;
+    const requestedSources = request.deviceIds.map((id) => cards.find((source) => source.kind === "native" && source.deviceId === id) || cards.find((source) => deviceFor(source)?.id === id)).filter((source): source is Source => Boolean(source));
+    if (requestedSources.length) {
+      setSelected((ids) => [...new Set([...ids, ...requestedSources.map((source) => source.id)])]);
+      setActive(requestedSources[0].id); setLayout(requestedSources.length > 1 ? "grid" : "single"); setPickerOpen(false);
+    } else {
+      const target = devices.find((device) => device.id === request.deviceIds[0]);
+      setSearch(target?.name || ""); setSimulatorsOnly(Boolean(target && supportsSimulatorLifecycle(target))); setPickerOpen(true);
+      setNotice(target ? `Choose or launch the screen feed for ${target.name}. Touch starts disabled.` : "Choose a screen feed to continue.");
+    }
+  }, [request, cards, devices]);
   const launch = async (device: Device) => {
     if (launching) return;
-    setLaunching(device.id); setError(""); setNotice(`Launching ${device.name}. Waiting for its screen…`);
+    setLaunching(device.id); setError(""); setNotice(`Booting ${device.name}. Waiting for its screen…`);
     try {
       const latest = await launchSimulator(device);
       if (!mounted.current) return;
       const started = latest.devices.find((entry) => entry.id === device.id);
       const source = latest.sources.find((entry) => entry.kind === "native" && entry.deviceId === device.id) || latest.sources.find((entry) => entry.id === started?.captureSourceId);
-      if (!started?.online || started.simulatorState === "starting") throw new Error(`${device.name} has not finished booting. ${started?.healthDetail || "Try again once its runtime is ready."}`);
+      if (!started?.online || deviceIsBooting(started)) throw new Error(`${device.name} has not finished booting. ${started?.healthDetail || "Try again once its runtime is ready."}`);
       if (!source || source.status !== "connected") throw new Error(`${device.name} started, but its screen feed is unavailable. ${source?.detail || started.healthDetail || "Check the simulator runtime and capture tools."}`);
       reveal(source.id);
       setNotice(`${device.name} started. Connecting its feed; use the feed's controls once video arrives.`);
@@ -110,18 +126,19 @@ export function FeedViewer({ sources, devices, renderActions, renderPreview, lau
           {error && <p className="feed-selector-error" role="alert">{error}</p>}
           <div className="feed-selector-list">{rows.map(({ key, source, device, name }) => {
             const simulator = device && supportsSimulatorLifecycle(device);
-            const pending = launching === device?.id || device?.simulatorState === "starting" || device?.simulatorState === "stopping";
+            const booting = launching === device?.id || Boolean(device && deviceIsBooting(device));
+            const pending = booting || device?.simulatorState === "stopping";
             const stopped = simulator && !device.online;
             return <div className="feed-selector-row" key={key} data-feed-option={key}>
               {source ? <input type="checkbox" aria-label={`Show ${name}`} checked={selected.includes(source.id)} onChange={(event) => setSelected((ids) => event.target.checked ? [...ids, source.id] : ids.filter((id) => id !== source.id))} /> : <Monitor size={17} />}
-              <div><strong>{name}</strong><small>{device?.name !== name && device?.name ? `${device.name} · ` : ""}{pending ? device?.simulatorState === "stopping" ? "Stopping…" : "Launching…" : stopped ? `${device.platform} · Stopped` : source?.status === "connected" ? "Available" : "Input unavailable"}</small>{device?.simulatorState === "unavailable" && <small>{device.healthDetail}</small>}</div>
-              {stopped || (simulator && !source) ? <button type="button" aria-label={`Launch ${device.name} and show feed`} disabled={Boolean(launching) || pending || device.locked || device.simulatorState === "unavailable" || !canLaunchSimulator(device)} onClick={() => void launch(device)}>{pending ? <LoaderCircle className="simulator-spinner" size={14} /> : <Play size={14} />}{pending ? "Launching…" : "Launch & show feed"}</button> : source && <button type="button" aria-label={`Open ${name} feed`} onClick={() => reveal(source.id)}>{selected.includes(source.id) && <Check size={14} />}Show feed</button>}
+              <div><strong>{name}</strong><small>{device?.name !== name && device?.name ? `${device.name} · ` : ""}{pending ? device?.simulatorState === "stopping" ? "Stopping…" : "Booting…" : stopped ? `${device.platform} · Stopped` : source?.status === "connected" ? "Available" : "Input unavailable"}</small>{device?.simulatorState === "unavailable" && <small>{device.healthDetail}</small>}</div>
+              {stopped || (simulator && !source) ? <button type="button" aria-label={`Launch ${device.name} and show feed`} disabled={Boolean(launching) || pending || device.locked || device.simulatorState === "unavailable" || !canLaunchSimulator(device)} onClick={() => void launch(device)}>{pending ? <LoaderCircle className="simulator-spinner" size={14} /> : <Play size={14} />}{pending ? device.simulatorState === "stopping" ? "Stopping…" : "Booting…" : "Launch & show feed"}</button> : source && <button type="button" aria-label={`Open ${name} feed`} onClick={() => reveal(source.id)}>{selected.includes(source.id) && <Check size={14} />}Show feed</button>}
             </div>;
           })}{!rows.length && <p className="feed-selector-empty">{search ? "No feeds match your search." : simulatorsOnly ? "No simulators configured. Add one from Devices." : "No capture inputs configured yet."}</p>}</div>
           <footer><span>{feeds.length} selected</span><button onClick={() => setSelected(cards.filter((source) => source.status === "connected").map((source) => source.id))}>Show available</button><button onClick={() => setSelected([])}>Clear</button></footer>
         </div>}
       </div>
-      <span className="feed-toolbar-summary">{cards.filter((source) => source.status === "connected").length} available · {devices.filter((device) => supportsSimulatorLifecycle(device) && !device.online).length} simulators stopped</span>
+      <span className="feed-toolbar-summary">{cards.filter((source) => source.status === "connected" && launching !== deviceFor(source)?.id && !deviceIsBooting(deviceFor(source) || {})).length} available · {devices.filter((device) => supportsSimulatorLifecycle(device) && !device.online && launching !== device.id && !deviceIsBooting(device) && device.simulatorState !== "stopping").length} simulators stopped{devices.some((device) => deviceIsBooting(device) || launching === device.id) ? ` · ${devices.filter((device) => deviceIsBooting(device) || launching === device.id).length} booting` : ""}</span>
     </div>
     {launching && <p className="feed-launch-status" role="status"><LoaderCircle className="simulator-spinner" size={16} />{notice}</p>}
     {!launching && notice && <p className="feed-launch-status" role="status">{notice}<button aria-label="Dismiss feed notice" onClick={() => setNotice("")}><X size={14} /></button></p>}
@@ -131,9 +148,11 @@ export function FeedViewer({ sources, devices, renderActions, renderPreview, lau
     <div className={`feed-grid ${layout}`} style={{ "--feed-rows": layout === "grid" ? Math.ceil(visible.length / 2) || 1 : 1, "--feed-count": visible.length || 1 } as React.CSSProperties}>
       {visible.map((source) => {
         const device = deviceFor(source);
+        const booting = launching === device?.id || Boolean(device && deviceIsBooting(device));
+        const stopping = device?.simulatorState === "stopping";
         return <section key={source.id} data-feed-source={source.id} className={`feed-tile ${current?.id === source.id ? "active" : ""}`}>
-          <button className="feed-title" onClick={() => { setActive(source.id); setLayout("single"); }} title="Open this feed"><strong>{source.name}</strong><span>{device?.name || (source.kind === "usb" ? "USB capture" : "Device screen")}</span></button>
-          {source.status === "missing" ? <div className="feed-offline"><span>{device && supportsSimulatorLifecycle(device) ? `${device.name} is stopped.` : "Input unavailable. Connect the device to resume."}</span>{device && canLaunchSimulator(device) && !device.online && <button type="button" className="primary" disabled={Boolean(launching) || device.locked || device.simulatorState === "unavailable"} onClick={() => void launch(device)}><Play size={15} />Launch & show feed</button>}</div> : renderPreview ? renderPreview(source) : <CapturePreview name={source.name} endpoint={source.kind === "usb" ? `/v1/source-preview/${encodeURIComponent(source.id)}` : `/v1/preview/${encodeURIComponent(source.deviceId!)}`} />}
+          <button className="feed-title" onClick={() => { setActive(source.id); setLayout("single"); }} title="Open this feed"><strong>{source.name}</strong><span className={booting ? "feed-booting-label" : ""}>{booting ? `${device?.name || source.name} · Booting…` : device?.name || (source.kind === "usb" ? "USB capture" : "Device screen")}</span></button>
+          {booting || stopping || source.status === "missing" ? <div className={`feed-offline${booting ? " feed-booting" : ""}`} role="status">{booting && <LoaderCircle className="simulator-spinner" size={24} />}<span>{booting ? `${device?.name || source.name} is booting. Waiting for its screen…` : stopping ? `${device?.name} is stopping…` : device && supportsSimulatorLifecycle(device) && !device.online ? `${device.name} is stopped.` : "Input unavailable. Connect the device to resume."}</span>{device && canLaunchSimulator(device) && !device.online && !booting && !stopping && <button type="button" className="primary" disabled={Boolean(launching) || device.locked || device.simulatorState === "unavailable"} onClick={() => void launch(device)}><Play size={15} />Launch & show feed</button>}</div> : renderPreview ? renderPreview(source) : <CapturePreview name={source.name} endpoint={source.kind === "usb" ? `/v1/source-preview/${encodeURIComponent(source.id)}` : `/v1/preview/${encodeURIComponent(source.deviceId!)}`} />}
           {renderActions(source)}
         </section>;
       })}

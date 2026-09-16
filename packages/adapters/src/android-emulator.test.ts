@@ -30,6 +30,7 @@ type Entry = {
   bootName?: string;
   displayReady?: boolean;
   bootAnimation?: boolean;
+  bootId?: string;
 };
 function fixture(initial: Entry[] = []) {
   const state = {
@@ -76,6 +77,8 @@ function fixture(initial: Entry[] = []) {
         output = entry.booted ? "1\n" : "\n";
       else if (args.slice(4).join(" ") === "shell getprop init.svc.bootanim")
         output = entry.bootAnimation ? "running\n" : "stopped\n";
+      else if (args.slice(4).join(" ") === "shell cat /proc/sys/kernel/random/boot_id")
+        output = entry.bootId || "00000000-0000-0000-0000-000000000001";
       else if (args.slice(4).join(" ") === "exec-out screencap -p") {
         const image = entry.displayReady === false ? Buffer.alloc(0) : Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aHSkAAAAASUVORK5CYII=", "base64");
         return { stdout: image, stderr: "" };
@@ -106,6 +109,24 @@ function fixture(initial: Entry[] = []) {
   );
   return { emulator, state, calls, launches, config };
 }
+
+test("externally started emulators wait for display readiness and cache proof only for the same boot UUID", async () => {
+  const entry: Entry = { serial: "emulator-5560", state: "device", name: "TV_API_35", booted: true, displayReady: false };
+  const f = fixture([entry]);
+  assert.equal((await f.emulator.inspect(device)).state, "starting");
+  entry.displayReady = true;
+  assert.equal((await f.emulator.inspect(device)).state, "booted");
+  const screenshots = () => f.calls.filter((call) => call.args.includes("screencap")).length;
+  const before = screenshots();
+  assert.equal((await f.emulator.inspect(device)).state, "booted");
+  assert.equal(screenshots(), before, "steady health checks reuse proof without recapturing the screen");
+  entry.bootId = "00000000-0000-0000-0000-000000000002";
+  entry.displayReady = false;
+  assert.equal((await f.emulator.inspect(device)).state, "starting");
+  assert.equal(screenshots(), before + 1, "a reboot entirely between polls still invalidates display proof");
+  entry.booted = false;
+  await assert.rejects(f.emulator.resolve(device), /still booting/);
+});
 
 test("Android launch addresses an exact AVD, reconciles its new serial, and never controls the emulator occupying its old serial", async () => {
   const f = fixture([

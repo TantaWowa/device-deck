@@ -1,4 +1,5 @@
 import { FloatingRemote } from "./FloatingRemote";
+import { AccountConnection } from "./AccountConnection";
 import { browserUUID } from "../../../../packages/ui/src/uuid";
 import { AnchoredPopover } from "./AnchoredPopover";
 import type { PopupAnchor } from "./anchored-popup";
@@ -9,10 +10,11 @@ import { SimulatorControls } from "./SimulatorControls";
 import { FeedActions, type FeedAction } from "./FeedActions";
 import { DiscoveryDevices } from "./DiscoveryDevices";
 import { registerDiscoveredDevices } from "../../../../packages/core/src/discovery";
-import { supportsWake } from "../../../../packages/core/src/remote";
+import { supportsWake, deviceInputMode } from "../../../../packages/core/src/remote";
 import {
   deviceConnectionLabel,
   deviceAvailabilityLabel,
+  deviceIsBooting,
   sortTableDevices,
   type DeviceSort,
   type DeviceSortColumn,
@@ -163,6 +165,7 @@ function DeviceFilterGroup({
   );
 }
 function App() {
+  const [feedRequest, setFeedRequest] = useState<{ deviceIds: string[] } | null>(null);
   const [control, setControl] = useState<{
     deviceId: string;
     action: FeedAction;
@@ -335,7 +338,14 @@ function App() {
   };
   const saveConfig = async (config: Config, revision = data!.configRevision) =>
     action("config.save", { config, revision }, "Configuration saved.");
+  const openDeviceFeeds = (ids: string[]) => {
+    setControl(null); setIdentify(null); setViewing([]); setHover(""); setTab("Feeds");
+    setFeedRequest({ deviceIds: ids });
+  };
   const openViewer = (ids: string[]) => {
+    if (data?.devices.some((device) => ids.includes(device.id) && deviceInputMode(device) === "touch")) {
+      openDeviceFeeds(ids); return;
+    }
     setViewing(ids);
     setTarget(ids[0] || "");
     setHover("");
@@ -447,6 +457,9 @@ function App() {
     setReserve({ device, takeover });
   };
   const openControls = (d: Device, action: FeedAction, anchor: PopupAnchor) => {
+    if (action === "touch" || (action === "remote" && deviceInputMode(d) !== "remote")) {
+      openDeviceFeeds([d.id]); return;
+    }
     if (action === "wake" && !activeSession(d.id)) {
       perform(async () => {
         setBusy(true);
@@ -524,6 +537,8 @@ function App() {
       reserved={Boolean(activeSession(d.id))}
       recording={data.recordings.some((r) => r.deviceId === d.id)}
       wakeAvailable={supportsWake(d) && !d.locked && !busy}
+      remoteAvailable={deviceInputMode(d) === "remote"}
+      touchAvailable={deviceInputMode(d) === "touch"}
       onAction={(intent, anchor) => openControls(d, intent, anchor)}
     />
   );
@@ -535,6 +550,7 @@ function App() {
   ) => (
     <DeviceControls
       onCapture={captureFeedback.completed}
+      remoteAvailable={deviceInputMode(d) === "remote"}
       key={d.id}
       device={d}
       data={data}
@@ -601,6 +617,7 @@ function App() {
               : tailscaleConnection ? "Tailscale connected" : "Local service connected"}
           </span>
         </div>
+        <AccountConnection />
         {data.license && tab !== "License" && (
           <LicenseReminder
             status={data.license}
@@ -634,6 +651,7 @@ function App() {
         )}
         {tab === "Feeds" && (
           <FeedViewer
+            request={feedRequest}
             sources={data.sources}
             devices={data.devices}
             launchSimulator={async (device) => {
@@ -658,6 +676,8 @@ function App() {
             renderActions={(source) => (
               <FeedActions
                 name={source.name}
+                remoteAvailable={data.devices.some((d) => (d.captureSourceId === source.id || d.id === source.deviceId) && deviceInputMode(d) === "remote")}
+                touchAvailable={data.devices.some((d) => (d.captureSourceId === source.id || d.id === source.deviceId) && deviceInputMode(d) === "touch")}
                 wakeAvailable={data.devices.some(
                   (d) =>
                     (d.captureSourceId === source.id || d.id === source.deviceId) &&
@@ -972,7 +992,7 @@ function App() {
                           </td>
                           <td>
                             <span
-                              className={`live-status ${d.online ? "green" : ""}`}
+                              className={`live-status ${deviceIsBooting(d) ? "amber" : d.online ? "green" : ""}`}
                             >
                               {deviceConnectionLabel(d)}
                             </span>
@@ -1025,7 +1045,7 @@ function App() {
                             <small>
                               {data.sources.find(
                                 (s) => s.id === d.captureSourceId,
-                              )?.status || "Remote only"}
+                              )?.status || (deviceInputMode(d) === "touch" ? "No screen feed" : "Remote only")}
                             </small>
                           </td>
                           <td>
@@ -1043,13 +1063,7 @@ function App() {
                                   (r) => r.deviceId === d.id,
                                 )}
                                 refresh={refresh}
-                                manageSession={(anchor) =>
-                                  setControl({
-                                    deviceId: d.id,
-                                    action: "reserve",
-                                    anchor,
-                                  })
-                                }
+                                manageSession={(anchor) => openControls(d, "reserve", anchor)}
                               />
                               <button onClick={() => openViewer([d.id])}>
                                 View
@@ -1058,7 +1072,7 @@ function App() {
                                 Edit
                               </button>
                               {deviceActions(d)}
-                              <button
+                              {deviceInputMode(d) === "remote" && <button
                                 aria-label={`Copy CLI command for ${d.name}`}
                                 onClick={() =>
                                   perform(async () => {
@@ -1074,7 +1088,7 @@ function App() {
                                 }
                               >
                                 <Terminal size={15} />
-                              </button>
+                              </button>}
                             </div>
                           </td>
                         </tr>
@@ -1305,7 +1319,11 @@ function App() {
           <SettingsView data={data} save={saveConfig} busy={busy} />
         )}
       </main>
-      {control && data.devices.find((d) => d.id === control.deviceId) && (
+      {control && data.devices.find((d) => d.id === control.deviceId) && (deviceInputMode(data.devices.find((d) => d.id === control.deviceId)!) !== "remote" ? (
+        <AnchoredPopover title={`Capture & session · ${data.devices.find((d) => d.id === control.deviceId)!.name}`} anchor={control.anchor} onClose={() => setControl(null)}>
+          {controls(data.devices.find((d) => d.id === control.deviceId)!, control.action, true, () => {})}
+        </AnchoredPopover>
+      ) : (
         <FloatingRemote
           key={control.deviceId}
           storageKey={control.deviceId}
@@ -1327,7 +1345,7 @@ function App() {
             )
           }
         </FloatingRemote>
-      )}
+      ))}
       {identify && (
         <AnchoredPopover
           title={`Identify · ${identify.name}`}

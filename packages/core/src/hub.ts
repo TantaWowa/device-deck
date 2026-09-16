@@ -25,6 +25,26 @@ export const machineIdentitySchema = z.object({
 });
 export type MachineIdentity = z.infer<typeof machineIdentitySchema>;
 
+/** Pairing links only use a trusted portal origin, never an arbitrary URL. */
+export const portalOriginSchema = z.string().max(2048).refine((value) => {
+  try {
+    const url = new URL(value);
+    return url.origin === value && !url.username && !url.password &&
+      (url.protocol === 'https:' || (url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)));
+  } catch { return false; }
+}, 'Use a canonical HTTPS portal origin, or loopback HTTP for development.');
+const accountUrlSchema = z.string().refine((value) => {
+  try {
+    const url = new URL(value);
+    return portalOriginSchema.safeParse(url.origin).success && value === `${url.origin}/app/`;
+  } catch { return false; }
+}, 'Use the portal account home address.');
+export const machinePairingStatusSchema = z.discriminatedUnion('paired', [
+  z.object({ paired: z.literal(false) }).strict(),
+  z.object({ paired: z.literal(true), accountUrl: accountUrlSchema }).strict(),
+]);
+export type MachinePairingStatus = z.infer<typeof machinePairingStatusSchema>;
+
 export const machineRecordSchema = machineIdentitySchema.omit({ version: true }).extend({
   endpoint: endpointSchema, pairingId: z.string().uuid(),
   createdAt: z.string().datetime(), updatedAt: z.string().datetime(),

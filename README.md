@@ -79,7 +79,7 @@ Roku, Fire TV, Android TV, Apple TV, Samsung and LG visual styles are available.
 
 ### Watch capture feeds
 
-Open **Feeds** to watch connected inputs without reserving a device. **Choose feeds** opens a searchable list; select the screens you want, then use **Split screen** or **Single feed**. **Start simulator → Launch & show feed** starts a configured Apple simulator or Android emulator and opens its feed when ready. Use **Remote** for buttons, or **Start control session** on a touchscreen feed. The floating remote contains controls only; video stays in the feed. Left/Right switches feeds, 1–9 opens a feed, G toggles the grid and F toggles fullscreen. The URL retains the layout and selected feeds across reloads.
+Open **Feeds** to watch connected inputs without reserving a device. **Choose feeds** opens a searchable list; select the screens you want, then use **Split screen** or **Single feed**. **Start simulator → Launch & show feed** starts a configured Apple simulator or Android emulator and opens its feed when ready. TV devices offer **Remote** for buttons. Phones and tablets offer an **Enable touch** switch on their feed; turning it off keeps the reservation and any recording active. The floating remote contains controls only; video stays in the feed. Left/Right switches feeds, 1–9 opens a feed, G toggles the grid and F toggles fullscreen. The URL retains the layout and selected feeds across reloads.
 
 ```sh
 ./devdeck feeds                         # Names, connection state and stable IDs
@@ -173,7 +173,7 @@ Captures use a shared local output folder. Renaming changes library metadata whi
 
 ## Remote machines and the web portal
 
-Use `devdeck network enable --host 0.0.0.0 --port 47831` for ordinary IP/port access through your own network. The new `/app/` PWA provides Google and email/password login, a private machine list, direct feeds and phone-friendly remotes. [Remote access and deployment](docs/remote-access.md) explains launch links, pairing, HTTPS and deployment to the existing Firebase project.
+Use `devdeck network enable --host 0.0.0.0 --port 47831` for ordinary IP/port access through your own network. The `/app/` PWA provides Google and email/password login, a private machine list, direct feeds, TV remotes and touchscreen controls. The top of the standalone dashboard shows whether this Mac is paired to a parent account and provides **Open account** when paired. [Remote access and deployment](docs/remote-access.md) explains launch links, pairing, HTTPS and deployment to the existing Firebase project.
 
 ## Workspace
 

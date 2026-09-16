@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
 import { exportJWK, generateKeyPair, importJWK, jwtVerify, SignJWT } from "jose";
-import { publicKeySchema } from "../../../packages/core/src/hub";
+import { machinePairingStatusSchema, publicKeySchema } from "../../../packages/core/src/hub";
 import { networkSchema, type Artifact, type Operation } from "../../../packages/core/src/local/types";
 import { DeckService } from "./local/service";
 import { allowedNetworkHosts, MachineAuthority } from "./network";
@@ -120,6 +120,36 @@ test("re-pairing revokes old grants and explicit local unpair survives restart",
   assert.equal(await new MachineAuthority(f.directory).authorize(next), false);
 });
 
+test("account status follows the actual private binding through pairing, restart and unpair", async (t) => {
+  const f = await authorityFixture(t);
+  assert.deepEqual(await f.authority.pairingStatus(), { paired: false });
+  await f.authority.issueCode(issuer);
+  assert.deepEqual(await f.authority.pairingStatus(), { paired: false }, "A pairing challenge is not a completed account binding.");
+  await f.pair();
+  const expected = { paired: true, accountUrl: `${issuer}/app/` };
+  assert.deepEqual(await f.authority.pairingStatus(), expected, "Public status contains no account ID, signing key or credential.");
+  assert.deepEqual(machinePairingStatusSchema.parse(await new MachineAuthority(f.directory).pairingStatus()), expected);
+  await f.authority.unpair();
+  assert.deepEqual(await f.authority.pairingStatus(), { paired: false });
+  assert.deepEqual(await new MachineAuthority(f.directory).pairingStatus(), { paired: false });
+});
+
+test("persisted pairing issuers and browser account links reject unsafe or unrelated addresses", async (t) => {
+  const f = await authorityFixture(t);
+  await f.pair();
+  const file = path.join(f.directory, "hub-binding.json");
+  const saved = JSON.parse(await readFile(file, "utf8"));
+  for (const invalid of ["javascript:alert(1)", "http://portal.example.com", "https://user:secret@portal.example.com", `${issuer}/other`, `${issuer}?redirect=elsewhere`, `${issuer}#fragment`]) {
+    await writeFile(file, JSON.stringify({ ...saved, issuer: invalid }));
+    await assert.rejects(new MachineAuthority(f.directory).pairingStatus());
+  }
+  for (const accountUrl of ["javascript:alert(1)", "http://portal.example.com/app/", `${issuer}/app/?redirect=elsewhere`, `${issuer}/other`])
+    assert.equal(machinePairingStatusSchema.safeParse({ paired: true, accountUrl }).success, false);
+  assert.equal(machinePairingStatusSchema.safeParse({ paired: true, accountUrl: "http://127.0.0.1:5175/app/" }).success, true);
+  assert.equal(machinePairingStatusSchema.safeParse({ paired: false, accountUrl: `${issuer}/app/` }).success, false);
+  assert.equal(machinePairingStatusSchema.safeParse({ paired: true, accountUrl: `${issuer}/app/`, uid }).success, false);
+});
+
 test("portal trust is configured locally, canonical HTTPS, and never supplied by the browser", async (t) => {
   const f = await authorityFixture(t);
   for (const invalid of [undefined, "http://portal.example.com", "https://portal.example.com/path", "https://user@portal.example.com"])
@@ -152,6 +182,39 @@ async function httpFixture(t: TestContext) {
   });
   return { ...f, deck, server, request, port };
 }
+
+test("account status requires authentication and is available to local browsers and verified Tailscale users", async (t) => {
+  const f = await httpFixture(t);
+  const route = "/v1/hub/status";
+  const native = { Authorization: `Bearer ${nativeToken}`, "Content-Type": "application/json" };
+  assert.equal((await f.request(route)).status, 401);
+  const unpaired = await f.request(route, native);
+  assert.equal(unpaired.status, 200);
+  assert.equal(unpaired.headers["cache-control"], "no-store");
+  assert.deepEqual(JSON.parse(unpaired.body.toString()), { paired: false }, "Configured hubOrigin alone must not show an account link.");
+  const ticket = JSON.parse((await f.request("/v1/browser-ticket", native, "POST", {})).body.toString()).ticket;
+  const bootstrap = await f.request("/v1/bootstrap", { "Content-Type": "application/json" }, "POST", { ticket });
+  const browser = { Cookie: bootstrap.headers["set-cookie"]![0].split(";")[0] };
+  assert.equal((await f.request(route, browser)).status, 200);
+  await f.pair();
+  const grant = { Authorization: `Bearer ${await f.sign()}` };
+  const expected = { paired: true, accountUrl: `${issuer}/app/` };
+  for (const headers of [native, browser, grant]) {
+    const response = await f.request(route, headers);
+    assert.equal(response.status, 200);
+    assert.deepEqual(JSON.parse(response.body.toString()), expected);
+  }
+  f.deck.config.config.network!.hubOrigin = "https://another-portal.example";
+  assert.deepEqual(JSON.parse((await f.request(route, native)).body.toString()), expected, "A config change cannot relabel an existing binding.");
+  f.deck.config.config.tailscale = { origin: "https://machine.tailnet.ts.net", allowedUsers: ["owner@example.com"] };
+  const tailscale = { Host: "machine.tailnet.ts.net", "X-Forwarded-Proto": "https", "Tailscale-User-Login": "owner@example.com" };
+  assert.equal((await f.request(route, { Host: tailscale.Host })).status, 403);
+  assert.deepEqual(JSON.parse((await f.request(route, tailscale)).body.toString()), expected);
+  assert.equal((await f.request("/v1/hub/unpair", native, "POST", {})).status, 200);
+  for (const headers of [browser, tailscale])
+    assert.deepEqual(JSON.parse((await f.request(route, headers)).body.toString()), { paired: false });
+  assert.equal((await f.request(route, grant)).status, 401);
+});
 
 test("ordinary IP/port and custom hosts work with authentication and exact CORS rules", async (t) => {
   const f = await httpFixture(t);

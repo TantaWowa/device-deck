@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { validateConfig } from "../../config/src";
-import { remoteProfile, supportsRemoteKey, supportsWake } from "./remote";
+import { deviceInputMode, remoteProfile, supportsRemoteKey, supportsWake } from "./remote";
 import type { DeviceConfig } from "./local/types";
 const device: DeviceConfig = {
   id: "fire",
@@ -13,6 +13,15 @@ const device: DeviceConfig = {
   connection: { type: "capture" },
   captureSourceId: "usb",
 };
+test("input class does not depend on names, online state or installed gesture helpers", () => {
+  assert.equal(deviceInputMode(device), "none");
+  assert.equal(deviceInputMode({ ...device, inputMode: "remote" }), "remote");
+  assert.equal(deviceInputMode({ ...device, connection: { type: "adb", serial: "emulator-5554", port: 5037 } }), "touch");
+  assert.equal(deviceInputMode({ ...device, inputMode: "remote", connection: { type: "adb", serial: "emulator-5554", port: 5037 } }), "remote");
+  assert.equal(deviceInputMode({ ...device, inputMode: "remote", connection: { type: "simulator", os: "ios", udid: "phone" } }), "touch");
+  assert.equal(deviceInputMode({ ...device, connection: { type: "simulator", os: "tvos", udid: "tv" } }), "remote");
+  assert.equal(deviceInputMode({ ...device, inputMode: "remote", connection: { type: "apple-device", udid: "iphone" } }), "touch");
+});
 test("remote appearance never grants input to a capture-only connection", () => {
   assert.equal(remoteProfile(device), "Fire TV");
   assert.equal(supportsRemoteKey(device, "Home"), false);

@@ -7,6 +7,7 @@ import type {
   Artifact,
 } from "../../../../packages/core/src/local/types";
 import { copyImageToClipboard } from "./capture-feedback";
+import { deviceConnectionLabel, deviceAvailabilityLabel } from "../../../../packages/core/src/device-table";
 import { api } from "./api";
 import { RemoteControl } from "./RemoteControl";
 import type { FeedAction } from "./FeedActions";
@@ -25,6 +26,7 @@ export function DeviceControls({
   optionsOpen,
   setOptionsOpen,
   onCapture,
+  remoteAvailable = true,
 }: {
   device: Device;
   data: Snapshot;
@@ -36,6 +38,7 @@ export function DeviceControls({
   optionsOpen: boolean;
   setOptionsOpen: (open: boolean) => void;
   onCapture?: (artifact: Artifact) => void;
+  remoteAvailable?: boolean;
 }) {
   const [busy, setBusy] = useState(false),
     [waking, setWaking] = useState(false),
@@ -427,9 +430,9 @@ export function DeviceControls({
               <strong>
                 {session
                   ? `${owned ? "Your reservation" : "Reserved"} · ${session.owner}`
-                  : "Available to reserve"}
+                  : deviceAvailabilityLabel(device) === "Available" ? "Available to reserve" : deviceConnectionLabel(device)}
               </strong>
-              <span>{device.online ? "Online" : "Offline"}</span>
+              <span>{deviceConnectionLabel(device)}</span>
             </div>
             {session && (
               <p>
@@ -445,7 +448,7 @@ export function DeviceControls({
                 session stops and saves it.
               </p>
             )}
-            {session && !approved && (
+            {remoteAvailable && session && !approved && (
               <>
                 <div className="control-override-choice">
                   <p>
@@ -579,7 +582,7 @@ export function DeviceControls({
                   {confirm === "takeover"
                     ? `Control will transfer from ${session?.owner} to ${owner}.`
                     : confirm === "release"
-                      ? "Remote input will stop until you reserve again."
+                      ? "Device input will stop until you reserve again."
                       : "Your reservation will remain active."}
                 </p>
                 <div className="live-actions">
@@ -712,7 +715,7 @@ export function DeviceControls({
           </div>
         </div>
       )}
-      <RemoteControl
+      {remoteAvailable && <RemoteControl
         key={device.id}
         device={device}
         enabled={enabled && !confirm && !optionsOpen}
@@ -723,7 +726,7 @@ export function DeviceControls({
         wake={wake}
         sendKey={(key) => send({ key })}
         sendText={(text) => send({ text })}
-      />
+      />}
     </div>
   );
 }

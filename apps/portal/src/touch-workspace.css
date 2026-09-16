@@ -1,0 +1,12 @@
+.portal-booting-status { display: flex; align-items: center; gap: 8px; }
+.portal-feed-booting { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; min-height: 240px; padding: 24px; background: #12201c; color: #e3eee8; text-align: center; }
+.portal-feed-booting span { max-width: 480px; font-size: 12px; line-height: 1.5; color: #b7cbbf; }
+.portal-feed-control > input { max-width: 220px; padding: 8px 10px; border: 1px solid #d5dfcb; border-radius: 7px; background: white; font-size: 12px; }
+.portal-feed-control .portal-touch-switch { flex-shrink: 0; gap: 8px; }
+.portal-touch-switch > span { position: relative; display: inline-block; width: 32px; height: 19px; border-radius: 12px; background: #a6b1a0; }
+.portal-touch-switch > span::after { position: absolute; content: ""; top: 3px; left: 3px; width: 13px; height: 13px; border-radius: 50%; background: white; transition: transform .15s; }
+.portal-touch-switch[aria-checked="true"] > span { background: #39734b; }
+.portal-touch-switch[aria-checked="true"] > span::after { transform: translateX(13px); }
+.portal-touch-unavailable { flex-basis: 100%; color: #7a8b6f; font-size: 11px; line-height: 1.5; }
+.portal-phone-capture-actions { display: flex; flex-wrap: wrap; gap: 7px; width: 100%; }
+@media (max-width: 640px) { .portal-feed-control > span { flex-basis: 100%; line-height: 1.5; } .portal-feed-control > input { min-width: 0; flex: 1; } }

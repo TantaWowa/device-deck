@@ -23,6 +23,7 @@ export const deviceSchema = z
     platform: z.enum(["Roku", "Android", "Apple", "Other"]),
     kind: z.enum(["physical", "virtual"]),
     model: z.string().max(256).default(""),
+    inputMode: z.enum(["touch", "remote"]).optional(),
     visibility: z.enum(["local", "shared"]).default("local"),
     connection: z.discriminatedUnion("type", [
       z.object({ type: z.literal("capture") }),
@@ -167,6 +168,7 @@ export const configSchema = z
   .strict();
 export type Config = z.infer<typeof configSchema>;
 export type Device = DeviceConfig & {
+  readiness?: "starting" | "ready" | "offline";
   simulatorState?:
     "booted" | "shutdown" | "starting" | "stopping" | "unavailable";
   online: boolean;

@@ -7,6 +7,7 @@ import {
   type Session,
 } from "../../../../packages/core/src/local/types";
 import { api } from "./api";
+import { deviceIsBooting } from "../../../../packages/core/src/device-table";
 import { popupAnchor, type PopupAnchor } from "./anchored-popup";
 
 export function SimulatorControls({
@@ -38,7 +39,7 @@ export function SimulatorControls({
   const intendedAction = confirm?.action || action;
   const pending =
     busy ||
-    device.simulatorState === "starting" ||
+    deviceIsBooting(device) ||
     device.simulatorState === "stopping";
   const owned = Boolean(
     lease && session?.id === lease.sessionId && session.state === "active",
@@ -112,7 +113,7 @@ export function SimulatorControls({
           ? device.simulatorState === "stopping" ||
             (device.simulatorState !== "starting" && intendedAction === "close")
             ? "Closing…"
-            : "Launching…"
+            : "Booting…"
           : running
             ? "Close sim"
             : "Launch sim"}

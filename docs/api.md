@@ -178,6 +178,7 @@ To control an already reserved device without taking its reservation, authentica
 Read routes:
 
 - `GET /v1/health`: implementation version, PID and dependency diagnostics.
+- `GET /v1/hub/status`: authenticated parent-account pairing status. Returns `{paired:false}` or `{paired:true,accountUrl:"https://portal.example/app/"}` from the actual machine binding, without account credentials or signing keys. A configured portal origin alone does not imply pairing.
 - `GET /v1/preview/DEVICE_ID`: current PNG/JPEG from the configured source. This authenticated, read-only observation may share another session's stream; it does not grant control.
 - `GET /v1/source-preview/SOURCE_ID`: current JPEG from a registered USB capture card, including an unassigned card. Requires the same local authentication. A bound card retains its device's maintenance and closing-session checks. The explicit snapshot fallback uses this endpoint; normal Feeds viewing uses `streams.open` and H.264 over WebRTC. Observation has no reservation requirement.
 - `GET /v1/artifacts/ID/file`: original capture or annotated export, with byte-range support for video.
