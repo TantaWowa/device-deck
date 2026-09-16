@@ -267,7 +267,5 @@ code { font: 11px ui-monospace, SFMono-Regular, monospace; background: #e0e8d7; 
 }
 @media (prefers-reduced-motion: reduce) { *, *:before, *:after { animation: none !important; transition: none !important; scroll-behavior: auto !important; } }
 
-/* Live video stays on the feed surface; the remote sheet contains controls. */
+/* Live video stays on the feed surface. */
 .feed-card > .deck-live-preview { border-radius: 0; }
-.portal-remote-content .deck-control-session-actions { margin-bottom: 12px; }
-.portal-remote-content .deck-control-session-actions input { background: #fffefa; border: 1px solid #dce5d4; border-radius: 6px; padding: 8px; color: #294333; }

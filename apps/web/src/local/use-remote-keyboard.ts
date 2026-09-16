@@ -129,6 +129,9 @@ export function useRemoteKeyboard({
     };
     const keyDown = (event: KeyboardEvent) => {
       if (!keyboardRef.current || !current.current.enabled) return;
+      // Let the toggle's native button activation change keyboard capture.
+      // Clearing it first would make Enter immediately enable it again.
+      if (event.target instanceof Element && event.target.closest(".keyboard-toggle")) return;
       if (
         event.target instanceof HTMLElement &&
         event.target.closest(editable)
