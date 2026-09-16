@@ -35,7 +35,8 @@ import {
 import { Store } from "./store";
 import { captureStorage, openCaptureFolder } from "./capture-library";
 import { CaptureThumbnails } from "./thumbnails";
-import { LiveStreams, type LiveTarget } from "../live";
+import { LiveStreams, type LiveTarget, type LiveAuthorization } from "../live";
+import { phoneHardwareButtons } from "../../../../packages/core/src/remote";
 import type { StreamOpen } from "../../../../packages/core/src/live";
 import {
   LicenseManager,
@@ -282,7 +283,7 @@ export class DeckService {
     operation: Operation,
     value: unknown,
     origin: Artifact["origin"] = "API",
-    authorize?: () => Promise<boolean>,
+    authorize?: LiveAuthorization,
   ): Promise<unknown> {
     if (this.shuttingDown)
       fail("service-stopping", "Service is stopping.", 503);
@@ -736,11 +737,20 @@ export class DeckService {
           }
         });
       case "remote.input":
-        return this.withLease(args, (s) => this.remoteInput(s, args));
+        return this.withLease(args, (session) => {
+          const hardware = args.key && phoneHardwareButtons(this.device(session.deviceId)).some((button) => button.key === args.key);
+          if (!hardware) return this.remoteInput(session, args);
+          return this.streams.withHardwareInput(session.id, async () => {
+            // The gesture barrier may outlast a grant, aborted request or lease.
+            if (authorize && !await authorize()) fail("unauthorized", "Machine access expired or was revoked before the hardware button could be sent.", 401);
+            const current = this.store.validate(args.sessionId, args.leaseToken);
+            return this.remoteInput(current, args);
+          });
+        });
       case "streams.open":
         return this.streams.open(args, authorize);
       case "streams.ping":
-        return this.streams.ping(args);
+        return this.streams.ping(args, authorize);
       case "streams.close":
         return this.streams.closeStream(args);
       case "control.start":

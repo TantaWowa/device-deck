@@ -14,9 +14,11 @@ import { LocalDevelopmentLicense } from "./local-license";
 
 const directory = await mkdtemp(path.join(os.tmpdir(), "deck-live-qa-"));
 const capturesMode = process.env.QA_CAPTURES === "1";
+const phoneControlsMode = process.env.QA_PHONE_CONTROLS === "1";
 let config: Config;
 const events: unknown[] = [];
 const running = new Set(["usb", "android"]);
+if (phoneControlsMode) running.add("apple-sim");
 const booting = new Set<string>();
 const source: SourceConfig = { id: "qa-usb", kind: "usb", name: "Synthetic USB feed", uniqueId: "qa-only" };
 const helper = path.join(directory, "camera");
@@ -44,7 +46,7 @@ class FixtureAdapters extends Adapters {
     return { deviceId: d.id, action, state: action === "launch" ? "booted" as const : "shutdown" as const, changed };
   }
   override async screenshot() { return capture.preview(null, source, 0); }
-  override async input() { events.push({ type: "key" }); }
+  override async input(device: DeviceConfig, input: { key?: string; text?: string; x?: number; y?: number }) { events.push({ type: "key", deviceId: device.id, key: input.key, text: input.text, x: input.x, y: input.y }); }
   override async startInteractive(d: DeviceConfig, _control = true, profile: VideoProfile = "balanced"): Promise<InteractiveSource> {
     if (d.platform === "Apple") return {
       width: 640, height: 360, capabilities: ["tap", "swipe", "longPress"],
@@ -57,7 +59,12 @@ class FixtureAdapters extends Adapters {
       get width() { return video.width; }, get height() { return video.height; },
       onFrame: video.onFrame.bind(video), onClose: video.onClose.bind(video), close: video.close.bind(video),
       capabilities: ["tap", "swipe", "longPress", "drag", "multitouch"],
-      pointer: async (event) => { events.push({ ...event, deviceId: d.id }); }, gesture: async (gesture) => { events.push({ ...gesture, deviceId: d.id }); },
+      pointer: async (event) => {
+        // The phone-button QA deliberately races a key against an unfinished
+        // gesture to prove ordering across the data channel and HTTP API.
+        if (phoneControlsMode && event.type === "down") await new Promise((resolve) => setTimeout(resolve, 250));
+        events.push({ ...event, deviceId: d.id });
+      }, gesture: async (gesture) => { events.push({ ...gesture, deviceId: d.id }); },
     };
   }
 }
@@ -77,6 +84,10 @@ config.devices = [
   { id: "apple-sim", name: "Synthetic Apple simulator", platform: "Apple", kind: "virtual", model: "QA", visibility: "local", connection: { type: "simulator", udid: "ea415a3a-39fa-4dcb-a028-a5260f5156c3", os: "ios" }, captureSourceId: null },
 ];
 config.sources = [source, { id: "qa-native", kind: "native", name: "Synthetic Android screen", deviceId: "android" }];
+if (phoneControlsMode) {
+  config.devices.find((device) => device.id === "apple-sim")!.captureSourceId = "qa-ios";
+  config.sources.push({ id: "qa-ios", kind: "native", name: "Synthetic iPhone screen", deviceId: "apple-sim" });
+}
 await deck.config.save(config, deck.config.revision);
 if (capturesMode) {
   await mkdir(config.settings.folder, { recursive: true });
@@ -103,7 +114,7 @@ const base = `http://127.0.0.1:${port}`;
 const ticket = await fetch(`${base}/v1/browser-ticket`, { method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: "{}" }).then((r) => r.json());
 const evidence = path.resolve(process.env.QA_LIVE_OUTPUT || (capturesMode ? "outputs/capture-qa" : "outputs/live-video-qa"));
 await mkdir(evidence, { recursive: true });
-const info = { base, url: `${base}/#ticket=${ticket.ticket}`, directory, token, capturesMode, pid: process.pid };
+const info = { base, url: `${base}/#ticket=${ticket.ticket}`, directory, token, capturesMode, phoneControlsMode, pid: process.pid };
 await writeFile(path.join(evidence, "fixture.json"), JSON.stringify(info));
 const timer = setInterval(() => void writeFile(path.join(evidence, "inputs.json"), JSON.stringify(events, null, 2)), 250);
 console.log(`LIVE_QA_READY ${JSON.stringify(info)}`);

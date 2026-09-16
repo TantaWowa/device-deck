@@ -49,7 +49,7 @@ export function createMachineTransport(options: MachineTransportOptions) {
   }
   async function grant() {
     lifetime.signal.throwIfAborted();
-    if (currentGrant && Date.parse(currentGrant.expiresAt) > Date.now() + 5_000) return currentGrant;
+    if (currentGrant && Date.parse(currentGrant.expiresAt) > Date.now() + 15_000) return currentGrant;
     if (!pendingGrant) {
       pendingGrant = (async () => {
         await verifyIdentity();

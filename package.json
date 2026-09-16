@@ -53,7 +53,8 @@
     "deploy:portal": "node scripts/deploy-portal.mjs",
     "qa:portal": "node --import tsx scripts/qa-portal.ts",
     "qa:portal-remote": "node scripts/qa-portal-remote.mjs",
-    "qa:portal-pwa": "node scripts/qa-portal-pwa.mjs"
+    "qa:portal-pwa": "node scripts/qa-portal-pwa.mjs",
+    "qa:phone-controls": "node scripts/qa-phone-controls.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.17.5",

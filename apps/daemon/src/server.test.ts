@@ -9,6 +9,7 @@ import path from "node:path";
 import { createService } from "./server";
 import { DeckService } from "./local/service";
 import { Store } from "./local/store";
+import type { InteractiveSource } from "../../../packages/core/src/live";
 import { Adapters } from "../../../packages/adapters/src";
 import {
   CaptureEngine,
@@ -1564,6 +1565,82 @@ test("browser credentials coexist across local instances without overwriting ano
     );
     await cleanup();
   }
+});
+
+test("phone hardware waits for iOS touch and revalidates credentials after the barrier", { timeout: 10000 }, async (t) => {
+  for (const ending of ["active", "revoked", "expired", "aborted"] as const) await t.test(ending, async () => {
+    const { deck, adapters, cleanup } = await setup();
+    let finish!: () => void, start!: () => void, cancel!: () => void;
+    const finished = new Promise<void>((resolve) => { finish = resolve; });
+    const started = new Promise<void>((resolve) => { start = resolve; });
+    const cancelled = new Promise<void>((resolve) => { cancel = resolve; });
+    let running = false, authorized = true, gestures = 0;
+    const source: InteractiveSource = {
+      width: 100, height: 200, capabilities: ["tap", "swipe", "longPress"],
+      onFrame: () => () => {}, onClose: () => () => {}, close: async () => {},
+      pointer: async () => { cancel(); },
+      gesture: async () => { gestures++; running = true; start(); await finished; running = false; },
+    };
+    adapters.startInteractive = async () => source;
+    adapters.input = async (device) => {
+      assert.equal(running, false, "Home cannot overlap an in-flight idb gesture");
+      adapters.inputs.push(device.id);
+    };
+    let server: ReturnType<typeof createService> | undefined;
+    let request: http.ClientRequest | undefined;
+    try {
+      const c = structuredClone(deck.config.config);
+      c.devices[0].platform = "Apple";
+      c.devices[0].connection = { type: "simulator", os: "ios", udid: "F4B9CA01-BA57-40A0-984D-38B7F91AB8A1" };
+      await deck.execute("config.save", { config: c, revision: deck.config.revision });
+      const reservation = await reserve(deck), sessionId = reservation.session.id;
+      const lease = { sessionId, leaseToken: reservation.leaseToken };
+      const controller = await deck.streams.script(sessionId, {
+        device: deck.config.config.devices[0], validate() { deck.store.validate(sessionId, lease.leaseToken); },
+      });
+      const tap = { type: "gesture", gesture: { type: "tap", x: 20, y: 30, width: 100, height: 200 } };
+      controller.control.send(tap); await started;
+      controller.control.send(tap);
+      let outcome: Promise<unknown>, abortRequest: (() => Promise<void>) | undefined;
+      if (ending === "aborted") {
+        server = createService(deck, "abort-test-token", deck.directory);
+        await new Promise<void>((resolve) => server!.listen(0, "127.0.0.1", resolve));
+        const port = (server.address() as { port: number }).port;
+        const disconnected = new Promise<void>((resolve) => server!.once("request", (_req, res) => res.once("close", resolve)));
+        const execute = deck.execute.bind(deck);
+        let completed!: () => void;
+        outcome = new Promise<void>((resolve) => { completed = resolve; });
+        deck.execute = async (...args) => { try { return await execute(...args); } finally { if (args[0] === "remote.input") completed(); } };
+        request = http.request({ hostname: "127.0.0.1", port, path: "/v1/operations/remote.input", method: "POST", headers: {
+          Authorization: "Bearer abort-test-token", "Content-Type": "application/json",
+        } });
+        request.on("error", () => {});
+        request.end(JSON.stringify({ ...lease, key: "Home" }));
+        abortRequest = async () => { request!.destroy(); await disconnected; };
+      } else {
+        const pending = deck.execute("remote.input", { ...lease, key: "Home" }, "Web", async () => authorized);
+        outcome = ending === "active" ? pending : assert.rejects(pending, ending === "revoked" ? /expired or was revoked/ : /expired/);
+      }
+      await cancelled;
+      assert.deepEqual(adapters.inputs, []);
+      if (ending === "revoked") authorized = false;
+      if (ending === "expired") deck.store.putSession({ ...deck.store.session(sessionId), expiresAt: Date.now() - 1 });
+      await abortRequest?.();
+      controller.control.send(tap);
+      finish(); await outcome;
+      assert.equal(gestures, 1, "queued and intervening gestures are dropped");
+      assert.deepEqual(adapters.inputs, ending === "active" ? ["one"] : []);
+      if (ending === "active") {
+        assert.equal(deck.store.validate(sessionId, lease.leaseToken).id, sessionId);
+        controller.control.send(tap); await controller.control.settled();
+        assert.equal(gestures, 2, "the same controller is available after Home");
+      }
+    } finally {
+      finish(); request?.destroy();
+      if (server) { server.closeAllConnections(); await new Promise<void>((resolve) => server!.close(() => resolve())); }
+      await cleanup();
+    }
+  });
 });
 
 test("capture-only USB devices can reserve and record while source bindings remain exclusive", async () => {

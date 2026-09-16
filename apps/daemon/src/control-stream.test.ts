@@ -70,3 +70,33 @@ test("malformed input and queue overflow never create unbounded movement", async
   assert.throws(() => control.send(pointer("down")), /quickly/);
   await control.close();
 });
+
+test("hardware suspension finishes an in-flight gesture and drops queued and intervening touch", async () => {
+  const { control, source, events } = fixture();
+  let start!: () => void, finish!: () => void;
+  const started = new Promise<void>((resolve) => { start = resolve; });
+  const finished = new Promise<void>((resolve) => { finish = resolve; });
+  let gestures = 0;
+  source.gesture = async () => { gestures++; start(); await finished; };
+  const tap = { type: "gesture", gesture: { type: "tap", x: 20, y: 30, width: 100, height: 200 } };
+  control.send(tap); await started;
+  control.send(tap);
+  let suspended = false;
+  const pending = control.suspend().then((resume) => { suspended = true; return resume; });
+  control.send(pointer("down")); control.send(pointer("move", 50)); control.send(tap);
+  await Promise.resolve();
+  assert.equal(suspended, false, "an unfinished HID gesture still owns the device");
+  finish();
+  const resume = await pending;
+  assert.equal(gestures, 1, "queued gestures were discarded");
+  control.send(tap);
+  resume();
+  control.send(pointer("move", 60)); control.send(pointer("up", 60));
+  await control.settled();
+  assert.equal(gestures, 1, "touch received during hardware input was not replayed");
+  assert.equal(events.filter((event) => event.type !== "cancel").length, 0, "late movements have no surviving contact");
+  control.send(pointer("down", 70)); control.send(pointer("up", 70));
+  await control.settled();
+  assert.deepEqual(events.slice(-2).map((event) => event.type), ["down", "up"], "a fresh gesture can use the same controller");
+  await control.close();
+});

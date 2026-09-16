@@ -86,11 +86,17 @@ class ImageVideoEncoder implements LiveVideoSource {
   }
   private attempt(encoder: string) {
     const settings = videoProfiles[this.profile];
+    const png = this.input.first[0] === 137;
     const handle = this.handle = start(this.ffmpeg, [
       "-hide_banner", "-loglevel", "warning",
       "-probesize", "32", "-analyzeduration", "0",
       "-f", "mpjpeg", "-r", String(this.fps), "-threads", "1",
-      "-c:v", this.input.first[0] === 137 ? "png" : "mjpeg", "-i", "pipe:0",
+      "-c:v", png ? "png" : "mjpeg",
+      // mpjpeg does not flag individual packets as keyframes. MPNG tells the
+      // PNG decoder these are complete screenshots; otherwise it adds each
+      // image to its predecessor as a delta frame, wrapping colour channels.
+      // https://github.com/FFmpeg/FFmpeg/blob/n8.0/libavcodec/pngdec.c#L1583-L1591
+      ...(png ? ["-tag:v", "MPNG"] : []), "-i", "pipe:0",
       "-an", "-vf", `scale=${this.width}:${this.height}`, "-pix_fmt", "yuv420p",
       "-c:v", encoder,
       ...(encoder === "libx264"

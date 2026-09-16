@@ -14,6 +14,7 @@ const identitySchema = z.object({ id: z.string().uuid(), privateKey: privateKeyS
 const bindingSchema = z.object({ issuer: portalOriginSchema, pinnedCloudJWK: publicKeySchema, uid: z.string().min(1).max(128), pairingId: z.string().min(1).max(128) }).strict();
 const hash = (value: string) => createHash("sha256").update(value).digest();
 const deny = () => new DeckError("invalid-machine-credential", "Machine access has expired or is not authorized. Reconnect from your machines page.", 401);
+export type MachineAccess = Readonly<{ issuer: string; machineId: string; uid: string; pairingId: string; expiresAt: number }>;
 export const isLoopback = (value = "") => ["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(value);
 export const hostWithPort = (host: string, port: number) => `${host.includes(":") && !host.startsWith("[") ? `[${host}]` : host}:${port}`;
 
@@ -140,15 +141,17 @@ export class MachineAuthority {
       .sign(await importJWK(this.identity!.privateKey, "EdDSA"));
     return { receipt };
   }
-  async authorize(token: string) {
+  async authorizeClaims(token: string): Promise<MachineAccess | undefined> {
     await this.init();
     const binding = this.binding;
-    if (!binding) return false;
+    if (!binding) return undefined;
     try {
       const payload = await this.verify(token, binding.pinnedCloudJWK, binding.issuer, "access", ACCESS_TTL_SECONDS);
-      return this.binding === binding && payload.uid === binding.uid && payload.pairingId === binding.pairingId;
-    } catch { return false; }
+      if (this.binding !== binding || payload.uid !== binding.uid || payload.pairingId !== binding.pairingId) return undefined;
+      return { issuer: binding.issuer, machineId: this.identity!.id, uid: binding.uid, pairingId: binding.pairingId, expiresAt: payload.exp! * 1000 };
+    } catch { return undefined; }
   }
+  async authorize(token: string) { return Boolean(await this.authorizeClaims(token)); }
   async unpair() {
     await this.init();
     this.revocation++;

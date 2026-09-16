@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { validateConfig } from "../../config/src";
-import { deviceInputMode, remoteProfile, supportsRemoteKey, supportsWake } from "./remote";
+import { deviceInputMode, phoneHardwareButtons, remoteProfile, supportsRemoteKey, supportsWake } from "./remote";
 import type { DeviceConfig } from "./local/types";
 const device: DeviceConfig = {
   id: "fire",
@@ -21,6 +21,29 @@ test("input class does not depend on names, online state or installed gesture he
   assert.equal(deviceInputMode({ ...device, inputMode: "remote", connection: { type: "simulator", os: "ios", udid: "phone" } }), "touch");
   assert.equal(deviceInputMode({ ...device, connection: { type: "simulator", os: "tvos", udid: "tv" } }), "remote");
   assert.equal(deviceInputMode({ ...device, connection: { type: "apple-device", udid: "iphone" } }), "touch");
+});
+test("phone hardware controls follow supported transports and preserve distinct iOS navigation", () => {
+  const android: DeviceConfig = { ...device, inputMode: "touch", connection: { type: "adb", serial: "phone", port: 5037 } };
+  const ios: DeviceConfig = { ...device, kind: "virtual", connection: { type: "simulator", os: "ios", udid: "ios-phone" } };
+  assert.deepEqual(phoneHardwareButtons(android), [
+    { key: "Back", label: "Back" }, { key: "Home", label: "Home" },
+    { key: "Recents", label: "Recents" }, { key: "VolumeDown", label: "Volume down" },
+    { key: "VolumeUp", label: "Volume up" }, { key: "Power", label: "Power" },
+  ]);
+  assert.deepEqual(phoneHardwareButtons(ios), [
+    { key: "Home", label: "Home" }, { key: "Lock", label: "Lock" }, { key: "SideButton", label: "Side button" },
+  ]);
+  for (const phone of [android, ios]) for (const button of phoneHardwareButtons(phone))
+    assert.equal(supportsRemoteKey(phone, button.key), true, `${phone.connection.type} supports ${button.key}`);
+  for (const key of ["Back", "Recents", "VolumeUp", "VolumeDown", "Power"])
+    assert.equal(supportsRemoteKey(ios, key), false, `iOS does not advertise Android's ${key}`);
+  for (const unsupported of [
+    device,
+    { ...android, inputMode: "remote" as const },
+    { ...ios, connection: { type: "simulator" as const, os: "tvos" as const, udid: "tv" } },
+    { ...ios, connection: { type: "apple-device" as const, udid: "physical-phone" } },
+    { ...device, inputMode: "touch" as const, name: "iPhone 17 Pro" },
+  ]) assert.deepEqual(phoneHardwareButtons(unsupported), []);
 });
 test("devicectl Apple TVs retain remote classification from metadata or a legacy hardware model without reclassifying phones", () => {
   const apple = { ...device, name: "Bedroom", platform: "Apple" as const, connection: { type: "apple-device" as const, udid: "physical" } };
