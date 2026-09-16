@@ -2,6 +2,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { run, available } from "./process";
+import { androidBootReady, androidDisplayReady } from "./android-state";
 import {
   fail,
   type Config,
@@ -15,6 +16,7 @@ export const isAndroidEmulator = (d: DeviceConfig) =>
   d.connection.type === "adb" &&
   Boolean(d.connection.avdName || emulatorSerial.test(d.connection.serial));
 export class AndroidEmulators {
+  private readyBoots = new Map<string, string>();
   constructor(
     private config: () => Config,
     private execute: Runner = run,
@@ -208,7 +210,10 @@ export class AndroidEmulators {
         );
       return undefined;
     }
-    return this.resolved(d, found);
+    const resolved = this.resolved(d, found);
+    if (required && resolved.connection.type === "adb" && !(await androidBootReady(this.adb(), ["-P", String(resolved.connection.port), "-s", resolved.connection.serial], this.execute)))
+      fail("emulator-not-ready", "This Android emulator is still booting. Wait for its system screen before using its feed or controls.", 409);
+    return resolved;
   }
   async prepare(d: DeviceConfig) {
     const found = await this.locate(d);
@@ -236,22 +241,11 @@ export class AndroidEmulators {
       return { state: "shutdown" as const };
     }
     const resolved = this.resolved(d, found);
-    if (found.state !== "device" || resolved.connection.type !== "adb")
+    if (found.state !== "device" || resolved.connection.type !== "adb") {
+      this.readyBoots.delete(d.id);
       return { state: "starting" as const, resolved };
-    const booted =
-      (
-        await this.execute(this.adb(), [
-          "-P",
-          String(resolved.connection.port),
-          "-s",
-          resolved.connection.serial,
-          "shell",
-          "getprop",
-          "sys.boot_completed",
-        ])
-      ).stdout
-        .toString()
-        .trim() === "1";
+    }
+    const booted = await this.displayReady(resolved);
     return {
       state: booted ? ("booted" as const) : ("starting" as const),
       resolved,
@@ -260,18 +254,19 @@ export class AndroidEmulators {
   private async displayReady(d: DeviceConfig) {
     if (d.connection.type !== "adb") return false;
     const args = ["-P", String(d.connection.port), "-s", d.connection.serial];
-    try {
-      const animation = (await this.execute(this.adb(), [...args, "shell", "getprop", "init.svc.bootanim"], 3000)).stdout.toString().trim();
-      if (animation && animation !== "stopped") return false;
-      // ADB and sys.boot_completed can become ready before SurfaceFlinger can
-      // capture the display. Wait for a complete PNG before returning Launch.
-      const image = (await this.execute(this.adb(), [...args, "exec-out", "screencap", "-p"], 5000)).stdout;
-      return image.length >= 33 &&
-        image.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])) &&
-        image.subarray(12, 16).toString() === "IHDR" &&
-        image.readUInt32BE(16) > 0 && image.readUInt32BE(20) > 0 &&
-        image.subarray(-8, -4).toString() === "IEND";
-    } catch { return false; }
+    if (!(await androidBootReady(this.adb(), args, this.execute))) {
+      this.readyBoots.delete(d.id);
+      return false;
+    }
+    // A kernel boot ID changes across reboot, including a complete reboot
+    // between two health polls. Validate the expensive screenshot once per boot.
+    const bootId = (await this.execute(this.adb(), [...args, "shell", "cat", "/proc/sys/kernel/random/boot_id"], 3000).catch(() => ({ stdout: Buffer.from("") }))).stdout.toString().trim();
+    const identity = /^[\da-f-]{36}$/i.test(bootId) ? `${d.connection.port}:${d.connection.serial}:${bootId}` : undefined;
+    if (identity && this.readyBoots.get(d.id) === identity) return true;
+    this.readyBoots.delete(d.id);
+    if (!(await androidDisplayReady(this.adb(), args, this.execute))) return false;
+    if (identity) this.readyBoots.set(d.id, identity);
+    return true;
   }
   async control(d: DeviceConfig, action: "launch" | "close") {
     if (!isAndroidEmulator(d) || d.connection.type !== "adb")
@@ -339,8 +334,7 @@ export class AndroidEmulators {
       const inspected = await this.inspect(d);
       if (
         inspected.state === "booted" &&
-        inspected.resolved?.connection.type === "adb" &&
-        await this.displayReady(inspected.resolved)
+        inspected.resolved?.connection.type === "adb"
       )
         return {
           deviceId: d.id,

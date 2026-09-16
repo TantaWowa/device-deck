@@ -1,5 +1,17 @@
 import type { DeviceConfig } from "./local/types";
 
+/** Device class survives offline states and missing input helpers. */
+export function deviceInputMode(d: Pick<DeviceConfig, "connection" | "inputMode">): "touch" | "remote" | "none" {
+  switch (d.connection.type) {
+    case "simulator": return d.connection.os === "ios" ? "touch" : "remote";
+    case "apple-device": return "touch";
+    case "roku":
+    case "apple-tv": return "remote";
+    case "adb": return d.inputMode || "touch";
+    case "capture": return d.inputMode || "none";
+  }
+}
+
 // Protocol references: https://developer.roku.com/dev/docs/external-control-api
 // https://developer.android.com/reference/android/view/KeyEvent
 // https://pyatv.dev/api/interface/

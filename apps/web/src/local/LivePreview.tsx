@@ -8,7 +8,8 @@ import "./live-preview.css";
 export type LiveLease = { sessionId: string; leaseToken: string };
 export type LiveOperation = <T = unknown>(name: Operation, args?: unknown, signal?: AbortSignal) => Promise<T>;
 type OpenedStream = StreamAnswer;
-type ConnectionState = "connecting" | "ready" | "disconnected" | "error";
+export type LiveConnectionState = "connecting" | "ready" | "disconnected" | "error";
+type ConnectionState = LiveConnectionState;
 type Contact = { start: FramePoint; last: FramePoint; startedAt: number };
 
 export function waitForIce(peer: RTCPeerConnection, signal: AbortSignal): Promise<void> {
@@ -26,7 +27,7 @@ export function waitForIce(peer: RTCPeerConnection, signal: AbortSignal): Promis
   });
 }
 
-export function LivePreview({ name, deviceId, sourceId, operation, getSnapshot, active = true, controlLease, inputEnabled = true }: {
+export function LivePreview({ name, deviceId, sourceId, operation, getSnapshot, active = true, controlLease, inputEnabled = true, onConnectionStateChange }: {
   name: string;
   deviceId?: string;
   sourceId?: string;
@@ -35,6 +36,7 @@ export function LivePreview({ name, deviceId, sourceId, operation, getSnapshot, 
   active?: boolean;
   controlLease?: LiveLease | null;
   inputEnabled?: boolean;
+  onConnectionStateChange?: (state: LiveConnectionState) => void;
 }) {
   const [state, setState] = useState<ConnectionState>("connecting");
   const [error, setError] = useState("");
@@ -54,6 +56,9 @@ export function LivePreview({ name, deviceId, sourceId, operation, getSnapshot, 
   const isControlling = Boolean(active && visible && controlLease && inputEnabled && state === "ready" && channelReady && !snapshotMode);
   const latest = useRef({ getSnapshot, isControlling, capabilities });
   latest.current = { getSnapshot, isControlling, capabilities };
+  const connectionListener = useRef(onConnectionStateChange);
+  connectionListener.current = onConnectionStateChange;
+  useEffect(() => { connectionListener.current?.(state); }, [state]);
 
   const cancel = () => {
     const hadContacts = contacts.current.size > 0;
@@ -222,7 +227,7 @@ export function LivePreview({ name, deviceId, sourceId, operation, getSnapshot, 
     {snapshotMode ? snapshotUrl && <img src={snapshotUrl} alt={`Snapshot of ${name}`} /> : <video ref={video} autoPlay muted playsInline aria-label={`Live video of ${name}`} onPlaying={() => { setState("ready"); setError(""); }} onResize={cancel} onPointerDown={(event) => pointer("down", event)} onPointerMove={(event) => pointer("move", event)} onPointerUp={(event) => pointer("up", event)} onPointerCancel={(event) => pointer("cancel", event)} onLostPointerCapture={(event) => { if (contacts.current.has(event.pointerId)) cancel(); }} onContextMenu={(event) => { if (isControlling) event.preventDefault(); }} onClick={() => { if (video.current?.paused) void video.current.play(); }} />}
     {(state !== "ready" || !active || !visible) && <div className="deck-live-placeholder" role="status"><Monitor size={28} /><strong>{label}</strong>{error && <span>{error}</span>}{(state === "error" || state === "disconnected") && <div className="deck-live-recovery"><button type="button" onClick={() => { setSnapshotMode(false); setGeneration((value) => value + 1); }}><RefreshCw size={14} />Reconnect video</button>{!snapshotMode && <button type="button" onClick={() => setSnapshotMode(true)}>Use snapshot preview</button>}</div>}</div>}
     <div className="deck-live-status"><span>{label}</span>{!snapshotMode && <label>Quality<select aria-label={`Video quality for ${name}`} value={profile} onChange={(event) => setProfile(event.target.value as typeof profile)}><option value="low">Low bandwidth</option><option value="balanced">Balanced</option><option value="high">High detail</option></select></label>}{snapshotMode && <button type="button" onClick={() => { setSnapshotMode(false); setGeneration((value) => value + 1); }}>Try live video</button>}</div>
-    {controlLease && state === "ready" && !snapshotMode && <div className="deck-touch-help" role="status">{!inputEnabled ? "Touch paused while session options are open." : !channelReady ? "Connecting controls…" : touchAvailable ? `${capabilities.includes("drag") ? "Tap, drag and scroll" : "Tap, swipe or hold, then release"}${capabilities.includes("multitouch") ? " · two-finger pinch" : ""}` : "Touch is unavailable on this device. Use the remote buttons."}</div>}
+    {controlLease && state === "ready" && !snapshotMode && <div className="deck-touch-help" role="status">{!inputEnabled ? "Touch paused while session options are open." : !channelReady ? "Connecting controls…" : touchAvailable ? `${capabilities.includes("drag") ? "Tap, drag and scroll" : "Tap, swipe or hold, then release"}${capabilities.includes("multitouch") ? " · two-finger pinch" : ""}` : "Touch input is unavailable for this device. Check its input tools and reconnect."}</div>}
     {state === "ready" && error && <div className="deck-live-error" role="alert">{error}</div>}
   </div>;
 }

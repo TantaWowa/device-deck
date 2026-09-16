@@ -1,0 +1,37 @@
+.account-connection {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 20px;
+  padding: 10px 12px;
+  border: 1px solid #d7e2ee;
+  border-radius: 8px;
+  background: #f8fbff;
+  color: #526984;
+  font-size: 12px;
+}
+.account-connection a {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;
+  color: #24589b;
+  font-weight: 600;
+  text-decoration: none;
+}
+.account-connection a:hover { text-decoration: underline; }
+.account-connection button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.account-connection button:disabled { opacity: .45; cursor: default; }
+.account-connection button:focus-visible, .account-connection a:focus-visible { outline: 2px solid #24589b; outline-offset: 3px; }
+.account-connection > span + button { margin-left: auto; }

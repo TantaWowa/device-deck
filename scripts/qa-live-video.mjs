@@ -8,7 +8,9 @@ import path from "node:path";
 import { build } from "esbuild";
 import { chromium, expect } from "@playwright/test";
 
-const output = path.resolve("outputs/live-video-qa");
+const output = path.resolve(process.env.QA_LIVE_OUTPUT || "outputs/live-video-qa");
+const portalOnly = process.env.QA_LIVE_FOCUS === "portal";
+const mobileOnly = process.env.QA_LIVE_FOCUS === "mobile";
 const fixture = JSON.parse(await readFile(path.join(output, "fixture.json"), "utf8"));
 const origin = new URL(fixture.base);
 assert.equal(origin.hostname, "127.0.0.1", "Only the loopback synthetic fixture may be controlled.");
@@ -32,7 +34,8 @@ assert.deepEqual(inventory.devices.map(({ id, name }) => ({ id, name })), [
   { id: "android-sim", name: "Synthetic Android emulator" }, { id: "apple-sim", name: "Synthetic Apple simulator" },
 ]);
 assert.equal(inventory.devices[1].connection.serial, "qa-only-not-real");
-assert.deepEqual(inventory.sources.map(({ id }) => id), ["qa-usb", "qa-native"]);
+assert.deepEqual(inventory.sources.filter(({ id }) => id.startsWith("qa-")).map(({ id }) => id), ["qa-usb", "qa-native"]);
+assert.ok(inventory.sources.every(({ id }) => ["qa-usb", "qa-native", "native-android-sim", "native-apple-sim"].includes(id)));
 
 async function readInputs() {
   // The fixture writes every 250 ms; retry if this read overlaps a file write.
@@ -98,6 +101,7 @@ async function movingVideo(page, milliseconds = 1200) {
 }
 async function dragAndCancel(page, remote) {
   const video = remote.locator("video");
+  await video.scrollIntoViewIfNeeded();
   const box = await video.boundingBox();
   assert.ok(box);
   const before = (await readInputs()).length;
@@ -123,20 +127,37 @@ async function dragAndCancel(page, remote) {
   await expect.poll(async () => (await readInputs()).slice(before).some((event) => event.type === "cancel"), { timeout: 5000 }).toBe(true);
   return { orderedPointerEvents: events.length, coordinates: { width: events[0].width, height: events[0].height }, blurCancelled: true };
 }
-async function endSession(page, remote, isPortal, deviceId = "android") {
-  const released = page.waitForResponse((response) => response.url().endsWith("/operations/sessions.release"));
-  if (isPortal) await remote.getByRole("button", { name: "End session", exact: true }).click();
-  else {
-    await remote.getByRole("button", { name: "End session…", exact: true }).click();
-    await remote.getByRole("alertdialog").getByRole("button", { name: "End session", exact: true }).click();
+async function confirmAction(page, feed, isPortal, action, accept, confirmation, warning) {
+  if (isPortal) {
+    const dialogPromise = page.waitForEvent("dialog");
+    const clicked = action();
+    const dialog = await dialogPromise;
+    assert.match(dialog.message(), warning);
+    if (accept) await dialog.accept(); else await dialog.dismiss();
+    await clicked;
+  } else {
+    await action();
+    const dialog = feed.getByRole("alertdialog", { name: "Confirm feed session change", exact: true });
+    await expect(dialog).toContainText(warning);
+    await dialog.getByRole("button", { name: accept ? confirmation : "Cancel", exact: true }).click();
   }
+}
+async function endSession(page, feed, isPortal, deviceId = "android", testCancel = false) {
+  const end = () => feed.getByRole("button", { name: isPortal ? "End session" : "End session…", exact: true }).click();
+  if (testCancel) {
+    await confirmAction(page, feed, isPortal, end, false, "End session", /[Ee]nd.*session/);
+    assert.ok((await api("inventory")).sessions.some((session) => session.deviceId === deviceId && session.state !== "closed"));
+    await expect(feed.getByRole("switch", { name: "Enable touch", exact: true })).toBeChecked();
+  }
+  const released = page.waitForResponse((response) => response.url().endsWith("/operations/sessions.release"));
+  await confirmAction(page, feed, isPortal, end, true, "End session", /[Ee]nd.*session/);
   assert.equal((await released).status(), 200);
-  await remote.getByRole("button", { name: "Start control session", exact: true }).waitFor();
+  await expect(feed.getByRole("switch", { name: "Enable touch", exact: true })).not.toBeChecked();
   assert.ok(!(await api("inventory")).sessions.some((session) => session.deviceId === deviceId && session.state !== "closed"));
 }
 async function workspaceCase(viewport, isPortal) {
   const label = `${isPortal ? "portal" : "local"}-${viewport.width}`;
-  const page = await browser.newPage({ viewport });
+  const page = await browser.newPage({ viewport, hasTouch: viewport.width <= 640 });
   const observed = observe(page);
   try {
     await page.goto(isPortal ? portal.url : await ticketUrl());
@@ -144,24 +165,112 @@ async function workspaceCase(viewport, isPortal) {
     const video = await movingVideo(page, !isPortal && viewport.width === 1440 ? 6500 : 1200);
     if (!isPortal && viewport.width === 1440) assert.ok(observed.operations.some((operation) => operation.name === "streams.ping" && operation.status === 200));
     await picture(page, `${label}-feeds.png`);
-    assert.equal(await page.locator('input[type="checkbox"]').count(), 0, "Feed checkboxes belong inside the chooser.");
-    if (isPortal) await page.locator(".feed-card").filter({ hasText: "Synthetic Android screen" }).getByRole("button", { name: "Remote", exact: true }).click();
-    else await page.getByRole("button", { name: "Remote · Synthetic Android screen", exact: true }).click();
-    const remote = page.getByRole(isPortal ? "dialog" : "region", { name: "Remote for Synthetic Android", exact: true });
+    assert.equal(await page.locator('input[type="checkbox"]:not([role="switch"])').count(), 0, "Feed selection checkboxes belong inside the chooser.");
+    const feed = page.locator('[data-feed-source="qa-native"]');
+    assert.equal(await feed.getByRole("button", { name: /Remote/ }).count(), 0, "Phones must not offer a TV remote.");
+    const tvFeed = page.locator('[data-feed-source="qa-usb"]');
+    assert.equal(await tvFeed.getByRole("switch", { name: "Enable touch", exact: true }).count(), 0, "A remote-only device must not show a touch switch.");
+    if (isPortal) await tvFeed.getByRole("button", { name: "Remote", exact: true }).click();
+    else await page.getByRole("button", { name: "Remote · Synthetic USB feed", exact: true }).click();
+    const remote = page.getByLabel("Remote for Synthetic USB", { exact: true });
     await remote.waitFor();
+    const remoteMenu = remote.getByRole("button", { name: "Remote menu", exact: true });
+    if (await remoteMenu.count() && await remoteMenu.getAttribute("aria-expanded") !== "true") await remoteMenu.click();
     assert.equal(await remote.locator("video,img").count(), 0, "The remote panel must contain controls only.");
     await picture(page, `${label}-remote.png`);
     await remote.getByRole("button", { name: "Close remote", exact: true }).click();
-    const feed = page.locator('[data-feed-source="qa-native"]');
-    await feed.getByRole("button", { name: "Start control session", exact: true }).click();
+    const toggle = feed.getByRole("switch", { name: "Enable touch", exact: true });
+    await expect(toggle).not.toBeChecked();
+    assert.ok(!(await api("inventory")).sessions.some((session) => session.deviceId === "android" && session.state !== "closed"));
+    let releaseStale;
+    if (isPortal) {
+      const stale = await api("inventory");
+      const delayed = new Promise((resolve) => { releaseStale = resolve; });
+      const pattern = "**/v1/operations/inventory";
+      await page.route(pattern, async (route) => {
+        await delayed;
+        await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(stale) });
+      }, { times: 1 });
+      const requested = page.waitForRequest((request) => request.url().endsWith("/operations/inventory"));
+      if (viewport.width > 640) await page.getByRole("button", { name: "Refresh machine", exact: true }).click();
+      await requested;
+    }
+    const reserved = page.waitForResponse((response) => response.url().endsWith("/operations/sessions.reserve"));
+    await toggle.click();
+    assert.equal((await reserved).status(), 200);
+    releaseStale?.();
     await feed.locator(".deck-touch-enabled").waitFor({ timeout: 35_000 });
+    await expect(toggle).toBeChecked();
+    const own = (await api("inventory")).sessions.find((session) => session.deviceId === "android" && session.state !== "closed");
+    assert.ok(own, "Enabling touch must reserve the device.");
+    if (viewport.width <= 640) {
+      await feed.locator("video").scrollIntoViewIfNeeded();
+      const box = await feed.locator("video").boundingBox();
+      assert.ok(box);
+      const before = (await readInputs()).length;
+      await page.touchscreen.tap(box.x + box.width / 2, box.y + box.height / 2);
+      await expect.poll(async () => (await readInputs()).slice(before).some((event) => event.deviceId === "android" && event.type === "up"), { timeout: 5000 }).toBe(true);
+    }
     const input = await dragAndCancel(page, feed);
     await picture(page, `${label}-touch-feed.png`);
+    const geometry = await page.evaluate(() => ({ viewport: innerWidth, document: document.documentElement.scrollWidth }));
+    assert.ok(geometry.document <= geometry.viewport + 1, "Feed controls must not overflow the page.");
+    if (!isPortal) {
+      const switchBox = await toggle.boundingBox();
+      assert.ok(switchBox && switchBox.width >= 34 && switchBox.height >= 20, "The switch must retain its track dimensions under the app styles.");
+    }
+    await toggle.click();
+    await expect(toggle).not.toBeChecked();
+    await expect(feed.locator(".deck-touch-enabled")).toHaveCount(0);
+    const beforeDisabledClick = (await readInputs()).filter((event) => event.deviceId === "android" && ["down", "move", "up", "tap"].includes(event.type)).length;
+    await feed.locator("video").click();
+    await page.waitForTimeout(350);
+    assert.equal((await readInputs()).filter((event) => event.deviceId === "android" && ["down", "move", "up", "tap"].includes(event.type)).length, beforeDisabledClick);
+    assert.equal((await api("inventory")).sessions.find((session) => session.deviceId === "android" && session.state !== "closed")?.id, own.id);
+    await confirmAction(page, feed, isPortal, () => toggle.click(), false, "Enable touch", /interrupt work|running tests/i);
+    await expect(toggle).not.toBeChecked();
+    await confirmAction(page, feed, isPortal, () => toggle.click(), true, "Enable touch", /interrupt work|running tests/i);
+    await expect(toggle).toBeChecked();
+    await feed.locator(".deck-touch-enabled").waitFor({ timeout: 35_000 });
+    assert.equal((await api("inventory")).sessions.find((session) => session.deviceId === "android" && session.state !== "closed")?.id, own.id, "Re-enabling reuses the reservation.");
+    if (isPortal) {
+      await page.getByRole("button", { name: /^Devices/ }).click();
+      await page.getByRole("button", { name: /^Feeds/ }).click();
+      await expect(toggle).not.toBeChecked();
+      assert.equal((await api("inventory")).sessions.find((session) => session.deviceId === "android" && session.state !== "closed")?.id, own.id);
+      await confirmAction(page, feed, true, () => toggle.click(), true, "Enable touch", /interrupt work|running tests/i);
+      await expect(toggle).toBeChecked();
+      await page.getByRole("button", { name: "Choose feeds", exact: true }).click();
+      const picker = page.getByRole("dialog", { name: "Choose feeds", exact: true });
+      const selected = picker.locator(".portal-feed-option").filter({ hasText: "Synthetic Android screen" }).getByRole("checkbox");
+      await selected.uncheck();
+      await expect(feed).toHaveCount(0);
+      await selected.check();
+      await picker.getByRole("button", { name: "Close feed picker", exact: true }).click();
+      await expect(toggle).not.toBeChecked();
+      assert.equal((await api("inventory")).sessions.find((session) => session.deviceId === "android" && session.state !== "closed")?.id, own.id);
+      await confirmAction(page, feed, true, () => toggle.click(), true, "Enable touch", /interrupt work|running tests/i);
+      await expect(toggle).toBeChecked();
+    }
+    await endSession(page, feed, isPortal, "android", true);
+
+    const other = await api("sessions.reserve", { selector: { device: "android" }, owner: "QA other user", reason: "Synthetic takeover proof" });
+    cleanupLeases.set(other.session.id, { sessionId: other.session.id, leaseToken: other.leaseToken });
+    if (isPortal && viewport.width > 640) await page.getByRole("button", { name: "Refresh machine", exact: true }).click();
+    await expect(feed).toContainText("QA other user", { timeout: 15_000 });
+    await confirmAction(page, feed, isPortal, () => toggle.click(), false, "End session & enable touch", /Take over.*QA other user/);
+    await expect(toggle).not.toBeChecked();
+    assert.equal((await api("inventory")).sessions.find((session) => session.deviceId === "android" && session.state !== "closed")?.id, other.session.id);
+    await confirmAction(page, feed, isPortal, () => toggle.click(), true, "End session & enable touch", /Take over.*QA other user/);
+    await expect(toggle).toBeChecked();
+    await feed.locator(".deck-touch-enabled").waitFor({ timeout: 35_000 });
+    const replaced = (await api("inventory")).sessions.find((session) => session.deviceId === "android" && session.state !== "closed");
+    assert.ok(replaced && replaced.id !== other.session.id);
     await endSession(page, feed, isPortal);
     await Promise.all(observed.pending);
     assert.deepEqual(observed.errors, []);
-    results.cases.push({ name: label, passed: true, video, input, controlsOnlyRemote: true, touchOnFeed: true, sessionReleased: true, browserErrors: observed.errors });
-    console.log(`PASS ${label}: video, controls-only remote, feed gestures, cancellation and session release`);
+    results.cases.push({ name: label, passed: true, video, input, geometry, ...(viewport.width <= 640 ? { browserTouchscreenTapAccepted: true } : {}), controlsOnlyTvRemote: true, noPhoneRemote: true, touchOffByDefault: true, disablePreservesReservation: true, reenableConfirmed: true, takeoverCancelAndAccept: true, endSessionCancelAndAccept: true, ...(isPortal ? { staleInventoryPreservesLease: true, leavingOrHidingFeedDisablesTouch: true } : {}), browserErrors: observed.errors });
+    console.log(`PASS ${label}: video, TV remote, touch switch, preserved reservation, takeover and end confirmations`);
   } finally { await Promise.all(observed.pending); await page.close(); await cleanup(); }
 }
 async function simulatorCase(isPortal, deviceId, name, alreadyRunningWithoutSource = false) {
@@ -187,14 +296,29 @@ async function simulatorCase(isPortal, deviceId, name, alreadyRunningWithoutSour
     await page.getByRole("button", { name: "Start simulator", exact: true }).click();
     const picker = page.getByRole("dialog", { name: "Choose feeds", exact: true });
     await picture(page, `${label}-chooser.png`);
-    await picker.getByRole("button", { name: `Launch ${name} and show feed`, exact: true }).click();
+    const launch = picker.getByRole("button", { name: `Launch ${name} and show feed`, exact: true });
+    const launchCount = (await readInputs()).filter((event) => event.type === "simulator" && event.deviceId === deviceId && event.action === "launch").length;
+    await launch.click();
+    if (!alreadyRunningWithoutSource) {
+      await expect(launch).toBeDisabled();
+      await expect(launch).toContainText("Booting");
+      const starting = (await api("inventory")).devices.find((device) => device.id === deviceId);
+      assert.equal(starting.online, false);
+      assert.equal(starting.readiness, "starting");
+      assert.equal(starting.simulatorState, "starting");
+      await picture(page, `${label}-booting.png`);
+    }
     const feed = page.locator(`[data-feed-source="native-${deviceId}"]`);
     await feed.waitFor({ timeout: 35_000 });
     await expect.poll(async () => feed.locator("video").evaluate((video) => video.readyState >= 2), { timeout: 35_000 }).toBe(true);
     const inventory = await api("inventory");
     assert.equal(inventory.devices.find((d) => d.id === deviceId).online, true);
     assert.equal(inventory.devices.find((d) => d.id === deviceId).captureSourceId, `native-${deviceId}`);
-    await feed.getByRole("button", { name: "Start control session", exact: true }).click();
+    await expect.poll(async () => (await readInputs()).filter((event) => event.type === "simulator" && event.deviceId === deviceId && event.action === "launch").length).toBe(launchCount + 1);
+    const toggle = feed.getByRole("switch", { name: "Enable touch", exact: true });
+    await expect(toggle).not.toBeChecked();
+    assert.equal(await feed.getByRole("button", { name: /Remote/ }).count(), 0);
+    await toggle.click();
     await feed.locator(".deck-touch-enabled").waitFor({ timeout: 35_000 });
     const before = (await readInputs()).length;
     await feed.locator("video").click();
@@ -202,7 +326,7 @@ async function simulatorCase(isPortal, deviceId, name, alreadyRunningWithoutSour
     await picture(page, `${label}.png`);
     await endSession(page, feed, isPortal, deviceId);
     assert.deepEqual(observed.errors, []);
-    results.cases.push({ name: label, passed: true, alreadyRunningWithoutSource, launchedFromChooser: true, automaticallyRevealed: true, nativeSourceProvisioned: true, decodedVideo: true, touchAccepted: true, controls: deviceId === "apple-sim" ? "completed gestures" : "continuous pointer" });
+    results.cases.push({ name: label, passed: true, alreadyRunningWithoutSource, launchedFromChooser: true, bootingShown: !alreadyRunningWithoutSource, duplicateLaunchDisabled: !alreadyRunningWithoutSource, automaticallyRevealed: true, nativeSourceProvisioned: true, decodedVideo: true, touchOffByDefault: true, touchAccepted: true, controls: deviceId === "apple-sim" ? "completed gestures" : "continuous pointer" });
     console.log(`PASS ${label}: launch, reveal, video decode, touch and session release`);
   } finally {
     await Promise.all(observed.pending); await page.close(); await cleanup();
@@ -268,15 +392,15 @@ try {
   browser = await chromium.launch({ headless: true, channel: process.env.PLAYWRIGHT_CHANNEL || "chrome" });
   results.browser = browser.version();
   portal = await startPortal();
-  for (const isPortal of [false, true])
-    for (const viewport of [{ width: 1440, height: 1000 }, { width: 390, height: 844 }])
+  for (const isPortal of portalOnly ? [true] : [false, true])
+    for (const viewport of mobileOnly ? [{ width: 390, height: 844 }] : [{ width: 1440, height: 1000 }, { width: 390, height: 844 }])
       await workspaceCase(viewport, isPortal);
-  await fallbackCase();
-  for (const isPortal of [false, true]) {
+  if (!portalOnly && !mobileOnly) await fallbackCase();
+  for (const isPortal of mobileOnly ? [] : portalOnly ? [true] : [false, true]) {
     await simulatorCase(isPortal, "android-sim", "Synthetic Android emulator");
     await simulatorCase(isPortal, "apple-sim", "Synthetic Apple simulator");
   }
-  await simulatorCase(false, "android-sim", "Synthetic Android emulator", true);
+  if (!portalOnly && !mobileOnly) await simulatorCase(false, "android-sim", "Synthetic Android emulator", true);
   results.passed = true;
 } catch (error) {
   results.failure = error instanceof Error ? error.stack : String(error);
@@ -286,6 +410,7 @@ try {
   await cleanup();
   await portal?.close();
   results.finishedAt = new Date().toISOString();
-  await writeFile(path.join(output, "results.json"), JSON.stringify(results, null, 2));
-  console.log(`Evidence: ${path.join(output, "results.json")}`);
+  const resultFile = path.join(output, mobileOnly ? "mobile-results.json" : portalOnly ? "portal-results.json" : "results.json");
+  await writeFile(resultFile, JSON.stringify(results, null, 2));
+  console.log(`Evidence: ${resultFile}`);
 }

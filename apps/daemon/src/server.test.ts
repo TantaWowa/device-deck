@@ -282,8 +282,11 @@ test("simulator transitions keep inventory responsive, block reservation/config 
     await entered;
     const during = await deck.snapshot();
     assert.equal(during.devices[0].simulatorState, "starting");
+    assert.equal(during.devices[0].readiness, "starting");
+    assert.equal(during.devices[0].online, false);
+    assert.deepEqual(during.devices[0].capabilities, []);
     assert.equal(during.devices[0].locked, true);
-    await assert.rejects(reserve(deck), /locked/i);
+    await assert.rejects(reserve(deck), /booting/i);
     const c = structuredClone(deck.config.config);
     c.devices[0].name = "Changed while booting";
     await assert.rejects(

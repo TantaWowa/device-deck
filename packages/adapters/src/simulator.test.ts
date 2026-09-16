@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { deviceSchema } from "../../core/src/local/types";
+import { configSchema, deviceSchema } from "../../core/src/local/types";
+import { Adapters } from "./index";
 import { controlSimulator, simulatorState, wakeSimulator } from "./simulator";
 import type { run } from "./process";
 
@@ -66,6 +67,7 @@ test("simulator launch boots the configured UDID, waits for readiness, and opens
     [
       ["simctl", "boot", "F4B9CA01-BA57-40A0-984D-38B7F91AB8A1"],
       ["simctl", "bootstatus", "F4B9CA01-BA57-40A0-984D-38B7F91AB8A1", "-b"],
+      ["simctl", "bootstatus", "F4B9CA01-BA57-40A0-984D-38B7F91AB8A1"],
     ],
   );
   assert.deepEqual(calls.find((c) => c.command === "/usr/bin/open")?.args, [
@@ -75,6 +77,29 @@ test("simulator launch boots the configured UDID, waits for readiness, and opens
     "-CurrentDeviceUDID",
     "F4B9CA01-BA57-40A0-984D-38B7F91AB8A1",
   ]);
+});
+test("an externally booted simulator remains starting until its system apps are ready", async () => {
+  const base = fixture("Booted");
+  let ready = false;
+  const execute: typeof run = async (command, args, timeout) => {
+    if (args[1] === "bootstatus") {
+      assert.equal(args.length, 3, "health checks must not use the boot flag");
+      assert.equal(timeout, 2000);
+      if (!ready) throw new Error("System apps still starting");
+    }
+    return base.execute(command, args, timeout);
+  };
+  assert.equal(await simulatorState(simulator, execute), "starting");
+  const adapters = new Adapters(() => configSchema.parse({ schemaVersion: 1, settings: { folder: "/tmp/captures" } }), execute);
+  const status = await adapters.inspect(simulator);
+  assert.equal(status.online, false);
+  assert.equal(status.readiness, "starting");
+  assert.deepEqual(status.capabilities, []);
+  await assert.rejects(adapters.input(simulator, { key: "Home" }), /still booting/);
+  await assert.rejects(adapters.startInteractive(simulator), /still booting/);
+  await assert.rejects(wakeSimulator(simulator, "/fixture/idb", execute), /Launch this simulator/);
+  ready = true;
+  assert.equal(await simulatorState(simulator, execute), "booted");
 });
 test("simulator launch and close are idempotent without affecting another booted simulator", async () => {
   const booted = fixture("Booted");

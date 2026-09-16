@@ -17,21 +17,30 @@ const capturesMode = process.env.QA_CAPTURES === "1";
 let config: Config;
 const events: unknown[] = [];
 const running = new Set(["usb", "android"]);
+const booting = new Set<string>();
 const source: SourceConfig = { id: "qa-usb", kind: "usb", name: "Synthetic USB feed", uniqueId: "qa-only" };
 const helper = path.join(directory, "camera");
 await writeFile(helper, '#!/bin/sh\nexec ffmpeg -hide_banner -loglevel error -re -f lavfi -i testsrc2=size=640x360:rate=15 -c:v mjpeg -q:v 3 -f mjpeg pipe:1\n', { mode: 0o700 });
 class FixtureAdapters extends Adapters {
   override async diagnostics() { return []; }
   override async inspect(d: DeviceConfig): Promise<Device> {
-    return { ...d, online: running.has(d.id), locked: false, healthDetail: "Synthetic fixture", ...(d.kind === "virtual" ? { simulatorState: running.has(d.id) ? "booted" as const : "shutdown" as const } : {}), capabilities: ["preview", "touch", "key", "text", "screenshot", ...(capturesMode && d.id === "usb" ? ["record" as const] : [])], gestureCapabilities: d.platform === "Apple" ? ["tap", "swipe", "longPress"] : ["tap", "swipe", "longPress", "drag", "multitouch"] };
+    const starting = booting.has(d.id), online = running.has(d.id) && !starting;
+    return { ...d, online, readiness: starting ? "starting" : online ? "ready" : "offline", locked: false, healthDetail: starting ? "Booting synthetic device" : "Synthetic fixture", ...(d.kind === "virtual" ? { simulatorState: starting ? "starting" as const : online ? "booted" as const : "shutdown" as const } : {}), capabilities: online ? ["preview", ...(d.id === "usb" ? [] : ["touch" as const]), "key", "text", "screenshot", ...(capturesMode && d.id === "usb" ? ["record" as const] : [])] : [], gestureCapabilities: d.platform === "Apple" ? ["tap", "swipe", "longPress"] : ["tap", "swipe", "longPress", "drag", "multitouch"] };
   }
   override async inspectSources(sources: SourceConfig[]) { return sources.map((s) => ({ ...s, status: s.kind === "usb" || running.has(s.deviceId || "") ? "connected" as const : "missing" as const })); }
   override async verifyIdentity(d: DeviceConfig) { return d; }
   override async prepareSimulator(d: DeviceConfig) { return d; }
   override async simulator(d: DeviceConfig, action: "launch" | "close") {
     const changed = running.has(d.id) !== (action === "launch");
-    if (action === "launch") running.add(d.id); else running.delete(d.id);
     events.push({ type: "simulator", deviceId: d.id, action });
+    if (action === "launch") {
+      if (changed) {
+        booting.add(d.id);
+        await new Promise((resolve) => setTimeout(resolve, 2500));
+        booting.delete(d.id);
+      }
+      running.add(d.id);
+    } else running.delete(d.id);
     return { deviceId: d.id, action, state: action === "launch" ? "booted" as const : "shutdown" as const, changed };
   }
   override async screenshot() { return capture.preview(null, source, 0); }
@@ -62,7 +71,7 @@ config.settings.folder = path.join(directory, "captures");
 config.settings.captureMode = "clean";
 config.settings.clipboard = false;
 config.devices = [
-  { id: "usb", name: "Synthetic USB", platform: "Other", kind: "physical", model: "QA", visibility: "local", connection: { type: "capture" }, captureSourceId: source.id },
+  { id: "usb", name: "Synthetic USB", platform: "Other", kind: "physical", model: "QA", visibility: "local", inputMode: "remote", connection: { type: "capture" }, captureSourceId: source.id },
   { id: "android", name: "Synthetic Android", platform: "Android", kind: "physical", model: "QA", visibility: "local", connection: { type: "adb", serial: "qa-only-not-real", hardwareId: "qa-only", port: 5037 }, captureSourceId: "qa-native" },
   { id: "android-sim", name: "Synthetic Android emulator", platform: "Android", kind: "virtual", model: "QA", visibility: "local", connection: { type: "adb", serial: "emulator-5998", avdName: "qa-only-emulator", port: 5037 }, captureSourceId: null },
   { id: "apple-sim", name: "Synthetic Apple simulator", platform: "Apple", kind: "virtual", model: "QA", visibility: "local", connection: { type: "simulator", udid: "ea415a3a-39fa-4dcb-a028-a5260f5156c3", os: "ios" }, captureSourceId: null },
@@ -92,7 +101,7 @@ await new Promise<void>((resolve) => server.listen(Number(process.env.QA_LIVE_PO
 const port = (server.address() as { port: number }).port;
 const base = `http://127.0.0.1:${port}`;
 const ticket = await fetch(`${base}/v1/browser-ticket`, { method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: "{}" }).then((r) => r.json());
-const evidence = path.resolve(capturesMode ? "outputs/capture-qa" : "outputs/live-video-qa");
+const evidence = path.resolve(process.env.QA_LIVE_OUTPUT || (capturesMode ? "outputs/capture-qa" : "outputs/live-video-qa"));
 await mkdir(evidence, { recursive: true });
 const info = { base, url: `${base}/#ticket=${ticket.ticket}`, directory, token, capturesMode, pid: process.pid };
 await writeFile(path.join(evidence, "fixture.json"), JSON.stringify(info));

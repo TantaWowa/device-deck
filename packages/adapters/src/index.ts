@@ -1,4 +1,5 @@
-import { adbTouchscreen, ANDROID_GESTURES, startScrcpy } from "./scrcpy";
+import { ANDROID_GESTURES, startScrcpy } from "./scrcpy";
+import { androidBootReady, androidFeatures, avdInputMode } from "./android-state";
 import { IOS_GESTURES, startIdbInteractive } from "./interactive";
 import type { InteractiveSource, VideoProfile } from "../../core/src/live";
 import { androidKeys, rokuKeys, hidKeys } from "../../core/src/remote";
@@ -44,8 +45,20 @@ export type Discovery = {
 };
 export class Adapters {
   readonly emulators: AndroidEmulators;
-  constructor(private getConfig: () => Config) {
-    this.emulators = new AndroidEmulators(getConfig);
+  private inputModes = new Map<string, "touch" | "remote">();
+  constructor(private getConfig: () => Config, private execute = run) {
+    this.emulators = new AndroidEmulators(getConfig, execute);
+  }
+  private inputModeKey(d: DeviceConfig) {
+    const c = d.connection;
+    return c.type === "adb" ? `${d.id}:${c.port}:${c.avdName || c.hardwareId || c.serial}` : d.id;
+  }
+  private async androidFeatures(d: DeviceConfig) {
+    const output = (await this.execute(this.tool("adb"), [...this.adb(d), "shell", "pm", "list", "features"], 5000)).stdout.toString();
+    if (!/^feature:/m.test(output)) throw new Error("Android features are not available yet.");
+    const result = androidFeatures(output);
+    this.inputModes.set(this.inputModeKey(d), result.inputMode);
+    return result;
   }
   tool(name: keyof Config["tools"]) {
     return (
@@ -130,10 +143,13 @@ export class Adapters {
                 : uid("adb", hardwareId || serial),
               nativeId = `native-${id}`;
             if (devices.some((d) => d.id === id)) continue;
+            const features = state === "device" ? (await this.execute(this.tool("adb"), ["-P", String(port), "-s", serial, "shell", "pm", "list", "features"], 5000).catch(() => ({ stdout: Buffer.from("") }))).stdout.toString() : "";
+            const inputMode = /^feature:/m.test(features) ? androidFeatures(features).inputMode : avdName ? await avdInputMode(avdName) : undefined;
             devices.push({
               id,
               name: model,
               model,
+              ...(inputMode ? { inputMode } : {}),
               platform: "Android",
               kind: serial.startsWith("emulator-") ? "virtual" : "physical",
               visibility: "local",
@@ -179,6 +195,7 @@ export class Adapters {
                 id,
                 name: avdName,
                 model: "Android virtual device",
+                inputMode: configured?.inputMode || await avdInputMode(avdName) || "touch",
                 platform: "Android",
                 kind: "virtual",
                 visibility: "local",
@@ -358,6 +375,7 @@ export class Adapters {
       healthDetail: "Not connected",
       locked: false,
       capabilities: [],
+      readiness: "offline",
     };
     const c = d.connection;
     try {
@@ -374,15 +392,17 @@ export class Adapters {
           : "Capture card disconnected";
       }
       if (c.type === "adb") {
+        result.inputMode = this.inputModes.get(this.inputModeKey(d)) || d.inputMode || (c.avdName ? await avdInputMode(c.avdName) : undefined) || "touch";
         if (isAndroidEmulator(d)) {
           const status = await this.emulators.inspect(d);
           result.simulatorState = status.state;
+          result.readiness = status.state === "starting" ? "starting" : "offline";
           result.healthDetail =
             status.state === "shutdown"
               ? "Android emulator stopped · Launch to use it"
               : status.state === "unavailable"
                 ? "Android AVD unavailable in the configured SDK"
-                : `Android emulator ${status.state}`;
+                : status.state === "starting" ? "Android emulator booting…" : `Android emulator ${status.state}`;
           if (status.resolved) {
             d = status.resolved;
             result.connection = d.connection;
@@ -390,14 +410,22 @@ export class Adapters {
           if (status.state !== "booted") return result;
         }
         d = await this.verifyIdentity(d);
-        const { stdout } = await run(this.tool("adb"), [
+        const { stdout } = await this.execute(this.tool("adb"), [
           ...this.adb(d),
           "get-state",
         ]);
         result.online = stdout.toString().trim() === "device";
+        if (result.online && !(await androidBootReady(this.tool("adb"), this.adb(d), this.execute))) {
+          result.online = false;
+          result.readiness = "starting";
+          result.healthDetail = "Android booting… Wait for its system screen before using the feed or controls.";
+          return result;
+        }
         if (result.online) {
           result.capabilities.push("key", "text", "restart");
-          if (existsSync(path.join(root, "build/native/scrcpy-server-v4.1")) && await adbTouchscreen(this.tool("adb"), this.adb(d))) {
+          const features = await this.androidFeatures(d).catch(() => undefined);
+          if (features) result.inputMode = features.inputMode;
+          if (existsSync(path.join(root, "build/native/scrcpy-server-v4.1")) && features?.touchscreen) {
             result.gestureCapabilities = [...ANDROID_GESTURES];
             result.capabilities.push("touch");
           }
@@ -414,14 +442,15 @@ export class Adapters {
         result.capabilities.push("key", "text");
       }
       if (c.type === "simulator") {
-        result.simulatorState = await simulatorState(d);
+        result.simulatorState = await simulatorState(d, this.execute);
         result.online = result.simulatorState === "booted";
+        result.readiness = result.simulatorState === "starting" ? "starting" : "offline";
         result.healthDetail =
           result.simulatorState === "booted"
             ? "Simulator running"
             : result.simulatorState === "shutdown"
               ? "Simulator stopped · Launch to use it"
-              : `Simulator ${result.simulatorState}`;
+              : result.simulatorState === "starting" ? "Simulator booting…" : `Simulator ${result.simulatorState}`;
         if (result.online) {
           result.capabilities.push("restart");
           if (
@@ -474,7 +503,7 @@ export class Adapters {
               ),
           );
           result.healthDetail =
-            "Discovery only; native input/capture not supported by this adapter.";
+            "Touch input on physical iPhones and iPads is not supported by this adapter. A connected USB capture feed is view-only; use an iOS simulator for touch control.";
         } finally {
           await rm(dir, { recursive: true, force: true });
         }
@@ -497,8 +526,12 @@ export class Adapters {
       if (result.online && result.healthDetail === "Not connected")
         result.healthDetail = "Connected";
     } catch (e) {
+      result.online = false;
+      result.capabilities = [];
+      result.gestureCapabilities = [];
       result.healthDetail = (e as Error).message;
     }
+    if (result.online) result.readiness = "ready";
     return result;
   }
   async simulator(d: DeviceConfig, action: "launch" | "close") {
@@ -513,7 +546,7 @@ export class Adapters {
     if (isAndroidEmulator(d)) d = (await this.emulators.resolve(d))!;
     if (d.connection.type === "adb" && d.connection.hardwareId) {
       const serial = (
-        await run(this.tool("adb"), [
+        await this.execute(this.tool("adb"), [
           ...this.adb(d),
           "shell",
           "getprop",
@@ -553,6 +586,8 @@ export class Adapters {
     const c = d.connection;
     if (c.type === "adb") {
       d = await this.verifyIdentity(d);
+      if (!(await androidBootReady(this.tool("adb"), this.adb(d), this.execute)))
+        fail("device-not-ready", "Android is still booting. Wait for its system screen before sending input.", 409);
       if (input.x !== undefined && input.y !== undefined) {
         await run(this.tool("adb"), [
           ...this.adb(d),
@@ -624,6 +659,8 @@ export class Adapters {
       return;
     }
     if (c.type === "simulator") {
+      if (await simulatorState(d, this.execute) !== "booted")
+        fail("device-not-ready", "This simulator is stopped or still booting. Wait for its system screen before sending input.", 409);
       const args = ["--udid", c.udid];
       if (input.text !== undefined)
         await run(this.tool("idb"), ["ui", "text", input.text, ...args]);
@@ -666,8 +703,12 @@ export class Adapters {
   async startInteractive(d: DeviceConfig, control = true, profile: VideoProfile = "balanced"): Promise<InteractiveSource> {
     if (d.connection.type === "adb") {
       d = await this.verifyIdentity(d);
+      if (!(await androidBootReady(this.tool("adb"), this.adb(d), this.execute)))
+        fail("device-not-ready", "Android is still booting. Wait for its system screen before opening the feed.", 409);
       return startScrcpy(d, this.tool("adb"), path.join(root, "build/native/scrcpy-server-v4.1"), control, profile);
     }
+    if (d.connection.type === "simulator" && await simulatorState(d, this.execute) !== "booted")
+      fail("device-not-ready", "This simulator is stopped or still booting. Wait for its system screen before opening the feed.", 409);
     return startIdbInteractive(d, this.tool("idb"), control);
   }
   async pair(d: DeviceConfig) {

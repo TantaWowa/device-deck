@@ -44,3 +44,13 @@
 .feed-selector-panel { display: flex; flex-direction: column; max-height: 75dvh; }
 .feed-selector-list { min-height: 0; }
 .feed-selector-error { flex: none; padding: 9px 12px; margin: 0 12px 8px; border-radius: 6px; background: #fff0e8; color: #9b421c; font-size: 11px; line-height: 1.5; }
+.feed-touch-switch { display: inline-flex; align-items: center; gap: 8px; padding: 7px 0; color: #34516f; font-size: 12px; font-weight: 600; cursor: pointer; }
+.feed-touch-switch > input[type="checkbox"] { appearance: none; box-sizing: border-box; flex: none; width: 34px; height: 20px; border: 1px solid #aab8c9; border-radius: 20px; background: #c9d2df; margin: 0; padding: 2px; cursor: pointer; }
+.feed-touch-switch > input[type="checkbox"]::before { content: ""; display: block; width: 14px; height: 14px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px #20365240; transition: transform .15s ease; }
+.feed-touch-switch > input[type="checkbox"]:checked { background: #2d6fcb; border-color: #2d6fcb; }
+.feed-touch-switch > input[type="checkbox"]:checked::before { transform: translateX(14px); }
+.feed-touch-switch > input[type="checkbox"]:focus-visible { outline: 2px solid #4588e2; outline-offset: 3px; }
+.feed-touch-switch > input[type="checkbox"]:disabled { opacity: .45; cursor: default; }
+.feed-touch-unavailable, .feed-touch-session-kept { width: 100%; margin: 0; color: #718198; font-size: 11px; line-height: 1.5; }
+.feed-offline.feed-booting { color: #b8cef0; }
+.feed-title .feed-booting-label { color: #9c6514; font-weight: 600; }

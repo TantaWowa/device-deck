@@ -222,13 +222,17 @@ export class DeckService {
       ...d,
       ...(this.simulatorActions.has(d.id)
         ? {
+            online: false,
+            readiness: this.simulatorActions.get(d.id) === "launch" ? "starting" as const : "offline" as const,
+            capabilities: [],
+            gestureCapabilities: [],
             simulatorState:
               this.simulatorActions.get(d.id) === "launch"
                 ? ("starting" as const)
                 : ("stopping" as const),
             healthDetail:
               this.simulatorActions.get(d.id) === "launch"
-                ? "Launching simulator…"
+                ? "Simulator booting…"
                 : "Closing simulator…",
           }
         : {}),

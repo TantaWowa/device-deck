@@ -4,9 +4,9 @@ Feeds and device previews receive silent H.264 video over WebRTC and render it i
 
 ## Launch, watch and control
 
-Open **Feeds**, then **Start simulator**. Search the configured Apple simulators and Android emulators, and choose **Launch & show feed**. Device Deck waits for startup, creates a native feed if needed, and opens that screen. For an emulator already running, choose **Show feed**. **Choose feeds** holds the full searchable selection list; stopped simulators are not selected by default.
+Open **Feeds**, then **Start simulator**. Search the configured Apple simulators and Android emulators, and choose **Launch & show feed**. Device Deck waits for startup, creates a native feed if needed, and opens that screen. For an emulator already running, choose **Show feed**. Devices that are starting report **Booting…** in the device list and feed; control remains unavailable until startup finishes. **Choose feeds** holds the full searchable selection list; stopped simulators are not selected by default.
 
-Use the feed's **Remote** button for directional keys, Home and text. The floating remote contains controls only. Touch-capable screens offer **Start control session** directly under their video. If a simulator is not listed, discover and add it in **Devices** first; installed offline Android AVDs can be discovered without booting them.
+TV devices use the feed's **Remote** button for directional keys, Home and text. The floating remote contains controls only. Phones and tablets show an **Enable touch** switch directly under their video. Their device class is preserved while offline or booting, so missing input tools never turn a phone into a TV remote. If a simulator is not listed, discover and add it in **Devices** first; installed offline Android AVDs can be discovered without booting them.
 
 ## What each source provides
 
@@ -42,17 +42,17 @@ No public STUN or TURN server is configured. Device Deck does not relay media th
 
 ## Control a touchscreen
 
-1. Open the feed and choose **Start control session**, or explicitly take over its existing reservation.
+1. Open the feed and turn on **Enable touch**. This reserves an available device; an existing reservation requires reviewing the warning before enabling or taking over control.
 2. Wait for video and its control connection to become ready.
 3. Touch or click inside the device image. Black borders are not part of the touch surface.
 4. On Android, drag to scroll; a touch-capable browser can send multiple contacts for a pinch. On iOS, tap, swipe, or hold and release to submit a completed gesture.
-5. Release the reservation when finished.
+5. Turn **Enable touch** off to stop input while keeping the reservation and any recording active. Use **End session** to release the reservation and finalize an active recording.
 
 Android holds contacts while the pointer remains down. Input uses an ordered, bounded queue; pending moves are coalesced without crossing down/up events. Blur, hidden tabs, pointer cancellation, geometry changes, disconnection and session closure cancel active contacts. Rotation changes the encoded dimensions and invalidates old coordinates.
 
 The idb CLI supports completed gestures here, not an ongoing pointer stream. An iOS gesture begins after release in the browser. A gesture already dispatched to idb is allowed to send its final touch-up before its adapter closes; it cannot be interrupted partway through with the same guarantees as Android. Continuous drag and multitouch are therefore not advertised for iOS. idb's reported screen dimensions convert preview pixels into simulator points, including scaled previews and landscape frames.
 
-The daemon checks the reservation and lease before dispatch, and rechecks machine access for live connections. Opening a view-only feed never grants touch control. Expired, taken-over or released reservations cannot continue to send input. Hiding or closing a preview stops that viewer; it does not release the reservation or stop an independent recording.
+The daemon checks the reservation and lease before dispatch, and rechecks machine access for live connections. Opening a view-only feed never grants touch control. Touch starts off and must be enabled again after hiding the page, losing the control connection, or losing the reservation. Expired, taken-over or released reservations cannot continue to send input. Hiding or closing a preview stops that viewer; it does not release the reservation or stop an independent recording.
 
 ## Setup and supported versions
 
