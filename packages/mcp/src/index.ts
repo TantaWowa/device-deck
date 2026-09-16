@@ -23,6 +23,8 @@ const descriptions: Partial<Record<Operation, string>> = {
     "Read connected target and USB identities. Discovery does not automatically register or reserve targets.",
   "devices.simulator":
     "Launch or close one configured Apple iOS/tvOS simulator or Android AVD by device ID. Android launch requires a persistent avdName; a running legacy emulator serial can close once its AVD identity is verified. Close requires confirmed=true. Active or closing reservations and recordings must be released and finalized first; this never takes over a session or quits other simulators.",
+  "devices.wake":
+    "Attempt to wake a configured device without reserving it, including devices reported offline. Before waking any reserved device, warn the user that this may interrupt current work and obtain an explicit wake confirmation; send the expected current sessionId and confirmed=true. Changed, closing or expired reservations reject the request. This preserves reservations and recordings, honors maintenance locks, and reports an attempt rather than proof the device is awake.",
   "sessions.reserve":
     "Atomically reserve one device selected by name, ID or capabilities. Return the session and secret leaseToken. Keep this token for subsequent operations; owner is only a display label.",
   "sessions.release":
@@ -31,6 +33,8 @@ const descriptions: Partial<Record<Operation, string>> = {
     "Explicitly take over an existing session with a reason and confirmed=true. Its recording is finalized before the new reservation.",
   "remote.input":
     "Send exactly one key, text string or x/y tap using a current lease credential. Unsupported keys and platforms return errors.",
+  "remote.override":
+    "Explicitly send one key, text string or x/y tap to an already reserved device without taking its reservation. Requires deviceId, the expected active sessionId, the overriding user's display owner and confirmed=true. Preserves the current reservation and recording; changed or ended sessions reject the override. Capture still requires the owner's lease credential.",
   "captures.screenshot":
     "Save a real screenshot in the shared local capture folder. Optionally copy it to the Mac clipboard or make an annotated copy. Return file metadata and image content.",
   "recordings.start":

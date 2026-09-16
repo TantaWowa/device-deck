@@ -6,6 +6,7 @@ import { SimulatorControls } from "./SimulatorControls";
 import { FeedActions, type FeedAction } from "./FeedActions";
 import { DiscoveryDevices } from "./DiscoveryDevices";
 import { registerDiscoveredDevices } from "../../../../packages/core/src/discovery";
+import { supportsWake } from "../../../../packages/core/src/remote";
 import {
   deviceConnectionLabel,
   deviceAvailabilityLabel,
@@ -340,7 +341,7 @@ function App() {
     return (
       <main className="live-loading">
         <Brand />
-        <h1>Your local device workspace</h1>
+        <h1>Your device workspace</h1>
         <p>{connectionError || error || "Connecting to Device Deck…"}</p>
         <pre>
           devdeck start
@@ -443,6 +444,22 @@ function App() {
     setReserve({ device, takeover });
   };
   const openControls = (d: Device, action: FeedAction, anchor: PopupAnchor) => {
+    if (action === "wake" && !activeSession(d.id)) {
+      perform(async () => {
+        setBusy(true);
+        setError("");
+        try {
+          await api("devices.wake", { deviceId: d.id });
+          setNotice(`Wake request sent to ${d.name}.`);
+        } catch (e) {
+          setError((e as Error).message);
+        } finally {
+          await refresh();
+          setBusy(false);
+        }
+      });
+      return;
+    }
     if (action === "identify") setControl(null);
     else setIdentify(null);
     if (action === "identify")
@@ -503,6 +520,7 @@ function App() {
       name={d.name}
       reserved={Boolean(activeSession(d.id))}
       recording={data.recordings.some((r) => r.deviceId === d.id)}
+      wakeAvailable={supportsWake(d) && !d.locked && !busy}
       onAction={(intent, anchor) => openControls(d, intent, anchor)}
     />
   );
@@ -528,6 +546,7 @@ function App() {
       setOptionsOpen={setOptionsOpen}
     />
   );
+  const tailscaleConnection = data.config.tailscale?.origin === location.origin;
   const menu: { name: Tab; icon: ReactNode }[] = [
     { name: "Devices", icon: <Monitor size={18} /> },
     { name: "Feeds", icon: <Columns2 size={18} /> },
@@ -542,7 +561,7 @@ function App() {
     <div className="live-app">
       <aside className="live-sidebar">
         <Brand />
-        <span className="live-workspace">LOCAL WORKSPACE</span>
+        <span className="live-workspace">{tailscaleConnection ? "TAILSCALE WORKSPACE" : "LOCAL WORKSPACE"}</span>
         <nav>
           {menu.map((item) => (
             <button
@@ -560,12 +579,11 @@ function App() {
           ))}
         </nav>
         <div className="live-sidebar-footer">
-          <span className="live-dot" /> Running on this Mac
-          <p>One daemon. Every client.</p>
+          <span className="live-dot" /> {tailscaleConnection ? "Connected through Tailscale" : "Running on this Mac"}
+          <p>{tailscaleConnection ? "Devices and captures run on the host Mac." : "One daemon. Every client."}</p>
           <code>devdeck tui</code>
           <small>
-            Visibility labels are for this Mac. Multi-host sharing is not
-            enabled.
+            Visibility labels apply within this workspace.
           </small>
         </div>
       </aside>
@@ -576,7 +594,7 @@ function App() {
             <span className="live-dot" />{" "}
             {connectionError
               ? "Service unavailable"
-              : "Local service connected"}
+              : tailscaleConnection ? "Tailscale connected" : "Local service connected"}
           </span>
         </div>
         {data.license && tab !== "License" && (
@@ -617,6 +635,13 @@ function App() {
             renderActions={(source) => (
               <FeedActions
                 name={source.name}
+                wakeAvailable={data.devices.some(
+                  (d) =>
+                    d.captureSourceId === source.id &&
+                    supportsWake(d) &&
+                    !d.locked &&
+                    !busy,
+                )}
                 reserved={data.sessions.some(
                   (session) =>
                     session.sourceId === source.id &&
@@ -1381,9 +1406,7 @@ function App() {
           title={data.devices.find((d) => d.id === control.deviceId)!.name}
           initialMenu={
             control.action !== "remote" ||
-            Boolean(
-              activeSession(control.deviceId) && !credentials(control.deviceId),
-            )
+            Boolean(activeSession(control.deviceId))
           }
           onClose={() => setControl(null)}
         >
@@ -2016,7 +2039,7 @@ function SettingsView({
     <>
       <div className="live-heading">
         <div>
-          <h1>Local settings</h1>
+          <h1>Settings</h1>
           <p>Shared by the web app, CLI, terminal UI and agents.</p>
         </div>
         <button
@@ -2027,6 +2050,37 @@ function SettingsView({
         >
           {json ? "Form editor" : "JSON editor"}
         </button>
+      </div>
+      <div className="live-panel live-settings live-remote-access">
+        <h2>Remote access</h2>
+        {data.config.tailscale ? (
+          <>
+            <p>
+              <span className="live-status green">Tailscale configured</span>{" "}
+              Open this address from another device connected to your tailnet:
+            </p>
+            <p>
+              <a href={data.config.tailscale.origin}>
+                {data.config.tailscale.origin}
+              </a>
+            </p>
+            <p>
+              Allowed users: {data.config.tailscale.allowedUsers.join(", ")}.
+              These users have full access to devices, captures and settings.
+            </p>
+            <p>
+              Check the connection with <code>devdeck tailscale status</code> on
+              this Mac. To turn off remote access, run{" "}
+              <code>devdeck tailscale disable</code>.
+            </p>
+          </>
+        ) : (
+          <p>
+            Remote access is off. Run <code>devdeck tailscale enable</code> on
+            this Mac, then open the HTTPS address from another device connected
+            to your tailnet. Your Tailscale account signs you in automatically.
+          </p>
+        )}
       </div>
       <form
         className="live-panel live-settings"
@@ -2230,8 +2284,8 @@ function SettingsView({
           devdeck install
         </pre>
         <p>
-          No account is required. Access uses local credentials owned by your
-          Mac user.
+          Local browser access uses credentials owned by your Mac user.
+          Tailscale access uses the allowed user's Tailscale identity.
         </p>
       </div>
     </>

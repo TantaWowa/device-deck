@@ -819,6 +819,9 @@
 .live-settings h2 {
   padding-top: 10px;
 }
+.live-remote-access {
+  overflow-wrap: anywhere;
+}
 .live-json {
   font: 12px/1.6 monospace !important;
   min-height: 520px;

@@ -1,0 +1,41 @@
+.control-override-choice {
+  margin-top: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #d5dfec;
+}
+.control-override-choice > button {
+  width: 100%;
+  min-height: 36px;
+}
+.control-takeover-heading {
+  margin: 14px 0 0;
+  font-size: 12px;
+}
+.control-override-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 9px;
+  padding: 8px;
+  border: 1px solid #e4c281;
+  border-radius: 7px;
+  background: #fff3df;
+  color: #64440f;
+  font-size: 11px;
+}
+.control-override-status > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.control-override-status button {
+  flex-shrink: 0;
+  padding: 5px;
+  border: 1px solid #cba65f;
+  border-radius: 5px;
+  background: white;
+  color: inherit;
+  font-size: 10px;
+}

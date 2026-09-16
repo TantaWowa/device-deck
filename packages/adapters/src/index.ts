@@ -1,5 +1,5 @@
 import { androidKeys, rokuKeys, hidKeys } from "../../core/src/remote";
-import { controlSimulator, simulatorState } from "./simulator";
+import { controlSimulator, simulatorState, wakeSimulator } from "./simulator";
 import { AndroidEmulators, isAndroidEmulator } from "./android-emulator";
 import {
   mergeCaptureCards,
@@ -670,6 +670,47 @@ export class Adapters {
     await stop(handle);
     fail("pairing-timeout", "Apple TV did not show a pairing PIN.", 504);
   }
+  async wake(d: DeviceConfig): Promise<{ method: string }> {
+    const c = d.connection;
+    if (c.type === "adb") {
+      d = await this.verifyIdentity(d);
+      // Unlike POWER, WAKEUP does nothing when the device is already awake.
+      await run(this.tool("adb"), [
+        ...this.adb(d),
+        "shell",
+        "input",
+        "keyevent",
+        "KEYCODE_WAKEUP",
+      ]);
+      return { method: "Android wake key" };
+    }
+    if (c.type === "roku") {
+      const info = await this.rokuInfo(c.host);
+      if (info.serial !== c.serial)
+        fail("identity-mismatch", "Roku serial changed.");
+      const key = info.isTv ? "PowerOn" : "Home";
+      const response = await fetch(`http://${c.host}:8060/keypress/${key}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: "",
+        signal: AbortSignal.timeout(5000),
+        redirect: "error",
+      });
+      if (!response.ok)
+        fail("wake-failed", `Roku returned ${response.status}`, 502);
+      return { method: info.isTv ? "Roku TV power on" : "Roku Home button" };
+    }
+    if (c.type === "simulator") return wakeSimulator(d, this.tool("idb"));
+    if (c.type === "apple-tv") {
+      await run(
+        this.tool("python"),
+        [path.join(root, "native/apple-tv.py"), "wake", c.host, c.identifier],
+        25000,
+      );
+      return { method: "Apple TV power on" };
+    }
+    fail("unsupported-capability", "Wake is not available for this device.");
+  }
   async screenshot(d: DeviceConfig) {
     d = await this.verifyIdentity(d);
     if (d.connection.type === "adb")
@@ -729,6 +770,7 @@ export class Adapters {
       name: tag("friendly-device-name") || tag("model-name") || "Roku",
       model: tag("model-name"),
       serial: tag("serial-number"),
+      isTv: tag("is-tv").trim().toLowerCase() === "true",
     };
   }
   private scanRoku(): Promise<string[]> {

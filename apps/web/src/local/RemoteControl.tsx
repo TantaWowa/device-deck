@@ -16,12 +16,14 @@ import {
   Send,
   Menu,
   Delete,
+  Sun,
 } from "lucide-react";
 import type { Device } from "../../../../packages/core/src/local/types";
 import {
   remoteProfile,
   remoteProfiles,
   supportsRemoteKey,
+  wakeDescription,
   type RemoteProfile,
 } from "../../../../packages/core/src/remote";
 import { useRemoteKeyboard } from "./use-remote-keyboard";
@@ -38,12 +40,16 @@ export function RemoteControl({
   busy,
   sendKey,
   sendText,
+  wakeEnabled,
+  wake,
 }: {
   device: Device;
   enabled: boolean;
   busy: boolean;
   sendKey: (key: string) => Promise<unknown>;
   sendText: (text: string) => Promise<unknown>;
+  wakeEnabled: boolean;
+  wake: () => Promise<unknown>;
 }) {
   const [text, setText] = useState("");
   const element = useRef<HTMLElement>(null);
@@ -166,6 +172,17 @@ export function RemoteControl({
         <div className="remote-top">
           {button("Back", "Back", <CornerUpLeft size={20} />)}
           {button("Home", "Home", <Home size={20} />)}
+          <button
+            type="button"
+            aria-label="Wake device"
+            data-remote-action="wake"
+            title={wakeDescription(device)}
+            disabled={!wakeEnabled || busy}
+            onClick={() => void wake()}
+          >
+            <Sun size={20} />
+            <span>Wake</span>
+          </button>
         </div>
         <div className="remote-ring">
           {button("Up", "Up", <ChevronUp />, "remote-up")}

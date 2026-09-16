@@ -8,6 +8,8 @@ import type {
 import { api } from "./api";
 import { RemoteControl } from "./RemoteControl";
 import type { FeedAction } from "./FeedActions";
+import { supportsWake } from "../../../../packages/core/src/remote";
+import "./control-override.css";
 export type DeviceLease = { session: Session; leaseToken: string };
 type RemoteLease = DeviceLease & { observed: boolean };
 export function DeviceControls({
@@ -32,11 +34,17 @@ export function DeviceControls({
   setOptionsOpen: (open: boolean) => void;
 }) {
   const [busy, setBusy] = useState(false),
+    [waking, setWaking] = useState(false),
     [error, setError] = useState(""),
     [notice, setNotice] = useState("");
   const [owner, setOwner] = useState(data.config.settings.owner),
     [reason, setReason] = useState("Local recording and device control");
   const [mode, setMode] = useState(data.config.settings.captureMode);
+  const [overrideSessionId, setOverrideSessionId] = useState<string | null>(null);
+  // Stored lease credentials do not imply permission to send keys from a new popup.
+  const [approvedSessionId, setApprovedSessionId] = useState<string | null>(null);
+  const panel = useRef<HTMLDivElement>(null);
+  const focusRemote = useRef(false);
   const [confirm, setConfirm] = useState<
     "takeover" | "release" | "stop" | null
   >(null);
@@ -50,13 +58,27 @@ export function DeviceControls({
     session.state === "active" &&
     session.expiresAt > Date.now(),
   );
-  const enabled = (owned || !session) && device.online && !device.locked;
+  const overriding = Boolean(
+    overrideSessionId &&
+    session?.id === overrideSessionId &&
+    session.state === "active" &&
+    session.expiresAt > Date.now(),
+  );
+  const approved = owned && session?.id === approvedSessionId;
+  const needsControlChoice = Boolean(session && !approved && !overriding);
+  const controlAllowed =
+    (approved || overriding || (!session && !overrideSessionId)) &&
+    !device.locked;
+  const enabled = controlAllowed && device.online;
   const latest = useRef({
     device,
     data,
     lease,
     session,
     owned,
+    approved,
+    overrideSessionId,
+    overriding,
     owner,
     reason,
     busy,
@@ -72,6 +94,9 @@ export function DeviceControls({
     lease,
     session,
     owned,
+    approved,
+    overrideSessionId,
+    overriding,
     owner,
     reason,
     busy,
@@ -95,6 +120,27 @@ export function DeviceControls({
       input.current.lease = null;
     };
   }, [device.id]);
+  useLayoutEffect(() => {
+    if (needsControlChoice) setOptionsOpen(true);
+  }, [session?.id, needsControlChoice]);
+  useLayoutEffect(() => {
+    if (!optionsOpen && focusRemote.current) {
+      focusRemote.current = false;
+      panel.current
+        ?.querySelector<HTMLElement>(".remote-component")
+        ?.focus({ preventScroll: true });
+    }
+  }, [optionsOpen, overriding]);
+  const chooseOverride = (sessionId: string | null) => {
+    input.current.generation++;
+    input.current.lease = null;
+    setApprovedSessionId(null);
+    setOverrideSessionId(sessionId);
+    setError("");
+    setNotice("");
+    focusRemote.current = Boolean(sessionId);
+    setOptionsOpen(!sessionId);
+  };
   const run = async (fn: () => Promise<unknown>) => {
     // Management actions supersede queued keys and wait for dispatched input.
     input.current.generation++;
@@ -106,6 +152,7 @@ export function DeviceControls({
     try {
       await input.current.tail;
       const result = await fn();
+      setOverrideSessionId(null);
       await refresh();
       return result;
     } catch (e) {
@@ -139,6 +186,7 @@ export function DeviceControls({
       owner,
       reason,
     });
+    setApprovedSessionId(result.session.id);
     onLease(result);
     if (next)
       await capture(next, {
@@ -148,10 +196,12 @@ export function DeviceControls({
     else setNotice("Device reserved. Remote and capture controls are ready.");
     return { sessionId: result.session.id, leaseToken: result.leaseToken };
   };
-  const send = (payload: { key?: string; text?: string }) => {
+  const send = (payload: { key?: string; text?: string; wake?: true }) => {
     const queue = input.current;
     const generation = queue.generation;
     const deviceId = latest.current.device.id;
+    const expectedOverride = latest.current.overrideSessionId;
+    const expectedWakeSession = latest.current.session?.id;
     // Remember the session at enqueue time so a released reservation cannot be
     // silently replaced while older keys are still waiting to be dispatched.
     const expectedSession = latest.current.owned
@@ -166,9 +216,47 @@ export function DeviceControls({
       const state = latest.current;
       if (state.busy || state.confirm || state.optionsOpen) return false;
       try {
+        if (payload.wake) {
+          if (state.device.locked)
+            throw new Error("This device is locked. Wake is unavailable.");
+          if (
+            state.session?.id !== expectedWakeSession ||
+            (expectedOverride && !state.overriding)
+          )
+            throw new Error(
+              "The reservation changed. Review it before waking this device.",
+            );
+          if (state.session && !state.approved && !state.overriding)
+            throw new Error(
+              `Reserved by ${state.session.owner}. Choose override before waking this device.`,
+            );
+          return await api("devices.wake", {
+            deviceId,
+            ...(expectedWakeSession
+              ? { sessionId: expectedWakeSession, confirmed: true }
+              : {}),
+          });
+        }
         if (!state.device.online || state.device.locked)
           throw new Error(
             "This device is offline or locked. Remote input is unavailable.",
+          );
+        if (expectedOverride) {
+          if (!state.overriding || state.overrideSessionId !== expectedOverride)
+            throw new Error(
+              "The reservation changed. Choose how to continue from the remote menu.",
+            );
+          return await api("remote.override", {
+            deviceId,
+            sessionId: expectedOverride,
+            confirmed: true,
+            owner: state.data.config.settings.owner,
+            ...payload,
+          });
+        }
+        if (state.session && !state.approved && !queue.lease)
+          throw new Error(
+            `Reserved by ${state.session.owner}. Choose override from the remote menu before sending keys.`,
           );
         let credentials = queue.lease;
         if (!credentials && state.owned && state.lease && state.session) {
@@ -186,13 +274,14 @@ export function DeviceControls({
         if (!credentials) {
           if (state.session)
             throw new Error(
-              `Reserved by ${state.session.owner}. End the current session from the menu to take control.`,
+              `Reserved by ${state.session.owner}. Choose override or take the reservation from the remote menu.`,
             );
           const reserved: DeviceLease = await api("sessions.reserve", {
             selector: { device: deviceId },
             owner: state.owner,
             reason: state.reason,
           });
+          setApprovedSessionId(reserved.session.id);
           // Keep the returned token even if the window closes during reservation.
           state.onLease(reserved);
           void state.refresh().catch(() => {});
@@ -259,8 +348,44 @@ export function DeviceControls({
     !device.locked &&
     device.capabilities.includes(kind) &&
     (owned || !session);
+  const wake = async () => {
+    setWaking(true);
+    setNotice("");
+    try {
+      const result = await send({ wake: true });
+      if (result !== false && input.current.mounted)
+        setNotice("Wake request sent.");
+      return result;
+    } finally {
+      setWaking(false);
+    }
+  };
   return (
-    <div className={`device-control-panel intent-${initialAction}`}>
+    <div ref={panel} className={`device-control-panel intent-${initialAction}`}>
+      {!optionsOpen && notice && (
+        <p role="status" className="control-notice">
+          {notice}
+        </p>
+      )}
+      {overrideSessionId && (
+        <div className="control-override-status" role="status">
+          <div>
+            <strong>{overriding ? "Override active" : "Override ended"}</strong>
+            <span>
+              {overriding
+                ? `Reserved by ${session!.owner}`
+                : "Reservation changed. Choose how to continue."}
+            </span>
+          </div>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => chooseOverride(null)}
+          >
+            {overriding ? "Stop override" : "Review options"}
+          </button>
+        </div>
+      )}
       {optionsOpen && (
         <div className="remote-options">
           {error && (
@@ -296,6 +421,40 @@ export function DeviceControls({
                 {new Date(recording.startedAt).toLocaleTimeString()}. Ending the
                 session stops and saves it.
               </p>
+            )}
+            {session && !approved && (
+              <>
+                <div className="control-override-choice">
+                  <p>
+                    Using controls can interrupt work or running regression tests.
+                  </p>
+                  <button
+                    type="button"
+                    className="primary"
+                    disabled={
+                      busy ||
+                      Boolean(confirm) ||
+                      (!device.online && !supportsWake(device)) ||
+                      device.locked ||
+                      session.state !== "active" ||
+                      session.expiresAt <= Date.now() ||
+                      (!supportsWake(device) &&
+                        !device.capabilities.some(
+                          (c) => c === "key" || c === "text",
+                        ))
+                    }
+                    onClick={() => chooseOverride(session.id)}
+                  >
+                    Override — do not reserve
+                  </button>
+                  <p>
+                    Reservation and recording stay active.
+                  </p>
+                </div>
+                <h3 className="control-takeover-heading">
+                  {owned ? "Manage your reservation" : "Or take the reservation"}
+                </h3>
+              </>
             )}
             {!owned && (
               <div className="control-reserve-fields">
@@ -372,8 +531,8 @@ export function DeviceControls({
             </div>
             {session && !owned && (
               <p className="control-warning">
-                This device belongs to another session. You can cancel that
-                session and take control; any recording will be saved first.
+                Taking the reservation ends {session.owner}’s session. Any
+                recording will stop and save first.
               </p>
             )}
             {device.locked && (
@@ -409,16 +568,19 @@ export function DeviceControls({
                     disabled={busy}
                     onClick={() =>
                       void run(async () => {
-                        if (confirm === "takeover")
-                          onLease(
-                            await api("sessions.takeover", {
+                        if (confirm === "takeover") {
+                          const result: DeviceLease = await api(
+                            "sessions.takeover",
+                            {
                               deviceId: device.id,
                               owner,
                               reason,
                               confirmed: true,
-                            }),
+                            },
                           );
-                        else
+                          setApprovedSessionId(result.session.id);
+                          onLease(result);
+                        } else
                           await api(
                             confirm === "stop"
                               ? "recordings.stop"
@@ -523,7 +685,11 @@ export function DeviceControls({
         key={device.id}
         device={device}
         enabled={enabled && !confirm && !optionsOpen}
-        busy={busy}
+        busy={busy || waking}
+        wakeEnabled={
+          controlAllowed && supportsWake(device) && !confirm && !optionsOpen
+        }
+        wake={wake}
         sendKey={(key) => send({ key })}
         sendText={(text) => send({ text })}
       />

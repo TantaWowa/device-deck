@@ -6,7 +6,7 @@ import {
 } from "../../../../packages/core/src/remote";
 
 const editable =
-  "input,textarea,select,[contenteditable]:not([contenteditable='false'])";
+  "input,textarea,select,[contenteditable]:not([contenteditable='false']),[data-remote-action]";
 
 export function useRemoteKeyboard({
   element,

@@ -14,6 +14,30 @@
           "maximum": 65535,
           "default": 47831
         },
+        "tailscale": {
+          "type": "object",
+          "properties": {
+            "origin": {
+              "type": "string"
+            },
+            "allowedUsers": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 320,
+                "pattern": "^[^\\s,*\\x00-\\x1f\\x7f]+$"
+              },
+              "minItems": 1,
+              "maxItems": 64
+            }
+          },
+          "required": [
+            "origin",
+            "allowedUsers"
+          ],
+          "additionalProperties": false
+        },
         "devices": {
           "type": "array",
           "items": {

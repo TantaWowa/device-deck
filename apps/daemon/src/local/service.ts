@@ -9,6 +9,7 @@ import {
   atomicWrite,
 } from "../../../../packages/config/src";
 import { Adapters } from "../../../../packages/adapters/src";
+import { supportsWake } from "../../../../packages/core/src/remote";
 import {
   run,
   stop,
@@ -441,6 +442,83 @@ export class DeckService {
           origin,
         );
       }
+      case "devices.wake": {
+        await this.refresh();
+        const validate = () => {
+          if (this.changingConfig || this.shuttingDown)
+            fail(
+              "configuration-changing",
+              "Wait for the current configuration change.",
+              409,
+            );
+          const device = this.device(args.deviceId);
+          if (!supportsWake(device))
+            fail(
+              "unsupported-capability",
+              "Wake is not supported for this device connection.",
+            );
+          if (this.store.lockReason(device.id))
+            fail("device-locked", "Device is locked for maintenance.", 409);
+          const session = this.store.sessions().find(
+            (s) => s.deviceId === device.id && s.state !== "closed",
+          );
+          if (
+            args.sessionId &&
+            (!session ||
+              session.id !== args.sessionId ||
+              session.state !== "active" ||
+              session.expiresAt <= Date.now())
+          )
+            fail(
+              "stale-wake",
+              "This reservation changed or ended. Review the device before waking it again.",
+              409,
+            );
+          if (session && (!args.sessionId || args.confirmed !== true))
+            fail(
+              "device-reserved",
+              `Reserved by ${session.owner}. Waking may interrupt their work. Confirm wake with the current sessionId to continue without taking the reservation.`,
+              409,
+            );
+          return { device, session };
+        };
+        validate();
+        // Admission and config changes use global -> device order too. Keep that
+        // order across adapter identity checks so no new lease starts mid-wake.
+        return this.global.run(() =>
+          this.queue(args.deviceId).run(async () => {
+            const { device, session } = validate();
+            try {
+              const result = await this.adapters.wake(device);
+              this.store.event({
+                deviceId: device.id,
+                sessionId: session?.id,
+                owner: origin,
+                action: "wake",
+                detail: `Wake attempted: ${result.method}`,
+              });
+              return {
+                deviceId: device.id,
+                status: "attempted",
+                method: result.method,
+                ...(session ? { sessionId: session.id } : {}),
+              };
+            } catch (error) {
+              this.store.event({
+                deviceId: device.id,
+                sessionId: session?.id,
+                owner: origin,
+                action: "wake-failed",
+                detail: `Wake attempt failed: ${(error as Error).message}`,
+              });
+              throw error;
+            } finally {
+              if (this.healthPending) await this.healthPending.catch(() => {});
+              this.healthAt = 0;
+            }
+          }),
+        );
+      }
       case "devices.simulator": {
         await this.refresh();
         const device = await this.global.run(async () => {
@@ -625,41 +703,40 @@ export class DeckService {
           }
         });
       case "remote.input":
-        return this.withLease(args, async (s) => {
-          const modes =
-            Number(args.key !== undefined) +
-            Number(args.text !== undefined) +
-            Number(args.x !== undefined || args.y !== undefined);
-          if (modes !== 1 || (args.x !== undefined) !== (args.y !== undefined))
+        return this.withLease(args, (s) => this.remoteInput(s, args));
+      case "remote.override": {
+        const validate = () => {
+          this.device(args.deviceId);
+          const session = this.store.sessions().find((s) => s.id === args.sessionId);
+          if (
+            !session ||
+            session.deviceId !== args.deviceId ||
+            session.state !== "active" ||
+            session.expiresAt <= Date.now()
+          )
             fail(
-              "invalid-input",
-              "Supply exactly one key, text, or complete x/y tap.",
+              "stale-override",
+              "This reservation changed or ended. Choose how to control the device again.",
+              409,
             );
-          const at = Date.now(),
-            mono = performance.now(),
-            job = this.jobs.get(s.id);
-          await this.adapters.input(this.device(s.deviceId), args);
-          const key =
-            args.key ||
-            (args.text !== undefined
-              ? `Text: ${args.text}`
-              : `Tap ${args.x}, ${args.y}`);
-          const inputValue = {
-            at,
-            sessionId: s.id,
-            deviceId: s.deviceId,
-            key,
-            recordingId: job && !job.finishing ? job.artifact.id : null,
-            elapsedMs:
-              job && !job.finishing
-                ? Math.max(0, Math.round(mono - job.handle.startedMono))
-                : null,
-          };
-          return this.config.config.settings.logging &&
-            (!job || job.artifact.logging !== false)
-            ? this.store.input(inputValue)
-            : { ...inputValue, id: 0 };
+          if (this.store.lockReason(args.deviceId))
+            fail("device-locked", "Device is locked for maintenance.", 409);
+          return session;
+        };
+        validate();
+        return this.queue(args.deviceId).run(async () => {
+          const session = validate();
+          const input = await this.remoteInput(session, args);
+          this.store.event({
+            deviceId: session.deviceId,
+            sessionId: session.id,
+            owner: args.owner,
+            action: "control-override",
+            detail: `Sent remote input without taking ${session.owner}'s reservation.`,
+          });
+          return input;
         });
+      }
       case "captures.screenshot":
         return this.withLease(args, (s) =>
           this.screenshot(s, args.mode, args.clipboard, origin),
@@ -761,6 +838,44 @@ export class DeckService {
           );
         });
     }
+  }
+  private async remoteInput(
+    session: Session,
+    args: Parameters<Adapters["input"]>[1],
+  ) {
+    const modes =
+      Number(args.key !== undefined) +
+      Number(args.text !== undefined) +
+      Number(args.x !== undefined || args.y !== undefined);
+    if (modes !== 1 || (args.x !== undefined) !== (args.y !== undefined))
+      fail(
+        "invalid-input",
+        "Supply exactly one key, text, or complete x/y tap.",
+      );
+    const at = Date.now(),
+      mono = performance.now(),
+      job = this.jobs.get(session.id);
+    await this.adapters.input(this.device(session.deviceId), args);
+    const key =
+      args.key ||
+      (args.text !== undefined
+        ? `Text: ${args.text}`
+        : `Tap ${args.x}, ${args.y}`);
+    const inputValue = {
+      at,
+      sessionId: session.id,
+      deviceId: session.deviceId,
+      key,
+      recordingId: job && !job.finishing ? job.artifact.id : null,
+      elapsedMs:
+        job && !job.finishing
+          ? Math.max(0, Math.round(mono - job.handle.startedMono))
+          : null,
+    };
+    return this.config.config.settings.logging &&
+      (!job || job.artifact.logging !== false)
+      ? this.store.input(inputValue)
+      : { ...inputValue, id: 0 };
   }
   private withLease<T>(
     args: { sessionId: string; leaseToken: string },

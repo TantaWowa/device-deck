@@ -117,6 +117,24 @@ export function supportsRemoteKey(d: DeviceConfig, key: string) {
       return false;
   }
 }
+/** Wake is determined by the configured transport, never the remote's appearance. */
+export function supportsWake(d: DeviceConfig): boolean {
+  return ["roku", "adb", "apple-tv", "simulator"].includes(d.connection.type);
+}
+export function wakeDescription(d: DeviceConfig): string {
+  switch (d.connection.type) {
+    case "roku":
+      return "Attempt to wake this Roku. Players receive Home, which may leave the current app; Roku TVs receive Power On.";
+    case "adb":
+      return "Attempt to wake the screen. Devices that are already awake stay awake.";
+    case "apple-tv":
+      return "Attempt to turn on this Apple TV using its paired Companion connection.";
+    case "simulator":
+      return "Send Home to wake a running simulator. This may leave the current app; stopped simulators must be launched first.";
+    default:
+      return "Wake is unavailable for this device's configured connection.";
+  }
+}
 export const keyboardRemoteKeys: Record<string, string> = {
   ArrowUp: "Up",
   ArrowDown: "Down",

@@ -15,6 +15,7 @@ import { z } from "zod";
 import { chromium, expect, type Browser } from "@playwright/test";
 import { exerciseDeviceTable } from "./qa-device-table";
 import { exerciseRemoteInput } from "./qa-remote-input";
+import { exerciseWake } from "./qa-wake";
 import { DeckService } from "../apps/daemon/src/local/service";
 import { createService } from "../apps/daemon/src/server";
 import { Adapters } from "../packages/adapters/src";
@@ -53,7 +54,10 @@ const detected = [
 let deck: DeckService;
 const remoteInputs: { key?: string; text?: string }[] = [];
 const remoteAttempts: { key?: string; text?: string }[] = [];
+const wakeAttempts: string[] = [];
+let rokuOnline = true;
 let remoteInputBarrier: Promise<void> | undefined;
+let teammateLease: { session: { id: string }; leaseToken: string } | undefined;
 class FixtureAdapters extends Adapters {
   async diagnostics() {
     return [];
@@ -64,10 +68,10 @@ class FixtureAdapters extends Adapters {
   async inspect(device: DeviceConfig): Promise<Device> {
     return {
       ...device,
-      online: device.id !== "iphone-sim",
+      online: device.id === "roku" ? rokuOnline : device.id !== "iphone-sim",
       locked: false,
       healthDetail: "Isolated fixture",
-      capabilities: device.id === "roku" ? ["key", "text"] : [],
+      capabilities: device.id === "roku" ? ["key", "text", "wake"] : [],
     };
   }
   async inspectSources(sources: SourceConfig[]) {
@@ -96,6 +100,14 @@ class FixtureAdapters extends Adapters {
     if (barrier) await barrier;
     await new Promise<void>((resolve) => setTimeout(resolve, 120));
     remoteInputs.push(value);
+  }
+  async wake(device: DeviceConfig) {
+    assert(
+      device.id === "roku",
+      "Only inert wake fixtures may receive wake requests",
+    );
+    wakeAttempts.push(device.id);
+    return { method: "Roku Home button" };
   }
 }
 class FixtureCapture extends CaptureEngine {
@@ -271,12 +283,72 @@ try {
   await page.getByRole("heading", { name: "Devices", exact: true }).waitFor();
   checks.push(...(await exerciseDeviceTable(page, output, base)));
   checks.push(
+    ...(await exerciseWake(page, output, {
+      attempts: () => wakeAttempts,
+      remoteInputs: () => remoteInputs.length,
+      sessions: () => deck.store.sessions().length,
+      session: (id) => deck.store.session(id),
+      reserve: async (owner) => {
+        const held = z
+          .object({
+            session: z.object({ id: z.string() }),
+            leaseToken: z.string(),
+          })
+          .parse(
+            await deck.execute("sessions.reserve", {
+              selector: { device: "roku" },
+              owner,
+              reason: "Keep this reservation during wake override",
+            }),
+          );
+        return {
+          session: deck.store.session(held.session.id),
+          leaseToken: held.leaseToken,
+        };
+      },
+      release: async (lease) => {
+        await deck.execute("sessions.release", {
+          sessionId: lease.session.id,
+          leaseToken: lease.leaseToken,
+        });
+      },
+      setOnline: async (online) => {
+        rokuOnline = online;
+        await deck.devices(true);
+      },
+    })),
+  );
+  checks.push(
     ...(await exerciseRemoteInput(page, output, {
       inputs: () => remoteInputs,
       attempts: () => remoteAttempts,
       sessions: () =>
         deck.store.sessions().filter((session) => session.deviceId === "roku")
           .length,
+      session: (id) => deck.store.session(id),
+      reserveOther: async () => {
+        const held = z
+          .object({
+            session: z.object({ id: z.string() }),
+            leaseToken: z.string(),
+          })
+          .parse(
+            await deck.execute("sessions.reserve", {
+              selector: { device: "roku" },
+              owner: "Fixture teammate",
+              reason: "Keep this reservation during remote override",
+            }),
+          );
+        teammateLease = held;
+        return deck.store.session(held.session.id);
+      },
+      endOther: async () => {
+        assert(teammateLease);
+        await deck.execute("sessions.release", {
+          sessionId: teammateLease.session.id,
+          leaseToken: teammateLease.leaseToken,
+        });
+      },
       holdNext: () => {
         let release!: () => void;
         remoteInputBarrier = new Promise<void>((resolve) => {

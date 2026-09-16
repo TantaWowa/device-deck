@@ -27,9 +27,10 @@ async def main():
  if not service.credentials:raise RuntimeError('Pair Companion with devdeck apple-pair first')
  device=await pyatv.connect(config,loop,protocol=Protocol.Companion,storage=storage)
  try:
-  value=sys.argv[4]
-  if op=='text':await device.keyboard.text_append(value)
+  if op=='wake':await device.power.turn_on()
+  elif op=='text':await device.keyboard.text_append(sys.argv[4])
   else:
+   value=sys.argv[4]
    keys={'Up':'up','Down':'down','Left':'left','Right':'right','OK':'select','Select':'select','Back':'menu','Menu':'menu','Special':'menu','Rewind':'skip_backward','Replay':'skip_backward','FastForward':'skip_forward','Home':'home','Play':'play_pause','Play / pause':'play_pause','VolumeUp':'volume_up','VolumeDown':'volume_down'}
    if value not in keys:raise RuntimeError('Unsupported Apple TV key')
    await getattr(device.remote_control,keys[value])()

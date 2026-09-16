@@ -34,6 +34,29 @@ From an unpacked release, use `./devdeck` instead of `node build/devdeck.mjs`. K
 
 `start` runs the daemon in the background. `npm run service` runs it in the foreground for development. Closing a browser, CLI or MCP connection leaves recordings running. Release, takeover, expiry, the recording duration limit or service shutdown finalize them.
 
+## Open Device Deck from another machine
+
+Connect the Mac running Device Deck and your other machine to Tailscale, then run this on the Device Deck Mac:
+
+```sh
+devdeck tailscale enable
+```
+
+Open the HTTPS address printed by the command on your other machine. Bookmark it for later; Tailscale signs you in automatically, with no SSH tunnel or one-use login link. Both machines must be connected to the same tailnet, and its network policy must permit the connection. Device Deck stays local until you enable this option.
+
+First-time setup allows only the Mac's Tailscale user to connect. To allow additional users, give their exact Tailscale login names:
+
+```sh
+devdeck tailscale enable --allow-user george@example.com,teammate@example.com
+devdeck tailscale status
+devdeck ui --tailscale --json   # Print the remote URL without opening a browser
+devdeck tailscale disable
+```
+
+An explicit allow list replaces the current list, so include your own login when adding someone else. Running `enable` again without options preserves your saved users and HTTPS port. Allowed users have full Device Deck control, including devices, captures and settings. **Settings → Remote access** shows the saved address and allowed users.
+
+Setup uses Tailscale Serve to provide HTTPS within your tailnet. It may ask you to enable HTTPS for your tailnet. Use `--https-port PORT` during setup if another Serve app already occupies the default HTTPS port. Serve keeps its setup across restarts when Device Deck's backend port stays fixed. Before changing either port, disable Tailscale access while the old daemon is running, make the change, then enable access again. Existing conflicting or stale Serve routes require explicit cleanup. Use Serve, never Tailscale Funnel: public requests and requests from tagged source devices have no user identity and are rejected. See the [Tailscale command reference](docs/api.md#tailscale-access) for details.
+
 ## Reports and capture cards
 
 Reports offer Day, Week, Month and inclusive custom date ranges. The same range applies to every metric and device row; CLI and MCP can request it too. Capture Cards shows detected and disconnected USB cards, stable hardware IDs, ownership and direct device assignment. See [range and binding semantics](docs/reports-and-capture-cards.md).
@@ -134,7 +157,7 @@ By default, runtime files live under `~/Library/Application Support/Device Deck/
 - `endpoint.json`: current loopback port and private API token. CLI and MCP discover the daemon here.
 - `daemon.log`: service diagnostics.
 
-Files containing credentials use owner-only permissions. `devdeck ui` opens a short-lived, single-use browser ticket. The browser gets an HttpOnly, SameSite cookie. The API rejects unexpected Host/Origin headers and unauthenticated mutations. Owner names are labels, not credentials. All clients run as the same Mac user; this is not isolation against another process with access to that user's files.
+Files containing credentials use owner-only permissions. `devdeck ui` opens a short-lived, single-use browser ticket. The local browser gets an HttpOnly, SameSite cookie. Optional Tailscale access checks the exact configured HTTPS origin and the allowed user's identity on every request. The API rejects unexpected Host/Origin headers and unauthenticated mutations. Owner names are labels, not credentials. Operations run as the daemon's Mac user; this is not isolation against another process with access to that user's files.
 
 Configuration saves serialize the revision check and atomic rename. Invalid external edits preserve the last valid running configuration. Active devices and capture bindings cannot change. Missing/reordered USB inputs never fall back to a different card. When recording cleanup cannot be verified, its reservation stays `closing`; reconnect the device and retry release or takeover.
 

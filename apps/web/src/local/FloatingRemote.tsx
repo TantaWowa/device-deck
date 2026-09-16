@@ -45,6 +45,7 @@ export function FloatingRemote({
     ),
   }));
   const [menu, setMenu] = useState(initialMenu);
+  const previousRequest = useRef(requestKey);
   const { panel, host, position, setPosition, detach } = useAnchoredPopup({
     anchor,
     requestKey,
@@ -83,6 +84,9 @@ export function FloatingRemote({
     };
   }, [anchor, requestKey, host]);
   useEffect(() => {
+    // Inventory updates must not reopen the menu after this popup reserves a device.
+    if (previousRequest.current === requestKey) return;
+    previousRequest.current = requestKey;
     setMenu(initialMenu);
   }, [initialMenu, requestKey]);
   useEffect(() => {
