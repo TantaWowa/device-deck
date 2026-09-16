@@ -1,5 +1,8 @@
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
+import { constants } from "node:fs";
+import { access, stat } from "node:fs/promises";
+import path from "node:path";
 import { DeckError } from "../../core/src/local/types";
 const exec = promisify(execFile);
 export async function run(
@@ -33,15 +36,19 @@ export async function run(
   }
 }
 export async function available(command: string) {
-  try {
-    await run(
-      command.includes("/") ? "/bin/test" : "/usr/bin/which",
-      command.includes("/") ? ["-x", command] : [command],
-    );
-    return true;
-  } catch {
-    return false;
+  // Tool checks run for every online device. Spawning `which`/`test` stalls
+  // macOS's event loop under a large inventory; filesystem checks also avoid
+  // caching stale results after installing a helper or editing its path.
+  const candidates = command.includes("/") || command.includes(path.sep)
+    ? [command]
+    : (process.env.PATH ?? "/usr/bin:/bin").split(path.delimiter).map((directory) => path.join(directory || ".", command));
+  for (const candidate of candidates) {
+    try {
+      await access(candidate, constants.X_OK);
+      if ((await stat(candidate)).isFile()) return true;
+    } catch {}
   }
+  return false;
 }
 export function start(command: string, args: string[], options: { env?: NodeJS.ProcessEnv } = {}) {
   // Per-helper overrides retain the host's SDK/tool discovery environment.

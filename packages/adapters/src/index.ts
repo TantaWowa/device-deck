@@ -19,6 +19,7 @@ import { randomUUID, createHash } from "node:crypto";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import { run, available, start, stop } from "./process";
+import { healthProbeRunner } from "./health-probes";
 import {
   type Config,
   type DeviceConfig,
@@ -63,8 +64,8 @@ export class Adapters {
     const c = d.connection;
     return c.type === "adb" ? `${d.id}:${c.port}:${c.avdName || c.hardwareId || c.serial}` : d.id;
   }
-  private async androidFeatures(d: DeviceConfig) {
-    const output = (await this.execute(this.tool("adb"), [...this.adb(d), "shell", "pm", "list", "features"], 5000)).stdout.toString();
+  private async androidFeatures(d: DeviceConfig, execute = this.execute) {
+    const output = (await execute(this.tool("adb"), [...this.adb(d), "shell", "pm", "list", "features"], 5000)).stdout.toString();
     if (!/^feature:/m.test(output)) throw new Error("Android features are not available yet.");
     const result = androidFeatures(output);
     this.inputModes.set(this.inputModeKey(d), result.inputMode);
@@ -359,10 +360,10 @@ export class Adapters {
       diagnostics,
     };
   }
-  async inspectSources(configs: SourceConfig[]): Promise<Source[]> {
+  async inspectSources(configs: SourceConfig[], execute = run): Promise<Source[]> {
     let list: { uniqueId: string; inUse: string }[] = [];
     try {
-      list = JSON.parse((await run(helper, ["list"])).stdout.toString());
+      list = JSON.parse((await execute(helper, ["list"])).stdout.toString());
     } catch {}
     return configs.map((s) =>
       s.kind === "native"
@@ -379,7 +380,22 @@ export class Adapters {
           },
     );
   }
-  async inspect(d: DeviceConfig): Promise<Device> {
+  private async appleDevices(execute = this.execute) {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "deck-device-"));
+    try {
+      const file = path.join(dir, "d.json");
+      await execute("xcrun", ["devicectl", "list", "devices", "--json-output", file, "--quiet"]);
+      return JSON.parse(await readFile(file, "utf8")).result?.devices || [];
+    } finally { await rm(dir, { recursive: true, force: true }); }
+  }
+  /** Coalesce read-only probes within this inventory scan only. Inputs and
+   * lifecycle operations use their normal fresh identity/readiness checks. */
+  async inspectAll(devices: readonly DeviceConfig[]): Promise<Device[]> {
+    const execute = healthProbeRunner(this.execute);
+    let apple: ReturnType<Adapters["appleDevices"]> | undefined;
+    return Promise.all(devices.map((device) => this.inspect(device, execute, () => apple ??= this.appleDevices(execute))));
+  }
+  async inspect(d: DeviceConfig, execute = this.execute, appleDevices = () => this.appleDevices(execute)): Promise<Device> {
     const result: Device = {
       ...d,
       online: false,
@@ -396,7 +412,7 @@ export class Adapters {
         );
         result.online = Boolean(
           source &&
-          (await this.inspectSources([source]))[0]?.status === "connected",
+          (await this.inspectSources([source], execute))[0]?.status === "connected",
         );
         result.healthDetail = result.online
           ? "USB capture connected · configure a control connection for remote input"
@@ -405,7 +421,7 @@ export class Adapters {
       if (c.type === "adb") {
         result.inputMode = this.inputModes.get(this.inputModeKey(d)) || d.inputMode || (c.avdName ? await avdInputMode(c.avdName) : undefined) || "touch";
         if (isAndroidEmulator(d)) {
-          const status = await this.emulators.inspect(d);
+          const status = await this.emulators.inspect(d, execute);
           result.simulatorState = status.state;
           result.readiness = status.state === "starting" ? "starting" : "offline";
           result.healthDetail =
@@ -420,13 +436,13 @@ export class Adapters {
           }
           if (status.state !== "booted") return result;
         }
-        d = await this.verifyIdentity(d);
-        const { stdout } = await this.execute(this.tool("adb"), [
+        d = await this.verifyIdentity(d, execute);
+        const { stdout } = await execute(this.tool("adb"), [
           ...this.adb(d),
           "get-state",
         ]);
         result.online = stdout.toString().trim() === "device";
-        if (result.online && !(await androidBootReady(this.tool("adb"), this.adb(d), this.execute))) {
+        if (result.online && !(await androidBootReady(this.tool("adb"), this.adb(d), execute))) {
           result.online = false;
           result.readiness = "starting";
           result.healthDetail = "Android booting… Wait for its system screen before using the feed or controls.";
@@ -434,7 +450,7 @@ export class Adapters {
         }
         if (result.online) {
           result.capabilities.push("key", "text", "restart");
-          const features = await this.androidFeatures(d).catch(() => undefined);
+          const features = await this.androidFeatures(d, execute).catch(() => undefined);
           if (features) result.inputMode = features.inputMode;
           if (existsSync(path.join(root, "build/native/scrcpy-server-v4.1")) && features?.touchscreen) {
             result.gestureCapabilities = [...ANDROID_GESTURES];
@@ -453,7 +469,7 @@ export class Adapters {
         result.capabilities.push("key", "text");
       }
       if (c.type === "simulator") {
-        result.simulatorState = await simulatorState(d, this.execute);
+        result.simulatorState = await simulatorState(d, execute);
         result.online = result.simulatorState === "booted";
         result.readiness = result.simulatorState === "starting" ? "starting" : "offline";
         result.healthDetail =
@@ -479,7 +495,7 @@ export class Adapters {
       if (c.type === "apple-tv") {
         const info = JSON.parse(
           (
-            await run(this.tool("python"), [
+            await execute(this.tool("python"), [
               path.join(root, "native/apple-tv.py"),
               "inspect",
               c.host,
@@ -492,32 +508,17 @@ export class Adapters {
         else result.healthDetail = "Pair Companion using devdeck apple-pair";
       }
       if (c.type === "apple-device") {
-        const dir = await mkdtemp(path.join(os.tmpdir(), "deck-device-"));
-        try {
-          const file = path.join(dir, "d.json");
-          await this.execute("xcrun", [
-            "devicectl",
-            "list",
-            "devices",
-            "--json-output",
-            file,
-            "--quiet",
-          ]);
-          const list =
-            JSON.parse(await readFile(file, "utf8")).result?.devices || [];
-          const found = list.find((x: any) => x.identifier === c.udid);
-          result.online = Boolean(found && ["connected", "available"].includes(found.connectionProperties?.tunnelState || found.deviceProperties?.connectionState));
-          if (found?.hardwareProperties) {
-            result.inputMode = appleHardwareInputMode(found.hardwareProperties);
-            result.model = found.hardwareProperties.marketingName || found.hardwareProperties.productType || result.model;
-          }
-          result.healthDetail =
-            deviceInputMode(result) === "remote"
-              ? "This Apple TV was discovered by Xcode. Configure and pair an Apple TV Companion connection for remote input. A connected USB capture feed is view-only."
-              : "Touch input on physical iPhones and iPads is not supported by this adapter. A connected USB capture feed is view-only; use an iOS simulator for touch control.";
-        } finally {
-          await rm(dir, { recursive: true, force: true });
+        const list = await appleDevices();
+        const found = list.find((x: any) => x.identifier === c.udid);
+        result.online = Boolean(found && ["connected", "available"].includes(found.connectionProperties?.tunnelState || found.deviceProperties?.connectionState));
+        if (found?.hardwareProperties) {
+          result.inputMode = appleHardwareInputMode(found.hardwareProperties);
+          result.model = found.hardwareProperties.marketingName || found.hardwareProperties.productType || result.model;
         }
+        result.healthDetail =
+          deviceInputMode(result) === "remote"
+            ? "This Apple TV was discovered by Xcode. Configure and pair an Apple TV Companion connection for remote input. A connected USB capture feed is view-only."
+            : "Touch input on physical iPhones and iPads is not supported by this adapter. A connected USB capture feed is view-only; use an iOS simulator for touch control.";
       }
       const source = this.getConfig().sources.find(
         (s) => s.id === d.captureSourceId,
@@ -553,11 +554,11 @@ export class Adapters {
     if (isAndroidEmulator(d)) return this.emulators.prepare(d);
     return d;
   }
-  async verifyIdentity(d: DeviceConfig) {
-    if (isAndroidEmulator(d)) d = (await this.emulators.resolve(d))!;
+  async verifyIdentity(d: DeviceConfig, execute?: typeof run) {
+    if (isAndroidEmulator(d)) d = (await this.emulators.resolve(d, true, execute))!;
     if (d.connection.type === "adb" && d.connection.hardwareId) {
       const serial = (
-        await this.execute(this.tool("adb"), [
+        await (execute ?? this.execute)(this.tool("adb"), [
           ...this.adb(d),
           "shell",
           "getprop",

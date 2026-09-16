@@ -70,10 +70,10 @@ export class AndroidEmulators {
       "Android emulator executable not found. Set its existing SDK path in Settings → Adapter executables.",
     );
   }
-  async names() {
+  async names(execute = this.execute) {
     return [
       ...new Set(
-        (await this.execute(await this.binary(), ["-list-avds"])).stdout
+        (await execute(await this.binary(), ["-list-avds"])).stdout
           .toString()
           .split(/\r?\n/)
           .map((s) => s.trim())
@@ -81,9 +81,9 @@ export class AndroidEmulators {
       ),
     ];
   }
-  async running(port: number) {
+  async running(port: number, execute = this.execute) {
     const data = (
-      await this.execute(this.adb(), ["-P", String(port), "devices"])
+      await execute(this.adb(), ["-P", String(port), "devices"])
     ).stdout.toString();
     const result: { serial: string; state: string; avdName?: string }[] = [];
     for (const line of data.split(/\r?\n/)) {
@@ -96,7 +96,7 @@ export class AndroidEmulators {
       let name: string | undefined;
       try {
         name = (
-          await this.execute(
+          await execute(
             this.adb(),
             ["-P", String(port), "-s", serial, "emu", "avd", "name"],
             3000,
@@ -112,7 +112,7 @@ export class AndroidEmulators {
           // Some SDK versions return success with no console output. The
           // immutable boot property identifies the AVD on this same transport.
           const bootName = (
-            await this.execute(
+            await execute(
               this.adb(),
               [
                 "-P",
@@ -135,11 +135,11 @@ export class AndroidEmulators {
     }
     return result;
   }
-  private async locate(d: DeviceConfig) {
+  private async locate(d: DeviceConfig, execute = this.execute) {
     if (!isAndroidEmulator(d) || d.connection.type !== "adb")
       fail("unsupported-lifecycle", "This target is not an Android emulator.");
     const c = d.connection;
-    const entries = await this.running(c.port);
+    const entries = await this.running(c.port, execute);
     const matches = entries.filter((entry) =>
       c.avdName ? entry.avdName === c.avdName : entry.serial === c.serial,
     );
@@ -192,9 +192,10 @@ export class AndroidEmulators {
   async resolve(
     d: DeviceConfig,
     required = true,
+    execute = this.execute,
   ): Promise<DeviceConfig | undefined> {
     if (!isAndroidEmulator(d)) return d;
-    const found = await this.locate(d);
+    const found = await this.locate(d, execute);
     if (found && !found.avdName && required)
       fail(
         "emulator-identity-pending",
@@ -211,7 +212,7 @@ export class AndroidEmulators {
       return undefined;
     }
     const resolved = this.resolved(d, found);
-    if (required && resolved.connection.type === "adb" && !(await androidBootReady(this.adb(), ["-P", String(resolved.connection.port), "-s", resolved.connection.serial], this.execute)))
+    if (required && resolved.connection.type === "adb" && !(await androidBootReady(this.adb(), ["-P", String(resolved.connection.port), "-s", resolved.connection.serial], execute)))
       fail("emulator-not-ready", "This Android emulator is still booting. Wait for its system screen before using its feed or controls.", 409);
     return resolved;
   }
@@ -229,13 +230,13 @@ export class AndroidEmulators {
       ? { ...d, connection: { ...d.connection, avdName: found.avdName } }
       : d;
   }
-  async inspect(d: DeviceConfig) {
-    const found = await this.locate(d);
+  async inspect(d: DeviceConfig, execute = this.execute) {
+    const found = await this.locate(d, execute);
     if (!found) {
       if (
         d.connection.type === "adb" &&
         d.connection.avdName &&
-        !(await this.names()).includes(d.connection.avdName)
+        !(await this.names(execute)).includes(d.connection.avdName)
       )
         return { state: "unavailable" as const };
       return { state: "shutdown" as const };
@@ -245,26 +246,26 @@ export class AndroidEmulators {
       this.readyBoots.delete(d.id);
       return { state: "starting" as const, resolved };
     }
-    const booted = await this.displayReady(resolved);
+    const booted = await this.displayReady(resolved, execute);
     return {
       state: booted ? ("booted" as const) : ("starting" as const),
       resolved,
     };
   }
-  private async displayReady(d: DeviceConfig) {
+  private async displayReady(d: DeviceConfig, execute = this.execute) {
     if (d.connection.type !== "adb") return false;
     const args = ["-P", String(d.connection.port), "-s", d.connection.serial];
-    if (!(await androidBootReady(this.adb(), args, this.execute))) {
+    if (!(await androidBootReady(this.adb(), args, execute))) {
       this.readyBoots.delete(d.id);
       return false;
     }
     // A kernel boot ID changes across reboot, including a complete reboot
     // between two health polls. Validate the expensive screenshot once per boot.
-    const bootId = (await this.execute(this.adb(), [...args, "shell", "cat", "/proc/sys/kernel/random/boot_id"], 3000).catch(() => ({ stdout: Buffer.from("") }))).stdout.toString().trim();
+    const bootId = (await execute(this.adb(), [...args, "shell", "cat", "/proc/sys/kernel/random/boot_id"], 3000).catch(() => ({ stdout: Buffer.from("") }))).stdout.toString().trim();
     const identity = /^[\da-f-]{36}$/i.test(bootId) ? `${d.connection.port}:${d.connection.serial}:${bootId}` : undefined;
     if (identity && this.readyBoots.get(d.id) === identity) return true;
     this.readyBoots.delete(d.id);
-    if (!(await androidDisplayReady(this.adb(), args, this.execute))) return false;
+    if (!(await androidDisplayReady(this.adb(), args, execute))) return false;
     if (identity) this.readyBoots.set(d.id, identity);
     return true;
   }

@@ -204,9 +204,7 @@ export class DeckService {
     if (!force && Date.now() - this.healthAt < 4000)
       return this.decorate(this.health);
     if (!this.healthPending) {
-      this.healthPending = Promise.all(
-        this.config.config.devices.map((d) => this.adapters.inspect(d)),
-      )
+      this.healthPending = this.adapters.inspectAll(this.config.config.devices)
         .then((ds) => {
           this.health = ds;
           this.healthAt = Date.now();

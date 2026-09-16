@@ -12,6 +12,7 @@
   },
   "scripts": {
     "qa:live-video": "node scripts/qa-live-video.mjs",
+    "qa:ios-production": "node scripts/qa-ios-native-production.mjs",
     "qa:device-types": "node scripts/qa-device-types.mjs",
     "qa:touch-feedback": "node scripts/qa-touch-feedback.mjs",
     "qa:ios-video": "node --import tsx scripts/qa-ios-native-video.mjs",

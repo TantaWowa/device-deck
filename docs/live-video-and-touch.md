@@ -80,6 +80,8 @@ Real Google TV browser validation also covers joining after the initial keyframe
 
 Run `npm run qa:ios-video` to test the native iOS video path with an isolated H.264-producing idb fixture. It checks moving browser video, shared viewing and touch sessions, late viewers, quality profiles, process cleanup and the absence of screenshot calls. To run its read-only check on an already booted, unreserved simulator, set `QA_IOS_NATIVE_UDID` to its exact UDID. This mode refuses device input and does not boot or close the simulator.
 
+Run `npm run qa:ios-production` to inspect one already booted, unreserved iOS simulator in the running local dashboard, with touch off. The 30-second loopback check measures browser frames and daemon health latency while normal inventory polling continues; evidence is written to `outputs/ios-native-video-production-after/`. On this Mac, Balanced native video at 588×1280 delivered 14.94 browser frames per second after a five-second warm-up, with no one-second delivery gaps. Batching health probes reduced the measured worst health-request delay from 1,815 ms to 60 ms (95th percentile 14 ms). This verifies local delivery, not cross-machine Tailscale performance; no device input, boot operation or reservation was sent.
+
 Run `npm run qa:touch-feedback` to check contact markers, swipe trails, release fade, cancellation, rejection messages and disabled input on desktop and mobile. This command starts and stops its own synthetic fixture; it does not contact real devices.
 
 Run the isolated synthetic fixture in one terminal, then run the browser checks from the repository root in another:
