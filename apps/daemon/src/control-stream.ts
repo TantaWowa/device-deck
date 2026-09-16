@@ -8,6 +8,7 @@ export class ControlStream {
   private generation = 0;
   private closed = false;
   private failure?: Error;
+  private suspended = 0;
   constructor(
     private source: InteractiveSource,
     private validate: () => Promise<void>,
@@ -17,6 +18,9 @@ export class ControlStream {
     if (this.failure) throw this.failure;
     if (this.closed) throw new Error("This control stream closed. Start a new control session.");
     const message = controlMessageSchema.parse(value);
+    // Hardware input owns the device until it completes. Never retain touch
+    // messages received during that interval for later replay.
+    if (this.suspended) return;
     if (message.type === "cancel") { void this.cancel(); return; }
     if (message.type === "pointer" && message.event.type === "move") {
       // Coalesce only within the current run of movement; never cross a down/up barrier.
@@ -34,10 +38,10 @@ export class ControlStream {
     this.drain();
   }
   private drain() {
-    if (this.running || this.closed) return;
+    if (this.running || this.closed || this.suspended) return;
     const generation = this.generation;
     this.running = (async () => {
-      while (!this.closed && generation === this.generation && this.queue.length) {
+      while (!this.closed && !this.suspended && generation === this.generation && this.queue.length) {
         const message = this.queue.shift()!;
         await this.validate();
         if (this.closed || generation !== this.generation) break;
@@ -87,4 +91,18 @@ export class ControlStream {
   }
   async close() { this.closed = true; await this.cancel(); }
   async settled() { while (this.running) await this.running; if (this.failure) throw this.failure; }
+  /** Cancel held/queued touches and finish any already-running bounded HID
+   * sequence before a hardware key, keeping this controller alive afterwards. */
+  async suspend(): Promise<() => void> {
+    if (this.closed || this.failure) throw this.failure || new Error("The control stream closed.");
+    this.suspended++;
+    try { await this.cancel(); }
+    catch (error) { this.suspended--; throw error; }
+    let resumed = false;
+    return () => {
+      if (resumed) return;
+      resumed = true;
+      this.suspended--;
+    };
+  }
 }

@@ -33,6 +33,11 @@ export const controlMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("cancel") }).strict(),
 ]);
 export type ControlMessage = z.infer<typeof controlMessageSchema>;
+/** Receipt on the ordered control channel; all earlier touch messages have
+ * reached the server before the browser can dispatch its HTTP hardware key. */
+export const inputBarrierSchema = z.object({
+  type: z.literal("input-barrier"), id: z.string().min(1).max(64).regex(/^[A-Za-z0-9_-]+$/),
+}).strict();
 export const streamOpenSchema = z.object({
   deviceId: z.string().min(1).max(128).optional(),
   sourceId: z.string().min(1).max(160).optional(),
@@ -49,6 +54,7 @@ export type StreamCredentials = z.infer<typeof streamCredentialSchema>;
 export type StreamAnswer = StreamCredentials & {
   answer: string;
   capabilities: GestureCapability[];
+  supportsInputBarrier?: boolean;
   width: number;
   height: number;
   mode: "live" | "snapshots";

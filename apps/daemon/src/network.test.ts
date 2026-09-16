@@ -11,14 +11,19 @@ import { networkSchema, type Artifact, type Operation } from "../../../packages/
 import { DeckService } from "./local/service";
 import { allowedNetworkHosts, MachineAuthority } from "./network";
 import { createBrowserCredentials, createService } from "./server";
+import { LiveStreams, type LiveAuthorization } from "./live";
+import { RTCPeerConnection, RTCRtpCodecParameters } from "werift";
+import type { InteractiveSource, PointerInput, StreamAnswer } from "../../../packages/core/src/live";
 
 const issuer = "https://portal.example.com";
 const uid = "owner-id";
 const nativeToken = "native-api-test-token";
 class HttpDeck extends DeckService {
   calls: Artifact["origin"][] = [];
-  override async execute(_operation: Operation, _value: unknown, origin: Artifact["origin"] = "API") {
+  dispatch?: (operation: Operation, value: unknown, authorize?: LiveAuthorization) => Promise<unknown>;
+  override async execute(operation: Operation, value: unknown, origin: Artifact["origin"] = "API", authorize?: LiveAuthorization) {
     this.calls.push(origin);
+    if (this.dispatch) return this.dispatch(operation, value, authorize);
     return { ok: true };
   }
   override async previewSource() { return Buffer.from([255, 216, 255, 217]); }
@@ -251,8 +256,8 @@ test("a delayed POST body cannot dispatch operations after its hub grant expires
     const grant = await f.sign();
     let sawAuthorization!: () => void;
     const authorized = new Promise<void>((resolve) => { sawAuthorization = resolve; });
-    const authorize = f.authority.authorize.bind(f.authority);
-    f.authority.authorize = async (token) => {
+    const authorize = f.authority.authorizeClaims.bind(f.authority);
+    f.authority.authorizeClaims = async (token) => {
       const valid = await authorize(token);
       if (valid) sawAuthorization();
       return valid;
@@ -277,6 +282,64 @@ test("a delayed POST body cannot dispatch operations after its hub grant expires
     assert.equal(await response, 401);
     assert.deepEqual(f.deck.calls, []);
   });
+});
+
+test("HTTP hub heartbeats renew real stream authorization beyond the opening grant and unpair still revokes it", { timeout: 20000 }, async (t) => {
+  const f = await httpFixture(t);
+  await f.pair();
+  const events: PointerInput[] = [];
+  let closed = 0;
+  const source: InteractiveSource = {
+    width: 100, height: 200, capabilities: ["tap", "drag"],
+    onFrame: () => () => {}, onClose: () => () => {}, close: async () => { closed++; },
+    pointer: async (event) => { events.push(event); }, gesture: async () => {},
+  };
+  const streams = new LiveStreams({
+    resolve: () => ({ device: { id: "phone", name: "Phone", platform: "Android", kind: "virtual", model: "test", visibility: "local", captureSourceId: "native", connection: { type: "adb", serial: "fixture", port: 5037 } }, validate() {} }),
+    video: async () => source, interactive: async () => source,
+  });
+  const peer = new RTCPeerConnection({ bundlePolicy: "max-bundle", iceServers: [], iceAdditionalHostAddresses: ["127.0.0.1"], iceUseIpv6: false,
+    codecs: { video: [new RTCRtpCodecParameters({ mimeType: "video/H264", clockRate: 90000, payloadType: 96, parameters: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f" })] } });
+  t.after(async () => { await peer.close(); await streams.close(); });
+  f.deck.dispatch = async (operation, value, authorize) => operation === "streams.open" ? streams.open(value, authorize)
+    : streams.ping(JSON.parse(JSON.stringify(value)), authorize);
+  const headers = (grant: string) => ({ Authorization: `Bearer ${grant}`, Origin: issuer, "X-Device-Deck": "local", "Content-Type": "application/json" });
+  const until = async (predicate: () => boolean) => {
+    const deadline = Date.now() + 5000;
+    while (!predicate()) { if (Date.now() > deadline) throw new Error("Stream did not receive input"); await new Promise((resolve) => setTimeout(resolve, 10)); }
+  };
+  peer.addTransceiver("video", { direction: "recvonly" });
+  const channel = peer.createDataChannel("control", { ordered: true });
+  let barrierReceived = false;
+  channel.onMessage.subscribe((data) => { if (JSON.parse(data.toString()).type === "input-barrier") barrierReceived = true; });
+  await peer.setLocalDescription(await peer.createOffer());
+  const original = await f.sign();
+  const opened = await f.request("/v1/operations/streams.open", headers(original), "POST", { deviceId: "phone", offer: peer.localDescription!.sdp, control: true, sessionId: "session", leaseToken: "lease" });
+  assert.equal(opened.status, 200);
+  const stream: StreamAnswer = JSON.parse(opened.body.toString());
+  await peer.setRemoteDescription({ type: "answer", sdp: stream.answer });
+  await until(() => channel.readyState === "open");
+  const credentials = { id: stream.id, token: stream.token };
+  f.advance(45000);
+  const renewed = await f.sign();
+  assert.equal((await f.request("/v1/operations/streams.ping", headers(renewed), "POST", credentials)).status, 200);
+  f.advance(20000);
+  assert.equal(await f.authority.authorize(original), false);
+  assert.equal((await f.request("/v1/operations/streams.ping", headers(original), "POST", credentials)).status, 401);
+  for (const type of ["down", "up"]) channel.send(JSON.stringify({ type: "pointer", event: { type, contactId: 1, x: 20, y: 30, width: 100, height: 200 } }));
+  channel.send(JSON.stringify({ type: "input-barrier", id: "after_original_expiry" }));
+  await until(() => events.some((event) => event.type === "up") && barrierReceived);
+  assert.equal(closed, 0);
+  assert.equal((await f.request("/v1/operations/streams.ping", headers(renewed), "POST", credentials)).status, 200);
+  assert.equal((await f.request("/v1/operations/streams.ping", headers(nativeToken), "POST", credentials)).status, 403, "native auth cannot replace a hub principal");
+  assert.equal(closed, 0);
+  const replacement = randomUUID();
+  await f.pair({ uid: "another-owner", pairingId: replacement });
+  const other = await f.sign("access", { uid: "another-owner", pairingId: replacement });
+  assert.equal((await f.request("/v1/operations/streams.ping", headers(other), "POST", credentials)).status, 403, "a newly paired owner cannot extend the old owner's viewer");
+  await f.authority.unpair();
+  assert.equal((await f.request("/v1/operations/streams.ping", headers(other), "POST", credentials)).status, 401);
+  await until(() => closed === 1);
 });
 
 test("network Host allowlists handle default ports and canonical IPv6 without widening explicit ports", () => {

@@ -2,10 +2,13 @@ import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { networkInterfaces } from "node:os";
 import { MediaStreamTrack, RTCPeerConnection, RTCRtpCodecParameters, type RTCDataChannel } from "werift";
 import { H264Packetizer } from "../../../packages/capture/src/h264";
-import { streamOpenSchema, type StreamOpen, type StreamAnswer, type StreamCredentials, type LiveVideoSource, type InteractiveSource, type H264Frame, type VideoProfile } from "../../../packages/core/src/live";
+import { inputBarrierSchema, streamOpenSchema, type StreamOpen, type StreamAnswer, type StreamCredentials, type LiveVideoSource, type InteractiveSource, type H264Frame, type VideoProfile } from "../../../packages/core/src/live";
 import { fail, type DeviceConfig, type SourceConfig } from "../../../packages/core/src/local/types";
 import { ControlStream } from "./control-stream";
+import type { MachineAccess } from "./network";
 
+/** Trusted server metadata, never deserialized from a stream operation body. */
+export type LiveAuthorization = (() => Promise<boolean>) & { access?: MachineAccess };
 export type LiveTarget = { device: DeviceConfig | null; source?: SourceConfig; validate(): void };
 export type LiveBackend = {
   resolve(args: StreamOpen): LiveTarget;
@@ -16,12 +19,13 @@ export type LiveBackend = {
 };
 type Entry = {
   id: string; token: string; args: StreamOpen; target: LiveTarget;
-  peer: RTCPeerConnection; touched: number; authorize: () => Promise<boolean>;
+  peer: RTCPeerConnection; touched: number; authorize: LiveAuthorization;
   source?: LiveVideoSource; control?: ControlStream; channel?: RTCDataChannel;
   disposers: (() => void)[]; release: (() => Promise<void>)[];
   closed: boolean; closing?: Promise<void>;
 };
 const equal = (a: string, b: string) => a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b));
+const samePrincipal = (a: MachineAccess, b: MachineAccess) => a.issuer === b.issuer && a.machineId === b.machineId && a.uid === b.uid && a.pairingId === b.pairingId;
 
 /** Signaling uses the existing authenticated API; media and ordered input travel over DTLS/SRTP. */
 export class LiveStreams {
@@ -36,6 +40,15 @@ export class LiveStreams {
     this.timer.unref();
   }
   private report(error: unknown) { this.backend.report?.(error instanceof Error ? error : new Error(String(error))); }
+  private async authorized(entry: Entry) {
+    // A slow check of the old grant must not close a stream after its heartbeat
+    // has installed a newer, already-verified grant for the same principal.
+    for (;;) {
+      const authorize = entry.authorize;
+      const valid = await authorize();
+      if (authorize === entry.authorize) return valid;
+    }
+  }
   private disposeLater(entry: Entry) { void this.dispose(entry).catch((error) => this.report(error)); }
   private async acquireInteractive(device: DeviceConfig, profile: VideoProfile = "balanced") {
     // View-only sources do not hold a reservation. An edited device ID must
@@ -60,7 +73,7 @@ export class LiveStreams {
     try { return { source: await current.pending, release }; }
     catch (error) { await release(); throw error; }
   }
-  async open(value: unknown, authorize: () => Promise<boolean> = async () => true): Promise<StreamAnswer> {
+  async open(value: unknown, authorize: LiveAuthorization = async () => true): Promise<StreamAnswer> {
     const args = streamOpenSchema.parse(value);
     if (!args.control) return this.openReady(args, authorize);
     if (this.controlInitializing.has(args.sessionId!)) fail("control-connecting", "This session already has a controller connecting. Wait for it to finish.", 409);
@@ -68,7 +81,7 @@ export class LiveStreams {
     try { return await this.openReady(args, authorize); }
     finally { this.controlInitializing.delete(args.sessionId!); }
   }
-  private async openReady(args: StreamOpen, authorize: () => Promise<boolean>): Promise<StreamAnswer> {
+  private async openReady(args: StreamOpen, authorize: LiveAuthorization): Promise<StreamAnswer> {
     if (this.entries.size >= 32) fail("stream-limit", "Too many live viewers. Close an unused viewer.", 429);
     if (!await authorize()) fail("unauthorized", "Machine access expired. Reconnect before opening the viewer.", 401);
     if (!/^v=0\r?\n/.test(args.offer) || !/^m=video /m.test(args.offer) || !/^a=rtpmap:\d+ H264\/90000\r?$/im.test(args.offer))
@@ -99,7 +112,7 @@ export class LiveStreams {
     const validate = async () => {
       if (entry.closed || Date.now() - entry.touched > 15_000) fail("stream-expired", "The live viewer disconnected. Start a new session.", 409);
       target.validate();
-      if (!await authorize()) fail("unauthorized", "Machine access expired or was revoked. Reconnect from the machines page.", 401);
+      if (!await this.authorized(entry)) fail("unauthorized", "Machine access expired or was revoked. Reconnect from the machines page.", 401);
       target.validate();
       if (entry.closed) fail("stream-expired", "The viewer closed.", 409);
     };
@@ -123,6 +136,8 @@ export class LiveStreams {
       const packetizer = new H264Packetizer();
       let width = source.width, height = source.height;
       let detachVideo: (() => void) | undefined;
+      let disconnectTimer: ReturnType<typeof setTimeout> | undefined;
+      let resumeAfterReconnect: Promise<(() => void) | undefined> | undefined;
       const videoFrame = (frame: H264Frame) => {
         if (entry.closed) return;
         try {
@@ -138,23 +153,36 @@ export class LiveStreams {
         } catch (error) { failStream(error instanceof Error ? error : new Error(String(error))); }
       };
       entry.disposers.push(() => { detachVideo?.(); detachVideo = undefined; });
+      entry.disposers.push(() => { clearTimeout(disconnectTimer); });
       entry.disposers.push(source.onClose((reason) => failStream(new Error(reason))));
       if (input && input !== source) entry.disposers.push(input.onClose((reason) => failStream(new Error(reason))));
       peer.onDataChannel.subscribe((channel) => {
         if (channel.label !== "control" || !channel.ordered || channel.maxRetransmits !== undefined && channel.maxRetransmits !== null || channel.maxPacketLifeTime !== undefined && channel.maxPacketLifeTime !== null || entry.channel) { channel.close(); return; }
         entry.channel = channel;
+        let barrierPending = false;
         channel.onopen = () => send({ type: "ready", capabilities, width: source.width, height: source.height });
         channel.onMessage.subscribe((value) => {
           try {
             if (value.length > 4096) throw new Error("Control message is too large.");
             if (!entry.control) throw new Error("Start a control session before touching the screen.");
-            entry.control.send(JSON.parse(value.toString()));
+            const message = JSON.parse(value.toString());
+            if (message?.type === "input-barrier") {
+              const receipt = inputBarrierSchema.parse(message);
+              if (barrierPending) throw new Error("Wait for the pending input barrier before sending another.");
+              barrierPending = true;
+              // Prior messages were synchronously queued by this ordered channel.
+              // Receipt precedes the HTTP-side suspend/drain/dispatch transaction.
+              void validate().then(() => send(receipt)).catch(failStream).finally(() => { barrierPending = false; });
+            } else entry.control.send(message);
           } catch (error) { failStream(error instanceof Error ? error : new Error(String(error))); }
         });
         channel.onclose = () => { this.disposeLater(entry); };
       });
       peer.connectionStateChange.subscribe((state) => {
         if (state === "connected" && !entry.closed) {
+          clearTimeout(disconnectTimer); disconnectTimer = undefined;
+          const resume = resumeAfterReconnect; resumeAfterReconnect = undefined;
+          void resume?.then((release) => release?.());
           packetizer.waitForKeyframe();
           detachVideo?.();
           // Subscribe only once the peer can receive RTP. Android sources replay
@@ -163,13 +191,23 @@ export class LiveStreams {
           detachVideo = source.onFrame(videoFrame);
           if (entry.closed) { detachVideo(); detachVideo = undefined; }
         }
-        if (["failed", "closed", "disconnected"].includes(state)) this.disposeLater(entry);
+        if (state === "disconnected" && !entry.closed && !disconnectTimer) {
+          // ICE may recover from a brief route change without renegotiation.
+          // Drop input during that grace period while retaining its video source.
+          resumeAfterReconnect = entry.control?.suspend().catch((error) => {
+            failStream(error instanceof Error ? error : new Error(String(error)));
+            return undefined;
+          });
+          disconnectTimer = setTimeout(() => this.disposeLater(entry), 5000);
+          disconnectTimer.unref();
+        }
+        if (["failed", "closed"].includes(state)) this.disposeLater(entry);
       });
       await peer.setRemoteDescription({ type: "offer", sdp: args.offer });
       await peer.setLocalDescription(await peer.createAnswer());
       await validate();
       entry.touched = Date.now();
-      return { id: entry.id, token: entry.token, answer: peer.localDescription!.sdp, capabilities, width: source.width, height: source.height,
+      return { id: entry.id, token: entry.token, answer: peer.localDescription!.sdp, capabilities, width: source.width, height: source.height, supportsInputBarrier: true,
         mode: source.fps !== undefined && source.fps <= 2 ? "snapshots" : "live" };
     } catch (error) { await this.dispose(entry); throw error; }
   }
@@ -178,11 +216,22 @@ export class LiveStreams {
     if (!entry || !equal(entry.token, args.token)) fail("stream-not-found", "This live viewer ended. Connect again.", 404);
     return entry;
   }
-  async ping(args: StreamCredentials) {
+  async ping(args: StreamCredentials, renewal?: LiveAuthorization) {
     const entry = this.entry(args);
+    if (entry.authorize.access || renewal?.access) {
+      const previous = entry.authorize.access, next = renewal?.access;
+      if (!previous || !next || !samePrincipal(previous, next))
+        fail("stream-owner-mismatch", "This viewer belongs to a different machine account or pairing. Open a new viewer.", 403);
+      // A mismatched or expired caller cannot dispose another principal's stream.
+      if (!await renewal!()) fail("unauthorized", "Machine access expired or was revoked.", 401);
+      entry.target.validate();
+      if (entry.closed || Date.now() - entry.touched > 15_000) fail("stream-expired", "The viewer expired. Connect again.", 409);
+      // Overlapping pings can finish out of order. Never roll back to an older grant.
+      if (next.expiresAt > entry.authorize.access!.expiresAt) entry.authorize = renewal!;
+    }
     try {
       entry.target.validate();
-      if (!await entry.authorize()) fail("unauthorized", "Machine access expired or was revoked.", 401);
+      if (!await this.authorized(entry)) fail("unauthorized", "Machine access expired or was revoked.", 401);
       if (entry.closed || Date.now() - entry.touched > 15_000) fail("stream-expired", "The viewer expired. Connect again.", 409);
       entry.touched = Date.now();
       return { ok: true };
@@ -215,6 +264,27 @@ export class LiveStreams {
   async closeSession(id: string) {
     await this.stopScript(id);
     await Promise.all([...this.entries.values()].filter((entry) => entry.args.sessionId === id).map((entry) => this.dispose(entry)));
+  }
+  /** Hold the session's existing touch controllers without closing video or
+   * its reservation. New controller setup is excluded until the key settles. */
+  async withHardwareInput<T>(sessionId: string, action: () => Promise<T>): Promise<T> {
+    if (this.controlInitializing.has(sessionId)) fail("control-connecting", "Wait for this session's controller to finish connecting before sending a hardware button.", 409);
+    this.controlInitializing.add(sessionId);
+    const controls = [...this.entries.values()].filter((entry) => !entry.closed && entry.args.control && entry.args.sessionId === sessionId)
+      .flatMap((entry) => entry.control ? [entry.control] : []);
+    const script = this.scripts.get(sessionId);
+    if (script) controls.push(script.control);
+    const resumed: (() => void)[] = [];
+    try {
+      const results = await Promise.allSettled(controls.map((control) => control.suspend()));
+      for (const result of results) if (result.status === "fulfilled") resumed.push(result.value);
+      const rejected = results.find((result) => result.status === "rejected");
+      if (rejected?.status === "rejected") throw rejected.reason;
+      return await action();
+    } finally {
+      for (const resume of resumed) resume();
+      this.controlInitializing.delete(sessionId);
+    }
   }
   async script(sessionId: string, target: LiveTarget, authorize: () => Promise<boolean> = async () => true) {
     target.validate();
@@ -254,7 +324,7 @@ export class LiveStreams {
       await Promise.all([...this.entries.values()].map(async (entry) => {
         try {
           entry.target.validate();
-          if (Date.now() - entry.touched > 15_000 || !await entry.authorize()) await this.dispose(entry);
+          if (Date.now() - entry.touched > 15_000 || !await this.authorized(entry)) await this.dispose(entry);
         } catch { await this.dispose(entry); }
       }));
       for (const [id, entry] of this.scripts) {

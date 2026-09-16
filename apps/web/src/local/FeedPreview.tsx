@@ -88,6 +88,7 @@ export function FeedPreview({ source, device, session, lease, owner: defaultOwne
       deviceId={controlling ? device?.id : source.kind === "native" ? source.deviceId : undefined}
       sourceId={!controlling && source.kind === "usb" ? source.id : undefined}
       operation={api} getSnapshot={getSnapshot} controlLease={controlling ? lease : null}
+      controlDevice={controlling ? device : undefined}
       inputEnabled={!busy && !confirm && available}
       onConnectionStateChange={(state) => { if (state === "error" || state === "disconnected") disable(); }} />
     {device && (touchDevice || touch) && <div className="feed-session-bar" aria-label={`Touch controls for ${device.name}`}>

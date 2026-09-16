@@ -9,6 +9,7 @@ import { ZodError } from "zod";
 import { DeckService } from "./local/service";
 import { artifactDisposition } from "./local/capture-library";
 import { allowedNetworkHosts, isLoopback, MachineAuthority } from "./network";
+import type { LiveAuthorization } from "./live";
 import {
   DeckError,
   operations,
@@ -182,7 +183,7 @@ export function createService(
         return;
       }
       if (url.pathname.startsWith("/v1/")) {
-        const hub = !native && !browser && Boolean(apiToken) && await authority.authorize(apiToken);
+        const hub = !native && !browser && apiToken ? await authority.authorizeClaims(apiToken) : undefined;
         if (!native && !browser && !hub)
           throw new DeckError(
             "unauthorized",
@@ -258,17 +259,19 @@ export function createService(
           // again after that wait so expiry or local revocation prevents dispatch.
           if (hub && !await authority.authorize(apiToken))
             throw new DeckError("unauthorized", "Machine access expired or was revoked before the request completed. Reconnect from your machines page.", 401);
-          reply(
-            200,
-            await deck.execute(operation as Operation, value, origin, async () => {
-              if (hub) return authority.authorize(apiToken);
-              if (remote) return Boolean(deck.config.config.tailscale?.origin === tailscale.origin &&
-                typeof login === "string" && deck.config.config.tailscale.allowedUsers.includes(login));
-              if (native) return true;
-              const current = browsers.get(cookie);
-              return Boolean(current && current.host === req.headers.host && current.expiresAt > Date.now());
-            }),
-          );
+          const authorize: LiveAuthorization = async () => {
+            // Only input dispatch is tied to this HTTP request's lifetime.
+            // Stream authorizers must outlive their completed signaling request.
+            if (operation === "remote.input" && res.destroyed) return false;
+            if (hub) return authority.authorize(apiToken);
+            if (remote) return Boolean(deck.config.config.tailscale?.origin === tailscale.origin &&
+              typeof login === "string" && deck.config.config.tailscale.allowedUsers.includes(login));
+            if (native) return true;
+            const current = browsers.get(cookie);
+            return Boolean(current && current.host === req.headers.host && current.expiresAt > Date.now());
+          };
+          authorize.access = hub;
+          reply(200, await deck.execute(operation as Operation, value, origin, authorize));
           return;
         }
         if (

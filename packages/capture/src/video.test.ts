@@ -23,6 +23,66 @@ function keyframe(source: LiveVideoSource) {
   });
 }
 
+function videoFrames(source: LiveVideoSource, count: number) {
+  return new Promise<H264Frame[]>((resolve, reject) => {
+    const frames: H264Frame[] = [];
+    const timer = setTimeout(() => { off(); closed(); reject(new Error("Not enough live frames received")); }, 8000);
+    const off = source.onFrame((frame) => {
+      if (!frames.length && !frame.keyframe) return;
+      frames.push(frame);
+      if (frames.length < count) return;
+      clearTimeout(timer); off(); closed(); resolve(frames);
+    });
+    const closed = source.onClose((reason) => { clearTimeout(timer); off(); closed(); reject(new Error(reason)); });
+  });
+}
+
+test("successive PNG screenshots retain their colours, as do USB JPEG frames", async (t) => {
+  if (!(await available("ffmpeg"))) return t.skip("ffmpeg required for the real encoder fixture");
+  const dir = await mkdtemp(path.join(os.tmpdir(), "deck-live-colours-"));
+  const width = 96, height = 64, patchWidth = 24;
+  // Partial channel values expose erroneous accumulation between PNG frames;
+  // saturated red/green/blue alone can wrap almost invisibly from 255 to 254.
+  const colours = [[176, 48, 32], [40, 168, 56], [32, 72, 184], [96, 112, 128]];
+  const pixels = Buffer.alloc(width * height * 3);
+  for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+    pixels.set(colours[Math.floor(x / patchWidth)], (y * width + x) * 3);
+  }
+  const ppm = path.join(dir, "colours.ppm");
+  await writeFile(ppm, Buffer.concat([Buffer.from(`P6\n${width} ${height}\n255\n`), pixels]));
+  try {
+    for (const format of ["rgb24", "rgba", "jpeg"]) await t.test(format, async () => {
+      const image = (await run("ffmpeg", ["-hide_banner", "-loglevel", "error", "-i", ppm,
+        "-frames:v", "1", "-pix_fmt", format === "jpeg" ? "yuvj420p" : format,
+        "-c:v", format === "jpeg" ? "mjpeg" : "png", "-f", "image2pipe", "pipe:1"])).stdout;
+      const events = new EventEmitter();
+      const timer = setInterval(() => events.emit("frame", image), 200);
+      let live: LiveVideoSource | undefined;
+      try {
+        live = await encodeLiveImages("ffmpeg", {
+          first: image, fps: 5,
+          onFrame: (listener) => { events.on("frame", listener); return () => { events.off("frame", listener); }; },
+          onClose: (listener) => { events.on("closed", listener); return () => { events.off("closed", listener); }; },
+          close: async () => { clearInterval(timer); },
+        }, "high");
+        const frames = await videoFrames(live, 4);
+        const encoded = path.join(dir, `${format}.h264`);
+        await writeFile(encoded, Buffer.concat(frames.map((frame) => frame.data)));
+        const decoded = (await run("ffmpeg", ["-hide_banner", "-loglevel", "error", "-i", encoded,
+          "-frames:v", String(frames.length), "-pix_fmt", "rgb24", "-f", "rawvideo", "pipe:1"])).stdout;
+        const frameBytes = width * height * 3;
+        assert.equal(decoded.length, frames.length * frameBytes);
+        for (let frame = 0; frame < frames.length; frame++) colours.forEach((expected, patch) => {
+          const offset = frame * frameBytes + (Math.floor(height / 2) * width + patch * patchWidth + patchWidth / 2) * 3;
+          const actual = [...decoded.subarray(offset, offset + 3)];
+          assert.ok(actual.every((value, channel) => Math.abs(value - expected[channel]) <= 12),
+            `${format} frame ${frame}, patch ${patch}: expected ${expected}, got ${actual}`);
+        });
+      } finally { clearInterval(timer); await live?.close(); }
+    });
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
 test("shared USB live encoders provide a decodable first IDR, preserve snapshots, and release the last viewer", async (t) => {
   if (!(await available("ffmpeg")) || !(await available("ffprobe"))) return t.skip("ffmpeg/ffprobe required for the real encoder fixture");
   const dir = await mkdtemp(path.join(os.tmpdir(), "deck-live-"));

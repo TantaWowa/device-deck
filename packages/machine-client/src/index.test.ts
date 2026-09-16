@@ -39,6 +39,20 @@ test('wrong machine identity receives no credential or control request', async (
   await assert.rejects(client.operation('inventory'), /different machine/);
   assert.equal(calls, 1);
 });
+test('refreshes access with fifteen seconds remaining before a stream heartbeat can expire', async (t) => {
+  let now = Date.now(), grants = 0;
+  t.mock.method(Date, 'now', () => now);
+  const client = createMachineTransport({ endpoint: 'https://studio.example', getGrant: async () => {
+    grants++; return { token: `grant-${grants}`, expiresAt: new Date(now + 60_000).toISOString() };
+  }, fetch: async (url) => Response.json(new URL(String(url)).pathname === '/v1/machine' ? identity : { ok: true }) });
+  try {
+    await client.operation('streams.ping');
+    now += 44_000; await client.operation('streams.ping');
+    assert.equal(grants, 1);
+    now += 1_000; await client.operation('streams.ping');
+    assert.equal(grants, 2, 'refresh starts before the final heartbeat window');
+  } finally { client.dispose(); }
+});
 test('disposing while a grant is pending prevents sending a stale control', async () => {
   let finish!: (value: Awaited<ReturnType<typeof validGrant>>) => void;
   let started!: () => void;

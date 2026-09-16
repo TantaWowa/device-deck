@@ -1,0 +1,8 @@
+.phone-hardware-controls { flex: none; padding: 10px 12px; border-top: 1px solid #d4ded5; background: #edf3ee; color: #23412c; }
+.phone-hardware-heading { display: block; margin-bottom: 7px; font-size: 11px; font-weight: 650; }
+.phone-hardware-buttons { display: grid; grid-template-columns: repeat(auto-fit, minmax(82px, 1fr)); gap: 7px; }
+.phone-hardware-controls .phone-hardware-buttons > button { display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 4px; min-height: 48px; min-width: 44px; padding: 7px 5px; border: 1px solid #b8caba; border-radius: 7px; background: #fff; color: #23412c; font: inherit; font-size: 11px; line-height: 1.3; cursor: pointer; touch-action: manipulation; }
+.phone-hardware-controls .phone-hardware-buttons > button:hover:not(:disabled) { background: #dfecdf; }
+.phone-hardware-controls .phone-hardware-buttons > button:focus-visible { outline: 3px solid #548c65; outline-offset: 2px; }
+.phone-hardware-controls .phone-hardware-buttons > button:disabled { opacity: .5; cursor: not-allowed; }
+.phone-hardware-error { margin: 8px 0 0; font-size: 12px; line-height: 1.5; color: #9a3426; }

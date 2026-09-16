@@ -32,6 +32,8 @@ export const androidKeys: Record<string, string> = {
   Select: "DPAD_CENTER",
   Back: "BACK",
   Home: "HOME",
+  Recents: "APP_SWITCH",
+  Power: "POWER",
   Menu: "MENU",
   Special: "MENU",
   Play: "MEDIA_PLAY_PAUSE",
@@ -83,6 +85,37 @@ export const hidKeys: Record<string, string> = {
   Play: "44",
   "Play / pause": "44",
 };
+// idb ui button exposes HOME, LOCK and SIDE_BUTTON. It has no volume or
+// app-switcher button; iOS also has no system Back button.
+// https://fbidb.io/docs/idb/ui/
+export const iosHardwareKeys: Record<string, string> = {
+  Home: "HOME",
+  Lock: "LOCK",
+  SideButton: "SIDE_BUTTON",
+};
+export type PhoneHardwareKey = "Back" | "Home" | "Recents" | "VolumeDown" | "VolumeUp" | "Power" | "Lock" | "SideButton";
+export type PhoneHardwareButton = { key: PhoneHardwareKey; label: string };
+const androidHardwareButtons: readonly PhoneHardwareButton[] = [
+  { key: "Back", label: "Back" },
+  { key: "Home", label: "Home" },
+  { key: "Recents", label: "Recents" },
+  { key: "VolumeDown", label: "Volume down" },
+  { key: "VolumeUp", label: "Volume up" },
+  { key: "Power", label: "Power" },
+];
+const iosHardwareButtons: readonly PhoneHardwareButton[] = [
+  { key: "Home", label: "Home" },
+  { key: "Lock", label: "Lock" },
+  { key: "SideButton", label: "Side button" },
+];
+/** Availability follows the configured input transport, never a phone-like
+ * name or a capture feed. Runtime readiness and reservation checks still apply. */
+export function phoneHardwareButtons(d: DeviceConfig): readonly PhoneHardwareButton[] {
+  if (deviceInputMode(d) !== "touch") return [];
+  if (d.connection.type === "adb") return androidHardwareButtons;
+  if (d.connection.type === "simulator" && d.connection.os === "ios") return iosHardwareButtons;
+  return [];
+}
 export const remoteProfiles = [
   "Roku",
   "Fire TV",
@@ -110,7 +143,9 @@ export function supportsRemoteKey(d: DeviceConfig, key: string) {
     case "adb":
       return Boolean(androidKeys[key]);
     case "simulator":
-      return key === "Home" || Boolean(hidKeys[key]);
+      return d.connection.os === "ios"
+        ? Boolean(iosHardwareKeys[key]) || (key !== "Back" && Boolean(hidKeys[key]))
+        : key === "Home" || Boolean(hidKeys[key]);
     case "apple-tv":
       return [
         "Up",
