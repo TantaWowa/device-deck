@@ -48,6 +48,8 @@ No public STUN or TURN server is configured. Device Deck does not relay media th
 4. On Android, drag to scroll; a touch-capable browser can send multiple contacts for a pinch. On iOS, tap, swipe, or hold and release to submit a completed gesture.
 5. Turn **Enable touch** off to stop input while keeping the reservation and any recording active. Use **End session** to release the reservation and finalize an active recording.
 
+Enabled touch displays a contact ring at each finger or mouse position and a trail while dragging or swiping. Released contacts fade away; cancelled contacts have a crossed marker. These markers show the gesture entered in the browser, while the device video shows its effect. They align with the device image, including letterboxed previews, and disappear when touch is disabled or the feed loses its control connection. If the device rejects input, the reason stays visible after touch stops.
+
 Android holds contacts while the pointer remains down. Input uses an ordered, bounded queue; pending moves are coalesced without crossing down/up events. Blur, hidden tabs, pointer cancellation, geometry changes, disconnection and session closure cancel active contacts. Rotation changes the encoded dimensions and invalidates old coordinates.
 
 The idb CLI supports completed gestures here, not an ongoing pointer stream. An iOS gesture begins after release in the browser. A gesture already dispatched to idb is allowed to send its final touch-up before its adapter closes; it cannot be interrupted partway through with the same guarantees as Android. Continuous drag and multitouch are therefore not advertised for iOS. idb's reported screen dimensions convert preview pixels into simulator points, including scaled previews and landscape frames.
@@ -69,6 +71,8 @@ A read-only check of the running local daemon's UGREEN/Roku USB source delivered
 Real Google TV browser validation also covers joining after the initial keyframe on a static screen. Apple TV, iPhone and Android phone emulator browser validation covers cold launch, automatic feed display, decoded video and Home from the controls-only remote. Apple controls used idb 1.5.9, and the iPhone also accepted a swipe through the lease-protected gesture API. Its first cold boot took almost three minutes, so Apple startup allows four minutes and both browser clients keep the launch request alive for five. Launch failures explain that startup has not completed rather than returning an empty command error. Evidence is saved under `outputs/live-video-qa/real-emulator-workflow.json` and the adjacent screenshots.
 
 ## Repeatable browser validation
+
+Run `npm run qa:touch-feedback` to check contact markers, swipe trails, release fade, cancellation, rejection messages and disabled input on desktop and mobile. This command starts and stops its own synthetic fixture; it does not contact real devices.
 
 Run the isolated synthetic fixture in one terminal, then run the browser checks from the repository root in another:
 

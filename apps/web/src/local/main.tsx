@@ -459,7 +459,7 @@ function App() {
     setReserve({ device, takeover });
   };
   const openControls = (d: Device, action: FeedAction, anchor: PopupAnchor) => {
-    if (action === "touch" || (action === "remote" && deviceInputMode(d) !== "remote")) {
+    if (action === "remote" && deviceInputMode(d) !== "remote") {
       openDeviceFeeds([d.id]); return;
     }
     if (action === "wake" && !activeSession(d.id)) {
@@ -540,7 +540,6 @@ function App() {
       recording={data.recordings.some((r) => r.deviceId === d.id)}
       wakeAvailable={supportsWake(d) && !d.locked && !busy}
       remoteAvailable={deviceInputMode(d) === "remote"}
-      touchAvailable={deviceInputMode(d) === "touch"}
       onAction={(intent, anchor) => openControls(d, intent, anchor)}
     />
   );
@@ -679,7 +678,6 @@ function App() {
               <FeedActions
                 name={source.name}
                 remoteAvailable={data.devices.some((d) => (d.captureSourceId === source.id || d.id === source.deviceId) && deviceInputMode(d) === "remote")}
-                touchAvailable={data.devices.some((d) => (d.captureSourceId === source.id || d.id === source.deviceId) && deviceInputMode(d) === "touch")}
                 wakeAvailable={data.devices.some(
                   (d) =>
                     (d.captureSourceId === source.id || d.id === source.deviceId) &&

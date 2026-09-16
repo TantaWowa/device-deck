@@ -1,6 +1,6 @@
 import React from "react";
 import {
-  ScanLine, Camera, Circle, Square, Lock, Gamepad2, Sun, Hand,
+  ScanLine, Camera, Circle, Square, Lock, Gamepad2, Sun,
 } from "lucide-react";
 import { popupAnchor, type PopupAnchor } from "./anchored-popup";
 export type FeedAction =
@@ -9,7 +9,6 @@ export type FeedAction =
   | "screenshot"
   | "reserve"
   | "remote"
-  | "touch"
   | "wake";
 export function FeedActions({
   name,
@@ -17,7 +16,6 @@ export function FeedActions({
   reserved,
   wakeAvailable = false,
   remoteAvailable = true,
-  touchAvailable = false,
   onAction,
 }: {
   name: string;
@@ -25,7 +23,6 @@ export function FeedActions({
   reserved?: boolean;
   wakeAvailable?: boolean;
   remoteAvailable?: boolean;
-  touchAvailable?: boolean;
   onAction: (action: FeedAction, anchor: PopupAnchor) => void;
 }) {
   return (
@@ -41,10 +38,9 @@ export function FeedActions({
           ["screenshot", "Screenshot", <Camera size={15} />],
           ["reserve", reserved ? "Reserved" : "Reserve", <Lock size={15} />],
           ["remote", "Remote", <Gamepad2 size={16} />],
-          ["touch", "Touch", <Hand size={16} />],
           ["wake", "Wake", <Sun size={16} />],
         ] as const
-      ).filter(([id]) => id === "remote" ? remoteAvailable : id === "touch" ? touchAvailable : true).map(([id, label, icon]) => (
+      ).filter(([id]) => id !== "remote" || remoteAvailable).map(([id, label, icon]) => (
         <button
           key={id}
           type="button"
