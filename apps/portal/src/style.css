@@ -45,8 +45,9 @@ button.primary, a.primary, button.secondary, a.secondary, button.danger { min-he
 .machine-card { background: #fffefa; border: 1px solid #dfe6da; border-radius: 16px; padding: 21px 23px 0; box-shadow: 0 3px 5px #18392703; min-width: 0; display: flex; flex-direction: column; }
 .machine-card-top, .device-card-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; }
 .machine-icon { width: 52px; height: 52px; display: grid; place-items: center; background: #edf1e7; color: #476342; border: 1px solid #e1e9da; border-radius: 12px; }
-.machine-card h2 { font-size: 20px; font-weight: 750; letter-spacing: -.5px; margin-bottom: 7px; }
+.machine-card h2 { font-size: 20px; font-weight: 750; letter-spacing: -.5px; margin-bottom: 7px; overflow-wrap: anywhere; }
 .machine-address { font-size: 11px; color: #748174; line-height: 1.6; overflow-wrap: anywhere; margin-bottom: 25px; }
+.machine-address a { color: inherit; text-decoration: underline; text-underline-offset: 3px; }
 .connection-state { display: flex; align-items: center; gap: 7px; font-size: 11px; font-weight: 550; line-height: 1.6; }
 .status-dot { display: inline-block; width: 7px; min-width: 7px; height: 7px; border-radius: 50%; background: #a7b39f; }
 .reachable .status-dot, .status-dot.good { background: #6d9d58; box-shadow: 0 0 0 3px #79a96513; }
