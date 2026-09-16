@@ -26,6 +26,7 @@ import { dataDirectory } from "../../../packages/core/src/local/paths";
 import { root } from "../../../packages/adapters/src";
 import path from "node:path";
 import { lifecycle } from "./lifecycle";
+import { tailscaleCommand, tailscaleBrowserUrl } from "./tailscale";
 import { pick, parseSelector } from "./selection";
 import { selectFeeds, feedQuery } from "./feeds";
 import { checkMacUpdates, compareVersions, downloadMacUpdate } from "../../../packages/installer/src/mac-update";
@@ -42,6 +43,9 @@ Usage: devdeck <command> [options]
   update check|download        Find/download a verified Mac installer
        [--channel beta|stable] [--key-file FILE] [--output DIRECTORY]
   ui | tui | mcp               Open the dashboard, terminal UI or MCP server
+  ui [--tailscale] [--json]    Open the dashboard or print its URL as JSON
+  tailscale enable|status|disable  Manage private HTTPS access over Tailscale
+       [--allow-user LOGIN,LOGIN] [--https-port PORT]
   discover                     Find connected targets and capture cards
   feeds                        List capture feeds and stable IDs
   view [--source NAME_OR_ID]    Open a browser feed; Left/Right switches feeds
@@ -98,9 +102,11 @@ const optionTypes: Record<string, { type: "string" | "boolean" }> =
       "channel",
       "key-file",
       "output",
+      "allow-user",
+      "https-port",
     ].map((k) => [k, { type: "string" }]),
   );
-for (const key of ["json", "help", "clipboard", "yes", "mux", "browser", "version"])
+for (const key of ["json", "help", "clipboard", "yes", "mux", "browser", "version", "tailscale"])
   optionTypes[key] = { type: "boolean" };
 try {
   const { values: v, positionals: p } = parseArgs({
@@ -169,10 +175,21 @@ try {
       const store = new ConfigStore(path.join(dataDirectory(), "config.json"));
       await store.load();
       result = { file: store.file, config: store.config };
+    } else if (command === "tailscale") {
+      const action = p[1] || "status";
+      const access = await tailscaleCommand(action, {
+        ...(v["allow-user"] !== undefined ? { allowUser: String(v["allow-user"]) } : {}),
+        ...(v["https-port"] !== undefined ? { httpsPort: String(v["https-port"]) } : {}),
+      });
+      if (action === "status" && !access.healthy) process.exitCode = 1;
+      result = access;
     } else if (command === "ui") {
-      const url = await browserUrl();
-      spawn("/usr/bin/open", [url], { stdio: "ignore" });
-      result = "Opened local dashboard.";
+      const url = v.tailscale ? await tailscaleBrowserUrl() : await browserUrl();
+      if (v.json) result = { url };
+      else {
+        spawn("/usr/bin/open", [url], { stdio: "ignore" });
+        result = `Opened ${v.tailscale ? "Tailscale" : "local"} dashboard.`;
+      }
     } else if (command === "feeds" || command === "view") {
       const cards = await callOperation("capture-cards.list");
       if (command === "feeds") {

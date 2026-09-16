@@ -1,0 +1,66 @@
+.floating-remote.anchored-remote {
+  min-width: min(260px, calc(100vw - 16px));
+  min-height: min(275px, calc(100vh - 16px));
+  max-width: min(520px, calc(100vw - 16px));
+  max-height: calc(100vh - 16px);
+}
+
+.anchored-popover {
+  position: fixed;
+  z-index: 1501;
+  width: min(440px, calc(100vw - 16px));
+  max-height: min(540px, calc(100vh - 16px));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid #b5c4d8;
+  border-radius: 13px;
+  background: #fff;
+  color: #233a59;
+  box-shadow: 0 12px 40px #10203340;
+}
+.anchored-popover > header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  background: #edf3fb;
+  border-bottom: 1px solid #d9e3f0;
+}
+.anchored-popover > header h2 {
+  flex: 1;
+  margin: 0;
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+.anchored-popover > header button {
+  display: grid;
+  place-items: center;
+  padding: 5px;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  border-radius: 5px;
+  cursor: pointer;
+}
+.anchored-popover > header button:hover {
+  background: #d7e5f7;
+}
+.anchored-popover-content {
+  min-height: 0;
+  padding: 12px;
+  overflow: auto;
+  font-size: 12px;
+}
+.anchored-popover-content > :first-child {
+  margin-top: 0;
+}
+.anchored-popover-content > :last-child {
+  margin-bottom: 0;
+}
+.anchored-popover .identify-preview {
+  min-height: 0;
+}
+.anchored-popover .identify-details {
+  overflow-wrap: anywhere;
+}

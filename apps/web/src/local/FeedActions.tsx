@@ -1,17 +1,27 @@
 import React from "react";
-import { ScanLine, Camera, Circle, Square, Lock, Gamepad2 } from "lucide-react";
+import {
+  ScanLine, Camera, Circle, Square, Lock, Gamepad2, Sun,
+} from "lucide-react";
+import { popupAnchor, type PopupAnchor } from "./anchored-popup";
 export type FeedAction =
-  "identify" | "record" | "screenshot" | "reserve" | "remote";
+  | "identify"
+  | "record"
+  | "screenshot"
+  | "reserve"
+  | "remote"
+  | "wake";
 export function FeedActions({
   name,
   recording,
   reserved,
+  wakeAvailable = false,
   onAction,
 }: {
   name: string;
   recording?: boolean;
   reserved?: boolean;
-  onAction: (action: FeedAction) => void;
+  wakeAvailable?: boolean;
+  onAction: (action: FeedAction, anchor: PopupAnchor) => void;
 }) {
   return (
     <div className="feed-actions" aria-label={`Controls for ${name}`}>
@@ -26,6 +36,7 @@ export function FeedActions({
           ["screenshot", "Screenshot", <Camera size={15} />],
           ["reserve", reserved ? "Reserved" : "Reserve", <Lock size={15} />],
           ["remote", "Remote", <Gamepad2 size={16} />],
+          ["wake", "Wake", <Sun size={16} />],
         ] as const
       ).map(([id, label, icon]) => (
         <button
@@ -33,7 +44,13 @@ export function FeedActions({
           type="button"
           className={id === "record" && recording ? "is-recording" : ""}
           aria-label={`${label} · ${name}`}
-          onClick={() => onAction(id)}
+          title={
+            id === "wake" && !wakeAvailable
+              ? "Wake unavailable for this device"
+              : label
+          }
+          disabled={id === "wake" && !wakeAvailable}
+          onClick={(event) => onAction(id, popupAnchor(event.currentTarget))}
         >
           {icon}
           <span>{label}</span>

@@ -20,7 +20,7 @@
 }
 .workspace-heading button,
 .period-buttons button,
-.card-assignment button {
+.capture-card-view {
   border: 1px solid #b9c9df;
   background: white;
   border-radius: 6px;
@@ -67,16 +67,14 @@
   display: flex;
   gap: 12px;
 }
-.period-dates label,
-.card-assignment label {
+.period-dates label {
   display: flex;
   flex-direction: column;
   gap: 6px;
   font-size: 12px;
   color: #344c6b;
 }
-.period-dates input,
-.card-assignment select {
+.period-dates input {
   background: white;
   border: 1px solid #b9c9df;
   color: #152840;
@@ -165,35 +163,66 @@
   gap: 24px;
   font-size: 14px;
   color: #536680;
-  margin: 24px 0;
+  margin: 16px 0;
 }
 .card-counts strong {
   color: #14283f;
 }
 .capture-card-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 20px;
+  gap: 10px;
 }
 .capture-card {
+  position: relative;
   background: white;
   border: 1px solid #d7e1ee;
   border-radius: 9px;
-  padding: 24px;
+  padding: 14px 16px;
   min-width: 0;
+}
+.capture-card-page .workspace-heading {
+  margin-bottom: 16px;
+}
+.capture-card-page .workspace-heading p {
+  margin-bottom: 0;
+}
+.capture-card-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 1.15fr) 110px minmax(200px, 1fr) 76px;
+  align-items: center;
+  gap: 16px;
+  min-height: 58px;
+  padding-right: 84px;
 }
 .card-title {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
+  align-items: center;
   gap: 12px;
+  min-width: 0;
+}
+.card-title > div {
+  min-width: 0;
+}
+.capture-card-icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 42px;
+  width: 42px;
+  height: 42px;
+  border-radius: 9px;
+  background: #edf3ff;
+  color: #245bc7;
 }
 .card-title h2 {
-  font-size: 17px;
+  font-size: 15px;
   margin: 0;
   line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .card-state {
+  justify-self: start;
   font-size: 11px;
   border: 1px solid #cbd7e7;
   border-radius: 4px;
@@ -206,9 +235,65 @@
   color: #246b54;
   border-color: #bddfce;
 }
+.card-state.recording {
+  background: #fff0ef;
+  color: #a52c21;
+  border-color: #ebc1bd;
+}
+.card-state.reserved,
+.card-state.unavailable {
+  background: #fff6df;
+  color: #845c14;
+  border-color: #ebd7a9;
+}
 .card-connection {
+  margin: 4px 0 0;
   font-size: 12px;
   color: #536680;
+}
+.card-picker {
+  min-width: 0;
+}
+.card-view-action {
+  min-width: 0;
+}
+.capture-card-view {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 36px;
+  padding: 8px 10px;
+}
+.capture-card-details > summary {
+  position: absolute;
+  right: 16px;
+  top: 27px;
+  padding: 7px 0;
+  font-size: 12px;
+  color: #536680;
+  cursor: pointer;
+}
+.capture-card-details > summary:hover {
+  color: #245bc7;
+}
+.capture-card-detail-content {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 10px 24px;
+  border-top: 1px solid #e3eaf2;
+  margin-top: 12px;
+  padding-top: 14px;
+  font-size: 12px;
+  color: #536680;
+}
+.capture-card-details:not([open]) > .capture-card-detail-content {
+  display: none;
+}
+.capture-card-detail-content p {
+  margin: 0;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
 }
 .hardware-id {
   font-size: 11px;
@@ -221,55 +306,14 @@
   overflow-wrap: anywhere;
   margin-top: 5px;
 }
-.card-ownership {
-  border-top: 1px solid #e3eaf2;
-  border-bottom: 1px solid #e3eaf2;
-  margin: 18px 0;
-  padding: 16px 0;
-  min-height: 70px;
-  font-size: 13px;
-}
-.card-ownership p {
-  color: #536680;
-  margin: 6px 0;
-}
-.card-device-link {
-  padding: 0;
-  border: 0;
-  background: none;
-  color: #245bc7;
-  font: inherit;
-  font-weight: 650;
-  cursor: pointer;
-}
-.card-assignment {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  gap: 10px;
-}
-.card-assignment label {
-  flex-basis: 100%;
-}
-.card-assignment select {
-  width: 100%;
-  max-width: 100%;
-}
-.card-assignment small,
-.card-assignment .workspace-error {
-  flex-basis: 100%;
-  line-height: 1.5;
-}
-.card-assignment small {
-  color: #536680;
-}
-.card-assignment button:disabled,
+.capture-card-view:disabled,
 .workspace-heading button:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
 .workspace-reports button:focus-visible,
-.capture-card-page button:focus-visible {
+.capture-card-page button:focus-visible,
+.capture-card-details > summary:focus-visible {
   outline: 3px solid #7da4ed;
   outline-offset: 3px;
 }
@@ -277,8 +321,16 @@
   .range-metrics {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
-  .capture-card-grid {
-    grid-template-columns: 1fr;
+  .capture-card-row {
+    grid-template-columns: minmax(0, 1fr) 110px;
+    gap: 12px 16px;
+    padding-right: 84px;
+  }
+  .card-picker {
+    grid-column: 1;
+  }
+  .card-view-action {
+    grid-column: 2;
   }
 }
 @media (max-width: 600px) {
@@ -311,10 +363,33 @@
     padding: 16px;
   }
   .capture-card {
-    padding: 18px;
+    padding: 12px;
+  }
+  .capture-card-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 12px;
+    padding-right: 0;
   }
   .card-title {
-    flex-direction: column;
+    grid-column: 1 / -1;
+    padding-right: 78px;
+  }
+  .capture-card-row > .card-state {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+  .card-picker {
+    grid-row: 3;
+  }
+  .card-view-action {
+    grid-row: 3;
+  }
+  .capture-card-details > summary {
+    top: 20px;
+    right: 12px;
+  }
+  .capture-card-detail-content {
+    grid-template-columns: minmax(0, 1fr);
   }
   .card-counts {
     gap: 14px;

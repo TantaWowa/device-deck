@@ -88,10 +88,28 @@ export const settingsSchema = z
     previewIntervalMs: z.number().int().min(250).max(5000).default(750),
   })
   .strict();
+export const tailscaleSchema = z
+  .object({
+    origin: z.string().refine((value) => {
+      try {
+        const url = new URL(value);
+        return url.protocol === "https:" && url.origin === value &&
+          !url.username && !url.password &&
+          /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+ts\.net$/.test(url.hostname);
+      } catch {
+        return false;
+      }
+    }, "Use the canonical HTTPS origin of this Mac's Tailscale Serve address."),
+    allowedUsers: z.array(z.string().min(1).max(320).regex(/^[^\s,*\x00-\x1f\x7f]+$/))
+      .min(1).max(64)
+      .refine((users) => new Set(users).size === users.length, "Tailscale logins must be unique."),
+  })
+  .strict();
 export const configSchema = z
   .object({
     schemaVersion: z.literal(1),
     port: z.number().int().min(0).max(65535).default(47831),
+    tailscale: tailscaleSchema.optional(),
     devices: z.array(deviceSchema).default([]),
     sources: z.array(sourceSchema).default([]),
     settings: settingsSchema,
@@ -231,6 +249,12 @@ const leaseFields = {
   sessionId: z.string().min(1),
   leaseToken: z.string().min(1),
 };
+const remoteInputFields = {
+  key: z.string().max(64).optional(),
+  text: z.string().min(1).max(4096).optional(),
+  x: z.number().min(0).max(10000).optional(),
+  y: z.number().min(0).max(10000).optional(),
+};
 export const operations = {
   inventory: z.object({}).strict(),
   "license.status": z.object({}).strict(),
@@ -283,6 +307,13 @@ export const operations = {
       confirmed: z.literal(true).optional(),
     })
     .strict(),
+  "devices.wake": z
+    .object({
+      deviceId: z.string().min(1),
+      sessionId: z.string().min(1).optional(),
+      confirmed: z.literal(true).optional(),
+    })
+    .strict(),
   "pairing.start": z.object(leaseFields).strict(),
   "pairing.finish": z
     .object({ ...leaseFields, pin: z.string().regex(/^\d{4,6}$/) })
@@ -290,10 +321,16 @@ export const operations = {
   "remote.input": z
     .object({
       ...leaseFields,
-      key: z.string().max(64).optional(),
-      text: z.string().min(1).max(4096).optional(),
-      x: z.number().min(0).max(10000).optional(),
-      y: z.number().min(0).max(10000).optional(),
+      ...remoteInputFields,
+    })
+    .strict(),
+  "remote.override": z
+    .object({
+      deviceId: z.string().min(1),
+      sessionId: z.string().min(1),
+      confirmed: z.literal(true),
+      owner: z.string().trim().min(1).max(128),
+      ...remoteInputFields,
     })
     .strict(),
   "captures.screenshot": z

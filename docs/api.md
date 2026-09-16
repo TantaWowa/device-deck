@@ -6,6 +6,8 @@ Reports default to today in the Mac timezone. See [report ranges and Capture Car
 
 Apple iOS/tvOS simulators and Android AVDs can be launched and closed directly in web Devices or with **O** in TUI Devices. The shared `devices.simulator` operation uses the configured UDID or exact AVD identity, requires confirmation to close, and protects reservations and recordings. See [simulator controls](simulator-controls.md).
 
+The **Wake** button in Devices and the remote attempts to wake a device without reserving it. It sends Android's wake key, Roku TV power-on or a Roku player's Home button, Apple TV power-on, or Home to an already running Apple simulator. Wake can be attempted while a device is reported offline; an unreachable device can still fail, and successful dispatch does not prove the screen is awake. Shut-down simulators must be launched first. Physical iOS devices and capture-only connections do not expose Wake.
+
 The `license.status`, `license.activate`, `license.refresh` and `license.deactivate` operations share the same daemon-owned entitlement state. Free allows one new active session and clean recording; concurrent sessions and recording annotations require a verified license. Existing work keeps its bounded lease when paid access ends. See [licensing commands and policy](licensing-and-billing.md).
 
 ## CLI walkthrough
@@ -56,6 +58,7 @@ Other operations:
 ./devdeck restart --device 'Android emulator' --reason 'Reset test state'
 ./devdeck call devices.simulator '{"deviceId":"SIMULATOR_ID","action":"launch"}'
 ./devdeck call devices.simulator '{"deviceId":"SIMULATOR_ID","action":"close","confirmed":true}'
+./devdeck call devices.wake '{"deviceId":"DEVICE_ID"}'
 ./devdeck takeover --device 'Desk TV' --owner George --reason 'Previous client abandoned' --yes
 ./devdeck call captures.edit '{"id":"CAPTURE_ID","name":"Player focus","tags":["regression"]}'
 ./devdeck call captures.remove '{"ids":["CAPTURE_ID"],"confirmed":true}'
@@ -67,9 +70,46 @@ Trash retains files. Purge accepts only trashed, stopped captures and permanentl
 
 Exit code 0 means success, 1 means service or operation failure, and 2 means invalid command arguments. Validation and ownership errors include a machine-readable error code and message. Unknown/ambiguous device selectors fail explicitly.
 
+## Tailscale access
+
+Run these commands on the Mac hosting Device Deck, with Tailscale installed, signed in and connected:
+
+```sh
+./devdeck tailscale enable
+./devdeck tailscale status
+./devdeck ui --tailscale
+./devdeck ui --tailscale --json
+./devdeck tailscale disable
+```
+
+`enable` configures background Tailscale Serve HTTPS forwarding to the running daemon's loopback port and saves the remote origin and allowed users. First-time setup defaults to the host's Tailscale login. Running `enable` again preserves the saved allowed users and HTTPS port unless options override them. Tailscale may provide a setup link if HTTPS needs enabling for the tailnet. The resulting HTTPS URL can be bookmarked and opened from another connected machine with permission under the tailnet's network policy. It signs the allowed user in without an SSH tunnel or browser ticket.
+
+`ui --tailscale` opens the saved remote URL. Adding `--json` returns the URL without opening a browser. `status` checks the saved configuration and Serve setup. `disable` revokes Device Deck remote access first, then removes the Serve endpoint when it still matches the saved hostname and current daemon backend. If cleanup fails or the route has changed, the command reports that access is disabled and leaves the unmatched route for explicit cleanup.
+
+```sh
+./devdeck tailscale enable --allow-user george@example.com,teammate@example.com --https-port 8443
+```
+
+`--allow-user` accepts comma-separated exact Tailscale login names and replaces the current allow list; include your own login to retain access. Every allowed user has full access to Device Deck devices, captures, settings and operations. `--https-port` selects the Serve HTTPS port when the default port is already in use.
+
+Serve retains its background configuration across restarts. Keep the daemon's backend port fixed (the default is `47831`; avoid port `0` for remote access). Before changing the daemon port, HTTPS port or hostname, run `disable` while the old daemon is running, then make the change and run `enable` again. Setup refuses an occupied port or a stale backend mapping. Inspect `tailscale serve status` and remove that specific stale route yourself, or disable Device Deck remote access and configure an unused HTTPS port. Other Serve routes are left unchanged.
+
+The optional configuration is:
+
+```json
+{
+  "tailscale": {
+    "origin": "https://device-mac.example-tailnet.ts.net",
+    "allowedUsers": ["george@example.com"]
+  }
+}
+```
+
+Use the CLI to manage this configuration together with Serve. The origin must be one canonical HTTPS `ts.net` origin, including a non-default port when used. Each remote request must have the configured origin and an allowed user identity supplied by Serve. Local API tokens and browser cookies do not authorize remote requests. Tagged source devices have no user identity and cannot connect. Use Serve, never Funnel: public Funnel requests have no user identity and are rejected.
+
 ## HTTP
 
-Read the private `endpoint.json` under `DEVICE_DECK_HOME`, or its default Application Support folder. It supplies the OS-assigned port and API token. The server always binds loopback.
+Read the private `endpoint.json` under `DEVICE_DECK_HOME`, or its default Application Support folder. It supplies the active port and API token. The server always binds loopback; optional Tailscale Serve proxies the configured remote HTTPS origin to this listener.
 
 ```http
 POST /v1/operations/sessions.reserve
@@ -97,7 +137,11 @@ Successful response:
 }
 ```
 
-Timestamps above illustrate the shape. Actual timestamps are Unix milliseconds. `leaseToken` is required for input, capture, renewal, release and pairing. It is unrelated to the display owner label. The API token permits local administration; the lease token proves which particular reservation is being used.
+Timestamps above illustrate the shape. Actual timestamps are Unix milliseconds. `leaseToken` is required for `remote.input`, capture, renewal, release and pairing. It is unrelated to the display owner label. The API token permits local administration; the lease token proves which particular reservation is being used.
+
+To control an already reserved device without taking its reservation, authenticated clients can explicitly call `remote.override` with `deviceId`, the current `sessionId`, their display `owner`, `confirmed:true`, and one key, text string or x/y tap. This preserves the reservation's owner, reason, expiry and any active recording. The override is audited, and inputs remain associated with the existing session and recording according to input logging settings. A changed, closing or expired reservation invalidates the override; capture operations still require the reservation's lease token.
+
+`devices.wake` accepts `{deviceId}` for an unreserved device and creates no session. Any reserved device requires a fresh, explicit user choice after warning that waking could interrupt their work, including when the caller holds its lease. Send `{deviceId, sessionId, confirmed:true}` with the expected active reservation. A changed, closing or expired session rejects that confirmation. Maintenance locks are respected, and the request is checked again when it reaches the device's control queue. New reservations and configuration changes wait until the wake attempt finishes. Wake leaves existing reservations and recordings in place, audits the attempt with its API/Web/CLI/Agent origin and current session, and returns `{deviceId, status:"attempted", method, sessionId?}`. `method` describes the command sent; it does not confirm device power state.
 
 | Operation                                                                | Result                                                                                                     |
 | ------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------- |
@@ -110,7 +154,9 @@ Timestamps above illustrate the shape. Actual timestamps are Unix milliseconds. 
 | `sessions.renew`, `sessions.release`                                     | Current session state; repeated release is idempotent                                                      |
 | `sessions.takeover`                                                      | Finalize existing session, then acquire with a reason and `confirmed:true`                                 |
 | `devices.bulk`                                                           | Per-device lock/unlock/restart success or failure                                                          |
+| `devices.wake`                                                           | Platform wake attempt without reserving; reserved devices require their current `sessionId` and `confirmed:true` |
 | `remote.input`                                                           | One key, text string or x/y tap and dispatch timestamp                                                     |
+| `remote.override`                                                        | Explicit remote input for the expected active session without changing its reservation or recording         |
 | `pairing.start`, `pairing.finish`                                        | Apple TV PIN pairing owned by the current session; request expires after 120 seconds                       |
 | `captures.screenshot`                                                    | Actual file metadata, plus clipboard error if the file saved but clipboard failed                          |
 | `recordings.start`                                                       | Recording artifact ID and managed maximum duration                                                         |
@@ -126,7 +172,7 @@ Read routes:
 - `GET /v1/artifacts/ID/clean`: clean original when an annotated export exists.
 - `GET /v1/artifacts/ID/log`: JSON manifest with identity, outcome and recording-relative input timestamps.
 
-All routes require local authentication except static local UI files and the one-use ticket exchange. Browser mutation requests also require `X-Device-Deck: local`. Cross-origin and unexpected-host requests are rejected. No API token is embedded in the public website or local JS bundle.
+Local routes require local authentication except static local UI files and the one-use ticket exchange. Every route accessed through the Tailscale origin requires an allowed user identity from Serve. Browser mutation requests also require `X-Device-Deck: local`. Cross-origin and unexpected-host requests are rejected. No API token is embedded in the public website or local JS bundle.
 
 Errors use an HTTP status and `{error,message,details?}`. Common codes are `no-match`, `ambiguous-match`, `device-reserved`, `source-reserved`, `device-locked`, `invalid-lease`, `stale-lease`, `config-conflict`, `unsupported-capability`, `capture-failed`, and `cleanup-required`. A failed bulk member appears in that member's result rather than pretending the whole selection succeeded.
 

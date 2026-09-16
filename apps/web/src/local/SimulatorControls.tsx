@@ -7,6 +7,7 @@ import {
   type Session,
 } from "../../../../packages/core/src/local/types";
 import { api } from "./api";
+import { popupAnchor, type PopupAnchor } from "./anchored-popup";
 
 export function SimulatorControls({
   device,
@@ -21,7 +22,7 @@ export function SimulatorControls({
   lease: { sessionId: string; leaseToken: string } | null;
   recording: boolean;
   refresh: () => Promise<unknown>;
-  manageSession: () => void;
+  manageSession: (anchor: PopupAnchor) => void;
 }) {
   const [busy, setBusy] = useState(false),
     [confirm, setConfirm] = useState<{
@@ -139,9 +140,9 @@ export function SimulatorControls({
             {session && !owned ? (
               <button
                 disabled={busy}
-                onClick={() => {
+                onClick={(event) => {
                   setConfirm(null);
-                  manageSession();
+                  manageSession(popupAnchor(event.currentTarget));
                 }}
               >
                 Manage session

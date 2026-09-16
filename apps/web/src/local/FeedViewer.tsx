@@ -66,12 +66,13 @@ export function FeedViewer({
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
       if (
+        event.defaultPrevented ||
         event.altKey ||
         event.ctrlKey ||
         event.metaKey ||
         document.querySelector("dialog[open]") ||
         (event.target as HTMLElement).closest(
-          "input,textarea,select,[contenteditable]",
+          "input,textarea,select,[contenteditable],.floating-remote,[role=dialog]",
         )
       )
         return;

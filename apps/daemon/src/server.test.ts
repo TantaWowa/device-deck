@@ -18,6 +18,7 @@ import {
   type DeviceConfig,
   type Device,
   type Config,
+  type Input,
 } from "../../../packages/core/src/local/types";
 const config: Config = {
   schemaVersion: 1,
@@ -41,6 +42,7 @@ const config: Config = {
 };
 class TestAdapters extends Adapters {
   inputs: string[] = [];
+  wakes: string[] = [];
   constructor() {
     super(() => config);
   }
@@ -61,6 +63,10 @@ class TestAdapters extends Adapters {
   }
   async input(d: DeviceConfig) {
     this.inputs.push(d.id);
+  }
+  async wake(d: DeviceConfig) {
+    this.wakes.push(d.id);
+    return { method: "Fixture wake" };
   }
 }
 class TestCapture extends CaptureEngine {
@@ -626,6 +632,334 @@ test("competing API reservations have one winner; closing invalidates queued inp
       "closed",
     );
   } finally {
+    await cleanup();
+  }
+});
+test("wake attempts offline devices without reserving or capturing them", async () => {
+  const { deck, adapters, capture, cleanup } = await setup();
+  try {
+    const inspect = adapters.inspect.bind(adapters);
+    adapters.inspect = async (device) => ({
+      ...(await inspect(device)),
+      online: false,
+      capabilities: [],
+    });
+    assert.equal((await deck.devices(true))[0].online, false);
+    assert.deepEqual(
+      await deck.execute("devices.wake", { deviceId: "one" }, "Web"),
+      { deviceId: "one", status: "attempted", method: "Fixture wake" },
+    );
+    assert.deepEqual(adapters.wakes, ["one"]);
+    assert.deepEqual(deck.store.sessions(), []);
+    assert.deepEqual(deck.store.artifacts(), []);
+    assert.equal(capture.starts, 0);
+    assert.equal(capture.stops, 0);
+    const event = deck.store.events().find((event) => event.action === "wake")!;
+    assert.equal(event.deviceId, "one");
+    assert.equal(event.owner, "Web");
+    assert.ok(!event.sessionId);
+    assert.match(event.detail, /attempted.*Fixture wake/);
+  } finally {
+    await cleanup();
+  }
+});
+test("wake requires explicit confirmation for reservations and preserves recordings", async () => {
+  const { deck, adapters, capture, cleanup } = await setup();
+  try {
+    const reservation = await reserve(deck);
+    const lease = { sessionId: reservation.session.id, leaseToken: reservation.leaseToken };
+    const original = deck.store.session(lease.sessionId);
+    await deck.execute("recordings.start", lease);
+    capture.resolveStop = () => {};
+    const recording = deck.store.artifacts()[0];
+    for (const args of [
+      { deviceId: "one" },
+      { deviceId: "one", confirmed: true },
+      { deviceId: "one", sessionId: lease.sessionId },
+    ])
+      await assert.rejects(deck.execute("devices.wake", args), { code: "device-reserved" });
+    assert.deepEqual(adapters.wakes, []);
+    assert.deepEqual(
+      await deck.execute("devices.wake", {
+        deviceId: "one", sessionId: lease.sessionId, confirmed: true,
+      }, "Agent"),
+      { deviceId: "one", status: "attempted", method: "Fixture wake", sessionId: lease.sessionId },
+    );
+    assert.deepEqual(adapters.wakes, ["one"]);
+    assert.deepEqual(deck.store.session(lease.sessionId), original);
+    assert.equal(deck.store.sessions().length, 1);
+    assert.equal(deck.store.artifact(recording.id).status, "recording");
+    assert.equal(capture.stops, 0);
+    const event = deck.store.events().find((event) => event.action === "wake")!;
+    assert.equal(event.owner, "Agent");
+    assert.equal(event.sessionId, original.id);
+    await deck.execute("remote.input", { ...lease, key: "Home" });
+    assert.deepEqual(adapters.inputs, ["one"]);
+  } finally {
+    await cleanup();
+  }
+});
+test("wake rejects stale confirmations, maintenance locks and unsupported connections", async () => {
+  const { deck, adapters, cleanup } = await setup();
+  try {
+    const reservation = await reserve(deck);
+    const wake = { deviceId: "one", sessionId: reservation.session.id, confirmed: true };
+    for (const change of [{ sessionId: "missing" }, { deviceId: "two" }])
+      await assert.rejects(deck.execute("devices.wake", { ...wake, ...change }), { code: "stale-wake" });
+    deck.store.lock("one", "Maintenance");
+    await assert.rejects(deck.execute("devices.wake", wake), { code: "device-locked" });
+    deck.store.lock("one", null);
+    const session = deck.store.session(reservation.session.id);
+    deck.store.putSession({ ...session, expiresAt: Date.now() - 1 });
+    await assert.rejects(deck.execute("devices.wake", wake), { code: "stale-wake" });
+    await deck.execute("sessions.release", { sessionId: session.id, leaseToken: reservation.leaseToken });
+    await assert.rejects(deck.execute("devices.wake", wake), { code: "stale-wake" });
+    await reserve(deck);
+    await assert.rejects(deck.execute("devices.wake", wake), { code: "stale-wake" });
+    const c = structuredClone(deck.config.config);
+    c.devices[1].platform = "Apple";
+    c.devices[1].kind = "physical";
+    c.devices[1].connection = { type: "apple-device", udid: "fixture-physical-ios" };
+    c.devices[1].captureSourceId = null;
+    c.sources = c.sources.filter((source) => source.deviceId !== "two");
+    await deck.execute("config.save", { config: c, revision: deck.config.revision });
+    await assert.rejects(deck.execute("devices.wake", { deviceId: "two" }), { code: "unsupported-capability" });
+    assert.deepEqual(adapters.wakes, []);
+  } finally {
+    await cleanup();
+  }
+});
+test("queued wake is rejected when the expected reservation begins closing", async () => {
+  const { deck, adapters, cleanup } = await setup();
+  let finishInput: () => void = () => {};
+  try {
+    const reservation = await reserve(deck);
+    const lease = { sessionId: reservation.session.id, leaseToken: reservation.leaseToken };
+    let inputStarted: () => void = () => {};
+    const started = new Promise<void>((resolve) => { inputStarted = resolve; });
+    const pendingInput = new Promise<void>((resolve) => { finishInput = resolve; });
+    adapters.input = async () => { inputStarted(); await pendingInput; };
+    const input = deck.execute("remote.input", { ...lease, key: "Home" });
+    await started;
+    const rejectedWake = assert.rejects(
+      deck.execute("devices.wake", { deviceId: "one", sessionId: lease.sessionId, confirmed: true }),
+      { code: "stale-wake" },
+    );
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const releasing = deck.execute("sessions.release", lease);
+    finishInput();
+    await Promise.all([input, rejectedWake, releasing]);
+    assert.deepEqual(adapters.wakes, []);
+  } finally {
+    finishInput();
+    await cleanup();
+  }
+});
+test("wake completes adapter work before admitting a new reservation", async () => {
+  const { deck, adapters, cleanup } = await setup();
+  let finishWake: () => void = () => {};
+  try {
+    const order: string[] = [];
+    let wakeStarted: () => void = () => {};
+    const started = new Promise<void>((resolve) => { wakeStarted = resolve; });
+    const pendingWake = new Promise<void>((resolve) => { finishWake = resolve; });
+    adapters.wake = async (device) => {
+      order.push("wake-started");
+      wakeStarted();
+      await pendingWake;
+      assert.deepEqual(deck.store.sessions(), []);
+      adapters.wakes.push(device.id);
+      order.push("wake-dispatched");
+      return { method: "Fixture wake" };
+    };
+    const waking = deck.execute("devices.wake", { deviceId: "one" });
+    await started;
+    const reserving = reserve(deck).then((result) => {
+      order.push("reserved");
+      return result;
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.deepEqual(deck.store.sessions(), []);
+    assert.deepEqual(order, ["wake-started"]);
+    finishWake();
+    await Promise.all([waking, reserving]);
+    assert.deepEqual(order, ["wake-started", "wake-dispatched", "reserved"]);
+    assert.deepEqual(adapters.wakes, ["one"]);
+    assert.equal(deck.store.sessions()[0].state, "active");
+  } finally {
+    finishWake();
+    await cleanup();
+  }
+});
+test("queued wake rechecks maintenance locks before dispatch", async () => {
+  const { deck, adapters, cleanup } = await setup();
+  let finishInput: () => void = () => {};
+  try {
+    const reservation = await reserve(deck);
+    const lease = { sessionId: reservation.session.id, leaseToken: reservation.leaseToken };
+    let inputStarted: () => void = () => {};
+    const started = new Promise<void>((resolve) => { inputStarted = resolve; });
+    const pendingInput = new Promise<void>((resolve) => { finishInput = resolve; });
+    adapters.input = async () => { inputStarted(); await pendingInput; };
+    const input = deck.execute("remote.input", { ...lease, key: "Home" });
+    await started;
+    const rejectedWake = assert.rejects(
+      deck.execute("devices.wake", { deviceId: "one", sessionId: lease.sessionId, confirmed: true }),
+      { code: "device-locked" },
+    );
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    deck.store.lock("one", "Maintenance");
+    finishInput();
+    await Promise.all([input, rejectedWake]);
+    assert.deepEqual(adapters.wakes, []);
+  } finally {
+    finishInput();
+    deck.store.lock("one", null);
+    await cleanup();
+  }
+});
+test("failed wake attempts are audited without claiming the device is awake", async () => {
+  const { deck, adapters, cleanup } = await setup();
+  try {
+    adapters.wake = async () => { throw new Error("Device unreachable"); };
+    await assert.rejects(deck.execute("devices.wake", { deviceId: "one" }, "CLI"), /Device unreachable/);
+    assert.deepEqual(deck.store.sessions(), []);
+    assert.equal(deck.store.events().filter((event) => event.action === "wake").length, 0);
+    const event = deck.store.events().find((event) => event.action === "wake-failed")!;
+    assert.equal(event.owner, "CLI");
+    assert.match(event.detail, /Device unreachable/);
+  } finally {
+    await cleanup();
+  }
+});
+test("explicit remote override sends keys and text while preserving the reservation and recording", async () => {
+  const { deck, capture, adapters, cleanup } = await setup();
+  try {
+    const reservation = await reserve(deck);
+    const lease = { sessionId: reservation.session.id, leaseToken: reservation.leaseToken };
+    const original = deck.store.session(lease.sessionId);
+    await deck.execute("recordings.start", lease);
+    // Let cleanup stop the fixture recorder even if an assertion fails.
+    capture.resolveStop = () => {};
+    const recording = deck.store.artifacts()[0];
+    const override = {
+      deviceId: "one",
+      sessionId: lease.sessionId,
+      confirmed: true,
+      owner: "Another user",
+    };
+    await assert.rejects(
+      deck.execute("remote.override", { ...override, confirmed: false, key: "Home" }),
+      /Invalid literal value/,
+    );
+    await assert.rejects(
+      deck.execute("remote.input", { ...lease, leaseToken: "wrong", key: "Home" }),
+      /does not own/,
+    );
+    const key = await deck.execute("remote.override", { ...override, key: "Home" }) as Input;
+    const text = await deck.execute("remote.override", { ...override, text: "Search term" }) as Input;
+    assert.deepEqual(adapters.inputs, ["one", "one"]);
+    assert.equal(key.key, "Home");
+    assert.equal(text.key, "Text: Search term");
+    for (const input of [key, text]) {
+      assert.equal(input.sessionId, original.id);
+      assert.equal(input.recordingId, recording.id);
+      assert.ok(input.elapsedMs !== null && input.elapsedMs >= 0);
+    }
+    assert.deepEqual(deck.store.session(original.id), original);
+    assert.equal(deck.store.sessions().length, 1);
+    assert.equal(deck.store.artifact(recording.id).status, "recording");
+    assert.equal(capture.starts, 1);
+    assert.equal(capture.stops, 0);
+    assert.deepEqual(
+      deck.store.events().filter((event) => event.action === "control-override").map((event) => ({
+        owner: event.owner,
+        sessionId: event.sessionId,
+      })),
+      [
+        { owner: "Another user", sessionId: original.id },
+        { owner: "Another user", sessionId: original.id },
+      ],
+    );
+    for (const operation of ["captures.screenshot", "recordings.start", "recordings.stop"] as const)
+      await assert.rejects(
+        deck.execute(operation, { sessionId: original.id, leaseToken: "wrong" }),
+        /does not own/,
+      );
+    await deck.execute("remote.input", { ...lease, key: "Back" });
+    assert.deepEqual(adapters.inputs, ["one", "one", "one"]);
+  } finally {
+    await cleanup();
+  }
+});
+test("remote override requires the expected active reservation and valid input", async () => {
+  const { deck, adapters, cleanup } = await setup();
+  try {
+    const reservation = await reserve(deck);
+    const override = {
+      deviceId: "one",
+      sessionId: reservation.session.id,
+      confirmed: true,
+      owner: "Another user",
+      key: "Home",
+    };
+    for (const change of [{ sessionId: "missing" }, { deviceId: "two" }])
+      await assert.rejects(
+        deck.execute("remote.override", { ...override, ...change }),
+        { code: "stale-override" },
+      );
+    await assert.rejects(
+      deck.execute("remote.override", { ...override, text: "Also text" }),
+      { code: "invalid-input" },
+    );
+    deck.store.lock("one", "Maintenance");
+    await assert.rejects(deck.execute("remote.override", override), { code: "device-locked" });
+    deck.store.lock("one", null);
+    const session = deck.store.session(reservation.session.id);
+    deck.store.putSession({ ...session, expiresAt: Date.now() - 1 });
+    await assert.rejects(deck.execute("remote.override", override), { code: "stale-override" });
+    assert.deepEqual(adapters.inputs, []);
+  } finally {
+    await cleanup();
+  }
+});
+test("queued remote override is invalidated when its reservation closes or is replaced", async () => {
+  const { deck, adapters, cleanup } = await setup();
+  let finishInput: () => void = () => {};
+  try {
+    const reservation = await reserve(deck);
+    const lease = { sessionId: reservation.session.id, leaseToken: reservation.leaseToken };
+    let inputStarted: () => void = () => {};
+    const started = new Promise<void>((resolve) => { inputStarted = resolve; });
+    const pendingInput = new Promise<void>((resolve) => { finishInput = resolve; });
+    adapters.input = async (device) => {
+      adapters.inputs.push(device.id);
+      inputStarted();
+      await pendingInput;
+    };
+    const ownedInput = deck.execute("remote.input", { ...lease, key: "Home" });
+    await started;
+    const override = {
+      deviceId: "one",
+      sessionId: lease.sessionId,
+      confirmed: true,
+      owner: "Another user",
+      key: "Back",
+    };
+    const rejectedOverride = assert.rejects(
+      deck.execute("remote.override", override),
+      { code: "stale-override" },
+    );
+    const releasing = deck.execute("sessions.release", lease);
+    finishInput();
+    await ownedInput;
+    await rejectedOverride;
+    await releasing;
+    await reserve(deck);
+    await assert.rejects(deck.execute("remote.override", override), { code: "stale-override" });
+    assert.deepEqual(adapters.inputs, ["one"]);
+  } finally {
+    finishInput();
     await cleanup();
   }
 });

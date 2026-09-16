@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { deviceSchema } from "../../core/src/local/types";
-import { controlSimulator, simulatorState } from "./simulator";
+import { controlSimulator, simulatorState, wakeSimulator } from "./simulator";
 import type { run } from "./process";
 
 const simulator = deviceSchema.parse({
@@ -122,4 +122,32 @@ test("missing simulator/runtime and physical or Android targets never reach boot
     /configured Apple simulators/,
   );
   assert(calls.every((args) => args[1] === "list"));
+});
+test("wake sends Home only to the exact running simulator without booting a stopped target", async () => {
+  const booted = fixture("Booted");
+  assert.deepEqual(
+    await wakeSimulator(simulator, "/fixture/idb", booted.execute),
+    { method: "Simulator Home button" },
+  );
+  assert.deepEqual(
+    booted.calls.filter((call) => call.command === "/fixture/idb"),
+    [
+      {
+        command: "/fixture/idb",
+        args: [
+          "ui", "button", "HOME", "--udid",
+          "F4B9CA01-BA57-40A0-984D-38B7F91AB8A1",
+        ],
+        timeout: undefined,
+      },
+    ],
+  );
+  for (const state of ["Shutdown", "Booting", "Shutting Down"]) {
+    const stopped = fixture(state);
+    await assert.rejects(
+      wakeSimulator(simulator, "/fixture/idb", stopped.execute),
+      /Launch this simulator before waking it/,
+    );
+    assert(stopped.calls.every((call) => call.args[1] === "list"));
+  }
 });

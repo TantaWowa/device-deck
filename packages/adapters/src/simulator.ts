@@ -113,3 +113,21 @@ export async function controlSimulator(
     changed: state !== expected,
   };
 }
+
+export async function wakeSimulator(
+  device: DeviceConfig,
+  idb: string,
+  execute: Runner = run,
+) {
+  if ((await simulatorState(device, execute)) !== "booted")
+    fail(
+      "simulator-not-running",
+      "Launch this simulator before waking it.",
+      409,
+    );
+  if (device.connection.type !== "simulator")
+    fail("unsupported-capability", "This is not an Apple simulator.");
+  // HOME is intentional: LOCK and SIDE_BUTTON can put an awake screen to sleep.
+  await execute(idb, ["ui", "button", "HOME", "--udid", device.connection.udid]);
+  return { method: "Simulator Home button" };
+}

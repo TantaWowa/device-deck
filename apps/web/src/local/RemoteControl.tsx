@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useId, useRef, useState } from "react";
 import {
   ChevronUp,
   ChevronDown,
@@ -15,15 +15,24 @@ import {
   Keyboard,
   Send,
   Menu,
+  Delete,
+  Sun,
 } from "lucide-react";
 import type { Device } from "../../../../packages/core/src/local/types";
 import {
   remoteProfile,
   remoteProfiles,
   supportsRemoteKey,
-  keyboardRemoteKeys,
+  wakeDescription,
   type RemoteProfile,
 } from "../../../../packages/core/src/remote";
+import { useRemoteKeyboard } from "./use-remote-keyboard";
+import {
+  RemoteKeyTooltip,
+  remoteShortcuts,
+  type RemoteTooltip,
+} from "./RemoteKeyTooltip";
+import "./remote-feedback.css";
 
 export function RemoteControl({
   device,
@@ -31,59 +40,56 @@ export function RemoteControl({
   busy,
   sendKey,
   sendText,
+  wakeEnabled,
+  wake,
 }: {
   device: Device;
   enabled: boolean;
   busy: boolean;
   sendKey: (key: string) => Promise<unknown>;
   sendText: (text: string) => Promise<unknown>;
+  wakeEnabled: boolean;
+  wake: () => Promise<unknown>;
 }) {
   const [text, setText] = useState("");
-  const [keyboard, setKeyboard] = useState(false);
+  const element = useRef<HTMLElement>(null);
+  const tooltipId = useId();
+  const [tooltip, setTooltip] = useState<RemoteTooltip | null>(null);
   const [profile, setProfile] = useState<RemoteProfile>(() => {
     const saved = localStorage.getItem(`deck-remote-style-${device.id}`);
     return remoteProfiles.find((p) => p === saved) || remoteProfile(device);
   });
   const canKey = enabled && device.capabilities.includes("key");
   useEffect(() => {
-    if (!canKey) setKeyboard(false);
-  }, [canKey]);
-  useEffect(() => {
-    if (!keyboard || !canKey) return;
-    const listener = (event: KeyboardEvent) => {
-      if (
-        event.altKey ||
-        event.metaKey ||
-        event.ctrlKey ||
-        event.isComposing ||
-        (event.target as HTMLElement).closest(
-          "input,textarea,select,[contenteditable]",
-        )
-      )
-        return;
-      // Only the topmost dialog may capture keyboard input.
-      const dialogs = Array.from(document.querySelectorAll("dialog[open]"));
-      const remote = document.querySelector('[data-keyboard-remote="true"]');
-      if (dialogs.length && !dialogs[dialogs.length - 1].contains(remote))
-        return;
-      if (event.key === "Escape") {
-        event.preventDefault();
-        event.stopImmediatePropagation();
-        setKeyboard(false);
-        return;
-      }
-      const key =
-        keyboardRemoteKeys[event.key] ||
-        keyboardRemoteKeys[event.key.toLowerCase()];
-      if (key && supportsRemoteKey(device, key)) {
-        event.preventDefault();
-        event.stopImmediatePropagation();
-        if (!busy && !event.repeat) void sendKey(key);
-      }
+    const dismiss = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setTooltip(null);
     };
-    window.addEventListener("keydown", listener, true);
-    return () => window.removeEventListener("keydown", listener, true);
-  }, [keyboard, canKey, busy, device, sendKey]);
+    window.addEventListener("keydown", dismiss, true);
+    return () => window.removeEventListener("keydown", dismiss, true);
+  }, []);
+  const { keyboard, pressedKeys, pressKey, toggleKeyboard } = useRemoteKeyboard(
+    {
+      element,
+      device,
+      enabled: canKey,
+      busy,
+      sendKey,
+    },
+  );
+  const showTooltip = (target: EventTarget | null) => {
+    const button =
+      target instanceof Element
+        ? target.closest<HTMLButtonElement>("[data-remote-key]")
+        : null;
+    if (!button || !element.current?.contains(button)) return;
+    setTooltip({
+      element: button,
+      label: button.getAttribute("aria-label") || "",
+      shortcut: remoteShortcuts[button.dataset.remoteKey || ""],
+      unavailable:
+        !canKey || !supportsRemoteKey(device, button.dataset.remoteKey || ""),
+    });
+  };
   const button = (
     key: string,
     label: string,
@@ -94,20 +100,52 @@ export function RemoteControl({
       type="button"
       className={className}
       aria-label={label}
-      title={
-        supportsRemoteKey(device, key)
-          ? label
-          : `${label} is unavailable with this connection`
+      data-remote-key={key}
+      data-pressed={pressedKeys.has(key)}
+      aria-keyshortcuts={
+        key === "Play"
+          ? "Space"
+          : key === "Up"
+            ? "ArrowUp"
+            : key === "Down"
+              ? "ArrowDown"
+              : key === "Left"
+                ? "ArrowLeft"
+                : key === "Right"
+                  ? "ArrowRight"
+                  : remoteShortcuts[key]
+      }
+      aria-describedby={
+        tooltip?.element.dataset.remoteKey === key ? tooltipId : undefined
       }
       disabled={!canKey || busy || !supportsRemoteKey(device, key)}
-      onClick={() => void sendKey(key)}
+      onClick={() => {
+        setTooltip(null);
+        pressKey(key);
+      }}
     >
       {icon}
       <span>{label}</span>
     </button>
   );
   return (
-    <section className="remote-component" data-keyboard-remote={keyboard}>
+    <section
+      ref={element}
+      tabIndex={-1}
+      className="remote-component"
+      data-keyboard-remote={keyboard}
+      onPointerOverCapture={(event) => showTooltip(event.target)}
+      onPointerOutCapture={(event) => {
+        if (
+          !(event.relatedTarget instanceof Node) ||
+          !tooltip?.element.contains(event.relatedTarget)
+        )
+          setTooltip(null);
+      }}
+      onFocusCapture={(event) => showTooltip(event.target)}
+      onBlurCapture={() => setTooltip(null)}
+    >
+      {tooltip && <RemoteKeyTooltip id={tooltipId} tooltip={tooltip} />}
       <label className="remote-style-picker">
         Remote style
         <select
@@ -134,6 +172,17 @@ export function RemoteControl({
         <div className="remote-top">
           {button("Back", "Back", <CornerUpLeft size={20} />)}
           {button("Home", "Home", <Home size={20} />)}
+          <button
+            type="button"
+            aria-label="Wake device"
+            data-remote-action="wake"
+            title={wakeDescription(device)}
+            disabled={!wakeEnabled || busy}
+            onClick={() => void wake()}
+          >
+            <Sun size={20} />
+            <span>Wake</span>
+          </button>
         </div>
         <div className="remote-ring">
           {button("Up", "Up", <ChevronUp />, "remote-up")}
@@ -167,6 +216,7 @@ export function RemoteControl({
             profile === "Roku" ? "Special / options" : "Special / menu",
             profile === "Roku" ? <Asterisk size={21} /> : <Menu size={21} />,
           )}
+          {button("Backspace", "Delete character", <Delete size={19} />)}
         </div>
         {["Samsung", "LG"].includes(profile) && (
           <p className="remote-style-note">
@@ -180,15 +230,18 @@ export function RemoteControl({
         className={`keyboard-toggle ${keyboard ? "primary" : ""}`}
         aria-pressed={keyboard}
         disabled={!canKey}
-        onClick={() => setKeyboard((k) => !k)}
+        onClick={toggleKeyboard}
       >
         <Keyboard size={17} />
-        {keyboard ? "Keyboard input on · Esc to exit" : "Keyboard input"}
+        {keyboard
+          ? "Keyboard locked · Esc to release"
+          : "Keyboard unlocked · Click to lock"}
       </button>
       {keyboard && (
         <p className="remote-key-help" role="status">
           Arrows / Enter · B back · H home · Space play · R rewind · F forward ·
-          P replay · S special. Text goes through the field below.
+          P replay · S special · Backspace delete. Text goes through the field
+          below.
         </p>
       )}
       <form

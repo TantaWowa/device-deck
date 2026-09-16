@@ -28,11 +28,15 @@ Recordings belong to the daemon, so client disappearance does not stop them. Lea
 
 Report requests resolve calendar dates in the daemon Mac timezone. A shared aggregator clips reservation intervals and counts timestamped captures/contention for one range. SQLite supplies complete durable rows, independently of the truncated event history. Capture Cards merges configured and detected USB sources by hardware identity and uses the same revision-checked configuration save as Devices. See [report and assignment semantics](reports-and-capture-cards.md).
 
-## Local access
+## Browser and API access
 
 The server binds `127.0.0.1`. A private endpoint file contains its port, PID and API token. CLI and MCP read that file. A local command obtains a one-use browser ticket; the browser exchanges it for an HttpOnly SameSite cookie. Host/Origin checks, a required custom mutation header and JSON-only request bodies protect browser access.
 
-The threat boundary is the Mac user. This release does not provide accounts, multi-host coordination or protection from a process already able to read that user's private files. Shared visibility is a label, not a network listener.
+Optional Tailscale access uses Serve as an HTTPS reverse proxy to that loopback listener. `devdeck tailscale enable` records one canonical HTTPS `ts.net` origin and an explicit allow list of Tailscale user login names in the optional `tailscale` configuration. The first setup defaults to the host's Tailscale user; subsequent setup preserves saved users and the HTTPS port unless overridden. Serve runs in the background and retains its proxy configuration across restarts. Its backend port must stay fixed; disable access before changing ports, then enable it again. The CLI refuses conflicting or stale Serve routes rather than overwriting them. Disabling revokes Device Deck access first and removes the Serve endpoint only when its hostname and backend still match.
+
+Remote requests must arrive over the local proxy connection for that exact configured origin and contain an allowed Tailscale user identity. The daemon checks this identity on every request; remote access does not use local browser tickets or cookies. Tailscale Serve supplies authenticated identity headers and strips client-supplied versions. Requests without user identity, including tagged source devices and public Funnel traffic, are rejected. Tailnet network policy still controls whether a client can reach Serve. Allowed users receive full Device Deck control, including configuration and capture access.
+
+When Tailscale access is enabled, local processes that can reach the loopback listener are trusted. They can impersonate Serve, including processes run by another OS user; this does not provide per-OS-user isolation. This release also has no per-user Device Deck roles or multi-host coordination. Shared visibility is a label. Enabling Tailscale grants full daemon access to the configured users.
 
 ## Licensing
 

@@ -99,6 +99,30 @@
             "maximum": 65535,
             "default": 47831
           },
+          "tailscale": {
+            "type": "object",
+            "properties": {
+              "origin": {
+                "type": "string"
+              },
+              "allowedUsers": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 320,
+                  "pattern": "^[^\\s,*\\x00-\\x1f\\x7f]+$"
+                },
+                "minItems": 1,
+                "maxItems": 64
+              }
+            },
+            "required": [
+              "origin",
+              "allowedUsers"
+            ],
+            "additionalProperties": false
+          },
           "devices": {
             "type": "array",
             "items": {
@@ -677,6 +701,28 @@
     "additionalProperties": false,
     "$schema": "http://json-schema.org/draft-07/schema#"
   },
+  "devices.wake": {
+    "type": "object",
+    "properties": {
+      "deviceId": {
+        "type": "string",
+        "minLength": 1
+      },
+      "sessionId": {
+        "type": "string",
+        "minLength": 1
+      },
+      "confirmed": {
+        "type": "boolean",
+        "const": true
+      }
+    },
+    "required": [
+      "deviceId"
+    ],
+    "additionalProperties": false,
+    "$schema": "http://json-schema.org/draft-07/schema#"
+  },
   "pairing.start": {
     "type": "object",
     "properties": {
@@ -754,6 +800,55 @@
     "required": [
       "sessionId",
       "leaseToken"
+    ],
+    "additionalProperties": false,
+    "$schema": "http://json-schema.org/draft-07/schema#"
+  },
+  "remote.override": {
+    "type": "object",
+    "properties": {
+      "deviceId": {
+        "type": "string",
+        "minLength": 1
+      },
+      "sessionId": {
+        "type": "string",
+        "minLength": 1
+      },
+      "confirmed": {
+        "type": "boolean",
+        "const": true
+      },
+      "owner": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128
+      },
+      "key": {
+        "type": "string",
+        "maxLength": 64
+      },
+      "text": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 4096
+      },
+      "x": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 10000
+      },
+      "y": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 10000
+      }
+    },
+    "required": [
+      "deviceId",
+      "sessionId",
+      "confirmed",
+      "owner"
     ],
     "additionalProperties": false,
     "$schema": "http://json-schema.org/draft-07/schema#"

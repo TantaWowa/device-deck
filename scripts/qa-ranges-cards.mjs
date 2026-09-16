@@ -6,7 +6,7 @@ const ep = JSON.parse(
   await readFile("work/range-card-fixture/endpoint.json", "utf8"),
 );
 const base = `http://127.0.0.1:${ep.port}`;
-const out = path.resolve("../../outputs/ranges-cards");
+const out = path.resolve(process.env.QA_OUTPUT || "outputs/ranges-cards");
 await mkdir(out, { recursive: true });
 const api = async (op, args = {}) => {
   const r = await fetch(base + "/v1/operations/" + op, {
@@ -41,6 +41,16 @@ const nav = async (name) =>
     })
     .click();
 const card = (name) => page.getByRole("article", { name, exact: true });
+const assignedDevice = (name) =>
+  card(name).getByRole("button", {
+    name: `Assigned device for ${name}`,
+    exact: true,
+  });
+const picker = page.getByRole("dialog");
+const deviceOption = (name) =>
+  picker.locator(".device-picker-list .device-picker-option").filter({
+    hasText: name,
+  });
 const checkSelectedPeriod = async (label) => {
   const button = page.getByRole("button", { name: label, exact: true });
   await expect(button).toHaveAttribute("aria-pressed", "true");
@@ -109,11 +119,32 @@ try {
   await card("Fixture Cam Link").waitFor();
   assert.equal(await page.locator(".capture-card").count(), 3);
   await expect(card("Fixture disconnected HDMI")).toContainText(
-    "Configured card is missing",
+    "Capture card disconnected",
+  );
+  await card("Fixture disconnected HDMI").locator("summary").click();
+  await expect(card("Fixture disconnected HDMI").locator("code")).toHaveText(
+    "fixture-usb-b",
   );
   await expect(
-    card("Fixture disconnected HDMI").getByRole("combobox"),
+    card("Fixture disconnected HDMI").getByText(
+      "Fixture agent · Reserved binding proof",
+      { exact: true },
+    ),
+  ).toBeVisible();
+  await card("Fixture disconnected HDMI").locator("summary").click();
+  await assignedDevice("Fixture disconnected HDMI").click();
+  await expect(picker.getByRole("status")).toContainText(
+    "Release the device and finish recording before changing its assignment.",
+  );
+  const reservedOptions = picker.locator(".device-picker-option");
+  assert.ok((await reservedOptions.count()) > 0);
+  for (const option of await reservedOptions.all())
+    await expect(option).toBeDisabled();
+  await expect(
+    picker.getByRole("button", { name: "Unassign", exact: true }),
   ).toBeDisabled();
+  await picker.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(picker).not.toBeVisible();
   // Normalize any prior fixture run, keeping the held disconnected card reserved.
   const config = await api("config.get");
   for (const d of config.config.devices)
@@ -125,20 +156,16 @@ try {
   await page.reload();
   await nav("Capture Cards");
   await card("Fixture spare HDMI").waitFor();
-  await card("Fixture spare HDMI").getByRole("combobox").selectOption("desk");
-  await expect(card("Fixture spare HDMI").getByRole("alert")).toContainText(
+  await assignedDevice("Fixture spare HDMI").click();
+  await expect(deviceOption("Fixture desk TV")).toContainText(
     "already has a capture input",
   );
-  await expect(
-    card("Fixture spare HDMI").getByRole("button", {
-      name: "Apply assignment",
-    }),
-  ).toBeDisabled();
-  await card("Fixture spare HDMI").getByRole("combobox").selectOption("spare");
-  await card("Fixture spare HDMI")
-    .getByRole("button", { name: "Apply assignment" })
-    .click();
-  await expect(card("Fixture spare HDMI")).toContainText("Fixture spare TV →");
+  await expect(deviceOption("Fixture desk TV")).toBeDisabled();
+  await deviceOption("Fixture spare TV").click();
+  await expect(picker).not.toBeVisible();
+  await expect(assignedDevice("Fixture spare HDMI")).toContainText(
+    "Fixture spare TV",
+  );
   const saved = await api("config.get");
   assert.equal(
     saved.config.sources.find((s) => s.id === "fixture-usb-c").uniqueId,
@@ -157,36 +184,41 @@ try {
   ).toHaveValue("fixture-usb-c");
   await page.reload();
   await nav("Capture Cards");
-  await expect(card("Fixture spare HDMI")).toContainText("Fixture spare TV →");
+  await expect(assignedDevice("Fixture spare HDMI")).toContainText(
+    "Fixture spare TV",
+  );
   await page
     .getByRole("button", { name: "Discover / refresh", exact: true })
     .click();
   await expect(
     page.getByRole("button", { name: "Discover / refresh", exact: true }),
   ).toBeEnabled();
-  await expect(card("Fixture spare HDMI")).toContainText("Fixture spare TV →");
+  await expect(assignedDevice("Fixture spare HDMI")).toContainText(
+    "Fixture spare TV",
+  );
   await page.screenshot({
     path: path.join(out, "local-capture-cards-fixture.png"),
     fullPage: true,
   });
-  await card("Fixture spare HDMI")
-    .getByRole("button", { name: "Unassign", exact: true })
-    .click();
-  await expect(card("Fixture spare HDMI").getByRole("combobox")).toHaveValue(
-    "",
+  await assignedDevice("Fixture spare HDMI").click();
+  await picker.getByRole("button", { name: "Unassign", exact: true }).click();
+  await expect(picker).not.toBeVisible();
+  await expect(assignedDevice("Fixture spare HDMI")).toContainText(
+    "Choose a device…",
   );
-  await card("Fixture Cam Link").getByRole("combobox").selectOption("spare");
-  await card("Fixture Cam Link")
-    .getByRole("button", { name: "Apply assignment" })
-    .click();
-  await expect(card("Fixture Cam Link")).toContainText("Fixture spare TV →");
+  await assignedDevice("Fixture Cam Link").click();
+  await deviceOption("Fixture spare TV").click();
+  await expect(picker).not.toBeVisible();
+  await expect(assignedDevice("Fixture Cam Link")).toContainText(
+    "Fixture spare TV",
+  );
   assert.equal(
     (await api("config.get")).config.devices.find((d) => d.id === "desk")
       .captureSourceId,
     null,
   );
   await card("Fixture Cam Link")
-    .getByRole("button", { name: "Fixture spare TV →", exact: true })
+    .getByRole("button", { name: "View Fixture spare TV", exact: true })
     .click();
   await expect(
     page.getByRole("heading", { name: "Fixture spare TV", exact: true }),
@@ -227,7 +259,7 @@ try {
         rangePersisted: true,
         stableIdentityAssignment: true,
         conflictsPrevented: true,
-        reservedCardDisabled: true,
+        reservedAssignmentBlocked: true,
         bindingSurvivesReloadAndRediscovery: true,
         deviceSelectorConsistent: true,
         unassignAndReassign: true,

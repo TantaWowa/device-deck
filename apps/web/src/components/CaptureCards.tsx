@@ -1,5 +1,7 @@
-import { useEffect, useState } from "react";
+import { Monitor, Usb } from "lucide-react";
+import { DevicePicker, type DevicePickerDevice } from "./DevicePicker";
 import "./workspace.css";
+
 export type CardView = {
   id: string;
   name: string;
@@ -8,120 +10,16 @@ export type CardView = {
   detail?: string;
   deviceId?: string;
 };
-export type CardDevice = {
-  id: string;
-  name: string;
+export type CardDevice = DevicePickerDevice & {
   captureSourceId: string | null;
   online: boolean;
   locked: boolean;
   owner?: string;
   reason?: string;
   recording?: boolean;
+  captureOnly?: boolean;
 };
-function Assignment({
-  card,
-  devices,
-  busy,
-  assign,
-}: {
-  card: CardView;
-  devices: CardDevice[];
-  busy: boolean;
-  assign: (deviceId: string | null) => Promise<unknown>;
-}) {
-  const [target, setTarget] = useState(card.deviceId || ""),
-    [error, setError] = useState("");
-  useEffect(() => {
-    setTarget(card.deviceId || "");
-    setError("");
-  }, [card.deviceId]);
-  const current = devices.find((d) => d.id === card.deviceId),
-    selected = devices.find((d) => d.id === target);
-  const conflict =
-    target && target !== card.deviceId && selected?.captureSourceId
-      ? "That device already has a capture input. Unassign its current input first."
-      : "";
-  const reserved = Boolean(current?.owner || current?.recording);
-  return (
-    <form
-      className="card-assignment"
-      onSubmit={(e) => {
-        e.preventDefault();
-        setError("");
-        void assign(target || null).catch((e) => setError(e.message));
-      }}
-    >
-      <label>
-        Assigned device
-        <select
-          aria-label={`Assigned device for ${card.name}`}
-          value={target}
-          disabled={busy || reserved}
-          onChange={(e) => {
-            setTarget(e.target.value);
-            setError("");
-          }}
-        >
-          <option value="">Unassigned</option>
-          {devices.map((d) => (
-            <option
-              key={d.id}
-              value={d.id}
-              disabled={
-                Boolean(d.owner || d.recording) && d.id !== card.deviceId
-              }
-            >
-              {d.name}
-              {d.owner
-                ? " · reserved"
-                : d.captureSourceId && d.id !== card.deviceId
-                  ? " · input assigned"
-                  : ""}
-            </option>
-          ))}
-        </select>
-      </label>
-      <button
-        disabled={
-          busy ||
-          reserved ||
-          target === (card.deviceId || "") ||
-          Boolean(conflict)
-        }
-        type="submit"
-      >
-        Apply assignment
-      </button>
-      {card.deviceId && (
-        <button
-          type="button"
-          disabled={busy || reserved}
-          onClick={() => {
-            setError("");
-            void assign(null).catch((e) => setError(e.message));
-          }}
-        >
-          Unassign
-        </button>
-      )}
-      {reserved && (
-        <small>
-          Release the device and finish recording before changing its binding.
-        </small>
-      )}
-      {conflict && (
-        <p className="workspace-error" role="alert">
-          {conflict}
-        </p>
-      )}
-      {error && (
-        <p className="workspace-error" role="alert">
-          {error}
-        </p>
-      )}
-    </form>
-  );
-}
+
 export function CaptureCards({
   cards,
   devices,
@@ -130,6 +28,7 @@ export function CaptureCards({
   diagnostics = [],
   refresh,
   assign,
+  assignCustom,
   view,
   demo = false,
 }: {
@@ -140,6 +39,7 @@ export function CaptureCards({
   diagnostics?: string[];
   refresh: () => void;
   assign: (card: CardView, deviceId: string | null) => Promise<unknown>;
+  assignCustom?: (card: CardView, name: string) => Promise<unknown>;
   view: (id: string) => void;
   demo?: boolean;
 }) {
@@ -150,19 +50,14 @@ export function CaptureCards({
           <h1>Capture Cards</h1>
           <p>
             {demo
-              ? "Simulated USB capture cards for this demo."
-              : "Physical USB video inputs detected on this Mac, including configured cards that are disconnected."}
+              ? "Simulated USB capture inputs for this demo."
+              : "Physical USB video inputs. Native simulator screens are in Devices."}
           </p>
         </div>
         <button onClick={refresh} disabled={loading || busy}>
           {loading ? "Discovering…" : "Discover / refresh"}
         </button>
       </div>
-      <p className="card-scope">
-        Native emulator and simulator screens stay in Devices. USB webcams may
-        also appear as video inputs; choose the card connected to your device's
-        HDMI output.
-      </p>
       {diagnostics.map((d, i) => (
         <p className="workspace-error" role="alert" key={i}>
           {d}
@@ -182,15 +77,13 @@ export function CaptureCards({
               ? "Looking for USB capture cards…"
               : "No capture cards found"}
           </h2>
-          <p>
-            Connect a USB capture card, then discover again. Configured cards
-            stay here when disconnected.
-          </p>
+          <p>Connect a USB capture card, then discover again.</p>
         </div>
       ) : (
         <div className="capture-card-grid">
           {cards.map((card) => {
             const device = devices.find((d) => d.id === card.deviceId);
+            const reserved = Boolean(device?.owner || device?.recording);
             const state = device?.recording
               ? "Recording"
               : device?.owner
@@ -210,50 +103,103 @@ export function CaptureCards({
                 className="capture-card"
                 aria-label={card.name}
               >
-                <div className="card-title">
-                  <h2>{card.name}</h2>
+                <div className="capture-card-row">
+                  <div className="card-title">
+                    <span className="capture-card-icon" aria-hidden="true">
+                      <Usb size={22} />
+                    </span>
+                    <div>
+                      <h2 title={card.name}>{card.name}</h2>
+                      <p className="card-connection">
+                        {card.status === "connected"
+                          ? "Connected to this Mac"
+                          : "Capture card disconnected"}
+                      </p>
+                    </div>
+                  </div>
                   <span
-                    className={`card-state ${state === "Available" ? "available" : ""}`}
+                    className={`card-state ${state.toLowerCase().replaceAll(" ", "-")}`}
                   >
                     {state}
                   </span>
-                </div>
-                <p className="card-connection">
-                  {card.status === "connected"
-                    ? "Connected to this Mac"
-                    : "Configured card is missing"}
-                </p>
-                <label className="hardware-id">
-                  Stable hardware ID<code>{card.uniqueId}</code>
-                </label>
-                <div className="card-ownership">
-                  {device ? (
-                    <>
+                  <div className="card-picker">
+                    <DevicePicker
+                      label={`Assigned device for ${card.name}`}
+                      title={`Assign device · ${card.name}`}
+                      devices={devices}
+                      value={card.deviceId || null}
+                      busy={busy}
+                      disabledReason={
+                        reserved
+                          ? "Release the device and finish recording before changing its assignment."
+                          : undefined
+                      }
+                      getDisabledReason={(target) => {
+                        if (target.id === card.deviceId) return undefined;
+                        if (device?.captureOnly)
+                          return "This custom device must keep its USB input. Choose Other to rename it.";
+                        if (target.recording)
+                          return "Finish recording before assigning this device.";
+                        if (target.owner)
+                          return "Release this device's reservation before assigning it.";
+                        if (target.captureSourceId)
+                          return "This device already has a capture input. Unassign that input first.";
+                        return undefined;
+                      }}
+                      onSelect={(id) => assign(card, id)}
+                      onCustom={
+                        assignCustom
+                          ? (name) => assignCustom(card, name)
+                          : undefined
+                      }
+                      customName={
+                        device?.captureOnly ? device.name : undefined
+                      }
+                      allowUnassign={!device?.captureOnly}
+                    />
+                  </div>
+                  <div className="card-view-action">
+                    {device && (
                       <button
-                        className="card-device-link"
+                        className="capture-card-view"
+                        aria-label={`View ${device.name}`}
                         onClick={() => view(device.id)}
                       >
-                        {device.name} →
+                        <Monitor size={15} aria-hidden="true" />
+                        View
                       </button>
+                    )}
+                  </div>
+                </div>
+                <details className="capture-card-details">
+                  <summary aria-label={`Details for ${card.name}`}>
+                    Details
+                  </summary>
+                  <div className="capture-card-detail-content">
+                    <div className="hardware-id">
+                      Stable hardware ID<code>{card.uniqueId}</code>
+                    </div>
+                    {device && (
                       <p>
                         {device.owner
                           ? `${device.owner} · ${device.reason || "Reserved"}`
                           : device.online
                             ? "Device online"
                             : "Device offline"}
+                        {device.recording && " · Recording in progress"}
                       </p>
-                    </>
-                  ) : (
-                    <p>Unassigned. Choose an available configured device.</p>
-                  )}
-                  {card.detail && !device?.owner && <p>{card.detail}</p>}
-                </div>
-                <Assignment
-                  card={card}
-                  devices={devices}
-                  busy={busy}
-                  assign={(id) => assign(card, id)}
-                />
+                    )}
+                    {card.detail && (
+                      <p className="workspace-error">{card.detail}</p>
+                    )}
+                    {reserved && (
+                      <p>
+                        Release the device and finish recording before changing
+                        its assignment.
+                      </p>
+                    )}
+                  </div>
+                </details>
               </article>
             );
           })}

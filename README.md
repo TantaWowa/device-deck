@@ -34,21 +34,46 @@ From an unpacked release, use `./devdeck` instead of `node build/devdeck.mjs`. K
 
 `start` runs the daemon in the background. `npm run service` runs it in the foreground for development. Closing a browser, CLI or MCP connection leaves recordings running. Release, takeover, expiry, the recording duration limit or service shutdown finalize them.
 
+## Open Device Deck from another machine
+
+Connect the Mac running Device Deck and your other machine to Tailscale, then run this on the Device Deck Mac:
+
+```sh
+devdeck tailscale enable
+```
+
+Open the HTTPS address printed by the command on your other machine. Bookmark it for later; Tailscale signs you in automatically, with no SSH tunnel or one-use login link. Both machines must be connected to the same tailnet, and its network policy must permit the connection. Device Deck stays local until you enable this option.
+
+First-time setup allows only the Mac's Tailscale user to connect. To allow additional users, give their exact Tailscale login names:
+
+```sh
+devdeck tailscale enable --allow-user george@example.com,teammate@example.com
+devdeck tailscale status
+devdeck ui --tailscale --json   # Print the remote URL without opening a browser
+devdeck tailscale disable
+```
+
+An explicit allow list replaces the current list, so include your own login when adding someone else. Running `enable` again without options preserves your saved users and HTTPS port. Allowed users have full Device Deck control, including devices, captures and settings. **Settings → Remote access** shows the saved address and allowed users.
+
+Setup uses Tailscale Serve to provide HTTPS within your tailnet. It may ask you to enable HTTPS for your tailnet. Use `--https-port PORT` during setup if another Serve app already occupies the default HTTPS port. Serve keeps its setup across restarts when Device Deck's backend port stays fixed. Before changing either port, disable Tailscale access while the old daemon is running, make the change, then enable access again. Existing conflicting or stale Serve routes require explicit cleanup. Use Serve, never Tailscale Funnel: public requests and requests from tagged source devices have no user identity and are rejected. See the [Tailscale command reference](docs/api.md#tailscale-access) for details.
+
 ## Reports and capture cards
 
 Reports offer Day, Week, Month and inclusive custom date ranges. The same range applies to every metric and device row; CLI and MCP can request it too. Capture Cards shows detected and disconnected USB cards, stable hardware IDs, ownership and direct device assignment. See [range and binding semantics](docs/reports-and-capture-cards.md).
 
+Capture Cards uses compact rows with a single **Assigned device** button. Its popup combines family (Roku, Android, Apple, Other), class (TV, Phone, Tablet, Computer, Other), physical/simulator and text filters. Choose a listed device to save immediately, or select **Family → Other**, type a name such as **Mac mini**, and choose **Create & assign**. For an existing capture-only device, **Save name** preserves its identity and history. Hardware details are expandable; remote control requires a supported connection configured separately.
+
 ## First device session
 
-The Devices list has Apple, Roku, Android and USB-only filter buttons, plus Sim / Real buttons. Click an active filter again to clear it; less common filters are under **More filters**.
+The Devices list keeps platform, Sim / Real, connection, availability and visibility filter buttons visible beside a compact name search. Click an active filter again to clear it. Click a data-column heading to sort ascending, then click again to reverse the order; selected devices stay selected when the order changes.
 
 ### Feed controls and compact remotes
 
 Every feed and device row has Identify, Record, Screenshot, Reserve and Remote actions. Identify labels the local preview and shows the capture card's stable identity. Record and Screenshot open quick capture settings; an available device can be reserved and captured with one button.
 
-Remote opens a small floating panel over the workspace. Drag its title bar anywhere, resize its lower-right corner, and keep watching the feeds underneath. Its position and size are remembered per device in that browser. The menu contains reservations, capture settings, device configuration and remote style. The first key or text sent to an available device reserves it using the menu's owner and reason. An occupied device requires an explicit takeover; stopping or ending an active recording saves the file first.
+Remote, Record, Screenshot, Reserve and Identify open above the clicked button, moving below or inward when needed to fit the screen. Drag the remote’s title bar anywhere, resize its lower-right corner, and keep watching the feeds underneath. Its size is remembered per device in that browser; each new action opens beside the button you just clicked. The menu contains reservations, capture settings, device configuration and remote style. The first key or text sent to an available device reserves it using the menu's owner and reason. An occupied device requires an explicit takeover; stopping or ending an active recording saves the file first.
 
-Enable **Keyboard input** to send arrows, Enter, Space, B (Back), H (Home), R (Rewind), F (Forward), P (Replay) and S (Special). Escape exits keyboard mode. While keyboard input is off, the feed viewer keeps its navigation shortcuts. Use the text field for text entry.
+Keyboard input activates when the remote has focus; its indicator shows when it owns the keys. Clicking elsewhere or typing in a text field releases it. **Escape** pauses keyboard control until you focus or click the remote again. Hover a remote key for its name and shortcut. Arrows, Enter, Space, B (Back), H (Home), R (Rewind), F (Forward), P (Replay), S (Special) and Backspace highlight their matching buttons when pressed. Rapid inputs are sent in order without flashing or disabling the whole handset. Use the text field to send text.
 
 Roku, Fire TV, Android TV, Apple TV, Samsung and LG visual styles are available. Keys follow the device's configured adapter; a style does not add a control connection. Samsung and LG network adapters are not implemented. Fire TV control requires authorized ADB. USB inputs without a target get a capture-only device on first use of a session action, so screenshot and recording work without network control. Edit that device to add its control connection later.
 
@@ -132,7 +157,7 @@ By default, runtime files live under `~/Library/Application Support/Device Deck/
 - `endpoint.json`: current loopback port and private API token. CLI and MCP discover the daemon here.
 - `daemon.log`: service diagnostics.
 
-Files containing credentials use owner-only permissions. `devdeck ui` opens a short-lived, single-use browser ticket. The browser gets an HttpOnly, SameSite cookie. The API rejects unexpected Host/Origin headers and unauthenticated mutations. Owner names are labels, not credentials. All clients run as the same Mac user; this is not isolation against another process with access to that user's files.
+Files containing credentials use owner-only permissions. `devdeck ui` opens a short-lived, single-use browser ticket. The local browser gets an HttpOnly, SameSite cookie. Optional Tailscale access checks the exact configured HTTPS origin and the allowed user's identity on every request. The API rejects unexpected Host/Origin headers and unauthenticated mutations. Owner names are labels, not credentials. Operations run as the daemon's Mac user; this is not isolation against another process with access to that user's files.
 
 Configuration saves serialize the revision check and atomic rename. Invalid external edits preserve the last valid running configuration. Active devices and capture bindings cannot change. Missing/reordered USB inputs never fall back to a different card. When recording cleanup cannot be verified, its reservation stays `closing`; reconnect the device and retry release or takeover.
 

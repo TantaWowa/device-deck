@@ -1,0 +1,57 @@
+.remote-component .remote-handset button[data-pressed="true"] {
+  background: #7ac4ff;
+  border-color: #d4edff;
+  color: #072a4b;
+  box-shadow: inset 0 0 0 2px #d4edff;
+  transform: translateY(1px);
+  transition: none;
+}
+
+.remote-component .remote-media button:nth-child(4),
+.remote-component .remote-media button:nth-child(5) {
+  grid-column: span 2;
+}
+
+.remote-key-tooltip {
+  position: fixed;
+  z-index: 1700;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px 9px;
+  max-width: min(260px, calc(100vw - 12px));
+  padding: 7px 9px;
+  border: 1px solid #4d6078;
+  border-radius: 7px;
+  background: #172940;
+  box-shadow: 0 3px 12px #10203335;
+  color: #fff;
+  font:
+    500 12px/1.3 system-ui,
+    sans-serif;
+  pointer-events: none;
+}
+.remote-key-tooltip kbd {
+  min-width: 19px;
+  padding: 1px 4px;
+  border: 1px solid #8ca1ba;
+  border-radius: 3px;
+  background: #2d435e;
+  color: #fff;
+  font:
+    600 11px/1.3 system-ui,
+    sans-serif;
+  text-align: center;
+}
+.remote-key-tooltip small {
+  flex-basis: 100%;
+  color: #d0ddeb;
+  font-size: 10px;
+}
+
+.floating-remote:focus {
+  outline: none;
+}
+.remote-component .keyboard-toggle {
+  white-space: nowrap;
+}

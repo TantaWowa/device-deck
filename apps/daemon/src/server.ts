@@ -38,19 +38,42 @@ export function createService(
       "default-src 'self'; img-src 'self' blob:; media-src 'self' blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'",
     );
     const host = `127.0.0.1:${(server.address() as { port: number }).port}`;
+    const local = req.headers.host === host;
+    const tailscale = deck.config.config.tailscale;
+    const remote = !local && tailscale &&
+      req.headers.host === new URL(tailscale.origin).host;
+    const origin = local ? `http://${host}` : remote ? tailscale.origin : undefined;
     if (
-      req.headers.host !== host ||
-      (req.headers.origin && req.headers.origin !== `http://${host}`)
+      !origin ||
+      (req.headers.origin && req.headers.origin !== origin)
     ) {
       reply(403, {
         error: "local-client-required",
-        message: "Use the local Device Deck client.",
+        message: "Use the local Device Deck client or its configured Tailscale address.",
+      });
+      return;
+    }
+    // Serve strips client-supplied identity headers and supplies its verified
+    // user. This trust boundary requires a loopback-only backend. Never accept
+    // this identity on the local origin or use cookies/tokens to bypass it.
+    const login = req.headers["tailscale-user-login"];
+    const loopback = ["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(req.socket.remoteAddress || "");
+    if (remote && (
+      !loopback ||
+      req.headers["x-forwarded-proto"] !== "https" ||
+      req.headers["tailscale-funnel-request"] !== undefined ||
+      typeof login !== "string" ||
+      !tailscale.allowedUsers.includes(login)
+    )) {
+      reply(403, {
+        error: "tailscale-access-denied",
+        message: "Connect through Tailscale Serve using an allowed Tailscale account.",
       });
       return;
     }
     let url: URL;
     try {
-      url = new URL(req.url || "/", `http://${host}`);
+      url = new URL(req.url || "/", origin);
     } catch {
       reply(400, { error: "invalid-url", message: "Invalid request URL." });
       return;
@@ -61,8 +84,8 @@ export function createService(
       new RegExp(`(?:^|;\\s*)${cookieName}=([A-Za-z0-9_-]+)`).exec(
         req.headers.cookie || "",
       )?.[1] || "";
-    const native = equal(apiToken, token),
-      browser = (browsers.get(cookie) || 0) > Date.now();
+    const native = local && equal(apiToken, token),
+      browser = Boolean(remote) || (local && (browsers.get(cookie) || 0) > Date.now());
     const json = async () => {
       if (!req.headers["content-type"]?.startsWith("application/json"))
         throw new DeckError("content-type", "Use application/json.", 415);
@@ -82,6 +105,8 @@ export function createService(
     };
     try {
       if (url.pathname === "/v1/bootstrap" && req.method === "POST") {
+        if (!local)
+          throw new DeckError("local-client-required", "Tailscale access uses your Tailscale account, not a local launch ticket.", 403);
         const { ticket } = await json();
         const until = tickets.get(ticket) || 0;
         tickets.delete(ticket);

@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { validateConfig } from "../../config/src";
-import { remoteProfile, supportsRemoteKey } from "./remote";
+import { remoteProfile, supportsRemoteKey, supportsWake } from "./remote";
 import type { DeviceConfig } from "./local/types";
 const device: DeviceConfig = {
   id: "fire",
@@ -38,6 +38,24 @@ test("remote appearance never grants input to a capture-only connection", () => 
       },
       "Replay",
     ),
+    false,
+  );
+});
+test("wake availability follows the configured transport even for an offline device", () => {
+  const connections: DeviceConfig["connection"][] = [
+    { type: "roku", host: "192.0.2.1", serial: "test" },
+    { type: "adb", serial: "android-test", port: 5038 },
+    { type: "apple-tv", host: "192.0.2.2", identifier: "apple-test" },
+    { type: "simulator", udid: "test-simulator", os: "ios" },
+  ];
+  for (const connection of connections)
+    assert.equal(supportsWake({ ...device, connection }), true);
+  assert.equal(supportsWake(device), false);
+  assert.equal(
+    supportsWake({
+      ...device,
+      connection: { type: "apple-device", udid: "test-iphone" },
+    }),
     false,
   );
 });
