@@ -1,5 +1,6 @@
 import { FloatingRemote } from "./FloatingRemote";
 import { AccountConnection } from "./AccountConnection";
+import { ConnectionScreen } from "./ConnectionScreen";
 import { browserUUID } from "../../../../packages/ui/src/uuid";
 import { AnchoredPopover } from "./AnchoredPopover";
 import type { PopupAnchor } from "./anchored-popup";
@@ -267,23 +268,26 @@ function App() {
     if (polling.current) return;
     polling.current = true;
     try {
-      const d = await api("inventory");
+      const d = await api("inventory", {}, AbortSignal.timeout(30_000));
       setData(d);
       setConnectionError("");
     } catch (e) {
-      setConnectionError((e as Error).message);
+      setConnectionError((e as Error).name === "TimeoutError" ? "The connection timed out. Check that Device Deck is running and this machine is reachable." : (e as Error).message);
     } finally {
       polling.current = false;
     }
   }, []);
   useEffect(() => {
     let stopped = false;
-    void bootstrap()
+    let timer: ReturnType<typeof setInterval> | undefined;
+    void bootstrap(AbortSignal.timeout(15_000))
       .then(async () => {
         if (!stopped) await refresh();
+        if (!stopped) timer = setInterval(refresh, 2500);
       })
-      .catch((e) => setError(e.message));
-    const timer = setInterval(refresh, 2500);
+      .catch((e) => {
+        if (!stopped) setConnectionError(e.name === "TimeoutError" ? "The connection timed out. Check that Device Deck is running and this machine is reachable." : e.message);
+      });
     return () => {
       stopped = true;
       clearInterval(timer);
@@ -356,18 +360,7 @@ function App() {
     setHover("");
   };
   if (!data)
-    return (
-      <main className="live-loading">
-        <Brand />
-        <h1>Your device workspace</h1>
-        <p>{connectionError || error || "Connecting to Device Deck…"}</p>
-        <pre>
-          devdeck start
-          <br />
-          devdeck ui
-        </pre>
-      </main>
-    );
+    return <ConnectionScreen error={connectionError || error} />;
   const filteredDevices = data.devices.filter(
     (d) =>
       (!filter.search ||

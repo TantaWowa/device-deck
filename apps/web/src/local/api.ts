@@ -11,12 +11,13 @@ export async function api<T = any>(operation: Operation, args: unknown = {}, sig
     throw new Error(body.message || `Service returned ${response.status}`);
   return body;
 }
-export async function bootstrap() {
+export async function bootstrap(signal?: AbortSignal) {
   const ticket = new URLSearchParams(location.hash.slice(1)).get("ticket");
   if (ticket) {
     history.replaceState(null, "", location.pathname + location.search);
     const r = await fetch("/v1/bootstrap", {
       method: "POST",
+      signal,
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ticket }),
     });

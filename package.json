@@ -11,6 +11,7 @@
     "node": ">=24"
   },
   "scripts": {
+    "qa:connection-screen": "node scripts/qa-connection-screen.mjs",
     "qa:live-video": "node scripts/qa-live-video.mjs",
     "qa:ios-production": "node scripts/qa-ios-native-production.mjs",
     "qa:device-types": "node scripts/qa-device-types.mjs",
