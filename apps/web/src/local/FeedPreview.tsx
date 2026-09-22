@@ -14,6 +14,7 @@ export function FeedPreview({ source, device, session, lease, owner: defaultOwne
 }) {
   const [owner, setOwner] = useState(defaultOwner);
   const [approved, setApproved] = useState<Session | null>(null);
+  const [mediaSession, setMediaSession] = useState<Session | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [confirm, setConfirm] = useState<SessionChoice | null>(null);
@@ -29,25 +30,27 @@ export function FeedPreview({ source, device, session, lease, owner: defaultOwne
   const booting = device?.readiness === "starting" || device?.simulatorState === "starting";
   const available = Boolean(device?.online && !booting && !device.locked && touch);
   const controlling = Boolean(owned && approved?.id === session?.id && available);
-  const disable = useCallback(() => { generation.current++; observed.current = null; setApproved(null); setConfirm(null); }, []);
+  const mediaControl = Boolean(owned && mediaSession?.id === session?.id && available);
+  const disarm = useCallback(() => { generation.current++; observed.current = null; setApproved(null); setConfirm(null); }, []);
+  const disable = useCallback(() => { disarm(); setMediaSession(null); }, [disarm]);
   useEffect(() => {
     mounted.current = true;
-    const hidden = () => { if (document.hidden) disable(); };
+    const hidden = () => { if (document.hidden) disarm(); };
     window.addEventListener("offline", disable);
     document.addEventListener("visibilitychange", hidden);
     return () => { mounted.current = false; generation.current++; window.removeEventListener("offline", disable); document.removeEventListener("visibilitychange", hidden); };
-  }, [disable]);
+  }, [disable, disarm]);
   useEffect(() => {
     if (!approved) return;
     if (session?.id === approved.id) observed.current = approved.id;
     const current = session?.id === approved.id ? session : approved;
     if (!available || document.hidden || !navigator.onLine || current.state !== "active" || current.expiresAt <= Date.now() ||
       (session && session.id !== approved.id && (observed.current === approved.id || session.id !== replacedSession.current)) || (observed.current === approved.id && (!session || !lease || lease.sessionId !== approved.id))) {
-      disable(); return;
+      if (document.hidden) disarm(); else disable(); return;
     }
     const timer = window.setTimeout(disable, Math.max(0, current.expiresAt - Date.now()));
     return () => clearTimeout(timer);
-  }, [approved, available, session?.id, session?.state, session?.expiresAt, lease?.sessionId, disable]);
+  }, [approved, available, session?.id, session?.state, session?.expiresAt, lease?.sessionId, disable, disarm]);
   useEffect(() => { if (confirm && session?.id !== confirm.sessionId) { setConfirm(null); setError("The reservation changed. Review the current session before continuing."); } }, [confirm, session?.id]);
 
   const endpoint = source.kind === "usb" ? `/v1/source-preview/${encodeURIComponent(source.id)}` : `/v1/preview/${encodeURIComponent(source.deviceId || device?.id || "")}`;
@@ -70,7 +73,7 @@ export function FeedPreview({ source, device, session, lease, owner: defaultOwne
   const approve = (result: DeviceLease, request: number) => {
     onLease(result);
     if (mounted.current && generation.current === request && !document.hidden && navigator.onLine && latest.current.device?.online) {
-      observed.current = null; replacedSession.current = latest.current.session?.id; setApproved(result.session);
+      observed.current = null; replacedSession.current = latest.current.session?.id; setApproved(result.session); setMediaSession(result.session);
     }
   };
   const start = () => {
@@ -85,11 +88,11 @@ export function FeedPreview({ source, device, session, lease, owner: defaultOwne
   };
   return <div className="feed-preview-workspace">
     <LivePreview name={source.name}
-      deviceId={controlling ? device?.id : source.kind === "native" ? source.deviceId : undefined}
-      sourceId={!controlling && source.kind === "usb" ? source.id : undefined}
-      operation={api} getSnapshot={getSnapshot} controlLease={controlling ? lease : null}
-      controlDevice={controlling ? device : undefined}
-      inputEnabled={!busy && !confirm && available}
+      deviceId={mediaControl ? device?.id : source.kind === "native" ? source.deviceId : undefined}
+      sourceId={!mediaControl && source.kind === "usb" ? source.id : undefined}
+      operation={api} getSnapshot={getSnapshot} controlLease={mediaControl ? lease : null}
+      controlDevice={mediaControl ? device : undefined}
+      inputEnabled={controlling && !busy && !confirm && available}
       onConnectionStateChange={(state) => { if (state === "error" || state === "disconnected") disable(); }} />
     {device && (touchDevice || touch) && <div className="feed-session-bar" aria-label={`Touch controls for ${device.name}`}>
       <div className="feed-session-summary"><strong>{controlling ? "Touch enabled" : "Touch disabled"}</strong><span>{booting ? "Booting… Waiting for the device to become ready." : session ? `${owned ? "Your reservation" : "Reserved"} · ${session.owner} · until ${new Date(session.expiresAt).toLocaleTimeString()}` : "Enable touch to reserve and control this screen."}</span></div>
@@ -113,7 +116,7 @@ export function FeedPreview({ source, device, session, lease, owner: defaultOwne
             approve(result, request);
           } else if (confirm.action === "enable") {
             if (!lease || !owned || !available) throw new Error("This reservation is no longer available for touch control.");
-            if (generation.current === request) setApproved(session!);
+            if (generation.current === request) { setApproved(session!); setMediaSession(session!); }
           } else {
             setApproved(null);
             await api("sessions.release", lease, AbortSignal.timeout(180_000));

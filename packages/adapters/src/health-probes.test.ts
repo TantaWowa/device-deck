@@ -2,10 +2,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { setImmediate } from "node:timers/promises";
 import { writeFile } from "node:fs/promises";
-import { healthProbeRunner } from "./health-probes";
+import { healthProbeRunner, ProbeScheduler } from "./health-probes";
 import { Adapters } from "./index";
 import type { run } from "./process";
-import { configSchema, deviceSchema } from "../../core/src/local/types";
+import { configSchema, deviceSchema, type Device } from "../../core/src/local/types";
 
 const response = (value: unknown) => ({ stdout: Buffer.from(typeof value === "string" ? value : JSON.stringify(value)), stderr: "" });
 const config = configSchema.parse({ schemaVersion: 1, settings: { folder: "/tmp/captures" } });
@@ -24,6 +24,38 @@ test("one inventory runner shares identical probes but retains executable, argum
   assert.equal(calls.length, 4);
   await healthProbeRunner(execute)("xcrun", ["simctl", "list", "devices", "--json"]);
   assert.equal(calls.length, 5, "a new scan never inherits cached readiness");
+});
+
+test("a daemon scheduler bounds different scans together and cancels queued work without launching it", async () => {
+  let active = 0, peak = 0, starts = 0;
+  const releases: (() => void)[] = [];
+  const scheduler = new ProbeScheduler(async (_command, _args, _timeout, options) => {
+    starts++; active++; peak = Math.max(peak, active);
+    await new Promise<void>((resolve) => {
+      const done = () => { options?.signal?.removeEventListener("abort", done); resolve(); };
+      releases.push(done);
+      options?.signal?.addEventListener("abort", done, { once: true });
+    });
+    active--;
+    return response("ready");
+  }, 2, 3);
+  const first = healthProbeRunner(scheduler.run), second = healthProbeRunner(scheduler.run);
+  const started = [first("a", []), second("b", [])];
+  for (let i = 0; i < 5 && starts < 2; i++) await setImmediate();
+  assert.equal(starts, 2);
+  const abort = new AbortController();
+  const queued = scheduler.run("cancelled", [], undefined, { signal: abort.signal });
+  const rejected = assert.rejects(queued, /cancelled/);
+  abort.abort();
+  await rejected;
+  const pending = [scheduler.run("one", []), scheduler.run("two", []), scheduler.run("three", [])];
+  const failures = pending.map((promise) => assert.rejects(promise, /cancelled/));
+  await assert.rejects(scheduler.run("overflow", []), /busy/);
+  await scheduler.close();
+  await Promise.all([...started, ...failures]);
+  assert.equal(starts, 2);
+  assert.equal(peak, 2);
+  assert.equal(scheduler.stats().queued, 0);
 });
 
 test("health probes yield between launches and keep failures from blocking the queue or a later scan", async () => {
@@ -51,7 +83,7 @@ test("nineteen simulator rows use one list command per health scan and fresh con
     id: `sim-${i}`, name: `Simulator ${i}`, platform: "Apple", kind: "virtual",
     connection: { type: "simulator", os: "ios", udid: `00000000-0000-4000-8000-${String(i).padStart(12, "0")}` },
   }));
-  let booted = false, ready = false, failed = false;
+  let booted = false, ready = false, failed = false, now = 0;
   const calls: string[][] = [];
   const execute: typeof run = async (_command, args) => {
     calls.push(args);
@@ -66,13 +98,14 @@ test("nineteen simulator rows use one list command per health scan and fresh con
     }
     throw new Error(`Unexpected control command: ${args.join(" ")}`);
   };
-  const adapters = new Adapters(() => config, execute);
+  const adapters = new Adapters(() => config, execute, () => now);
   assert.ok((await adapters.inspectAll(devices)).every((device) => device.simulatorState === "shutdown"));
   assert.equal(calls.length, 1);
   booted = true;
   assert.equal((await adapters.inspectAll(devices))[0].simulatorState, "starting");
   assert.equal(calls.filter((args) => args[1] === "list").length, 2);
   ready = true;
+  now += 5000;
   assert.equal((await adapters.inspectAll(devices))[0].online, true);
   ready = false;
   await assert.rejects(adapters.input(devices[0], { key: "Home" }), /still booting/);
@@ -121,4 +154,84 @@ test("health de-duplication never bypasses a fresh Android hardware identity che
   identity = "different-hardware";
   await assert.rejects(adapters.verifyIdentity(phone), /different hardware serial/);
   assert.equal(identityReads, 2);
+});
+
+test("completed inventory rows publish before a slow simulator probe is cancelled", async () => {
+  const devices = ["slow", "stopped"].map((id, index) => deviceSchema.parse({
+    id, name: id, platform: "Apple", kind: "virtual",
+    connection: { type: "simulator", os: "ios", udid: `00000000-0000-4000-8000-${String(index).padStart(12, "0")}` },
+  }));
+  const controller = new AbortController();
+  const observed: string[] = [];
+  let bootstatus = false;
+  const execute: typeof run = async (_command, args, _timeout, options) => {
+    if (args[1] === "list") return response({ devices: { "com.apple.CoreSimulator.SimRuntime.iOS-26-2": devices.map((device, index) => ({ udid: device.connection.type === "simulator" ? device.connection.udid : "", state: index === 0 ? "Booted" : "Shutdown", isAvailable: true })) } });
+    bootstatus = true;
+    await new Promise<void>((_resolve, reject) => options?.signal?.addEventListener("abort", () => reject(new Error("cancelled")), { once: true }));
+    return response("");
+  };
+  const adapters = new Adapters(() => config, execute);
+  const scan = adapters.inspectAll(devices, controller.signal, (device) => observed.push(device.id));
+  for (let i = 0; i < 20 && (!bootstatus || !observed.length); i++) await setImmediate();
+  assert.deepEqual(observed, ["stopped"]);
+  const rejected = assert.rejects(scan, /abort/i);
+  controller.abort();
+  await rejected;
+  assert.deepEqual(observed, ["stopped"], "late cancelled work cannot publish a stale readiness result");
+  await adapters.close();
+});
+
+test("large inventories inspect lazily with eight workers and retain configured order", async () => {
+  const devices = Array.from({ length: 100 }, (_, index) => deviceSchema.parse({
+    id: `device-${index}`, name: `Device ${index}`, platform: "Other", kind: "physical", connection: { type: "capture" },
+  }));
+  let active = 0, maximum = 0;
+  const observed: string[] = [];
+  const adapters = new Adapters(() => config, async () => { throw new Error("No subprocess expected"); });
+  adapters.inspect = async (device) => {
+    active++; maximum = Math.max(maximum, active);
+    // Different completion order must not reorder the returned inventory.
+    for (let step = 0; step < (Number(device.id.split("-")[1]) % 3) + 1; step++) await setImmediate();
+    active--;
+    return { ...device, online: false, locked: false, capabilities: [], healthDetail: "Fixture" };
+  };
+  try {
+    const results = await adapters.inspectAll(devices, undefined, (device) => observed.push(device.id));
+    assert.equal(maximum, 8);
+    assert.equal(active, 0);
+    assert.equal(observed.length, 100);
+    assert.deepEqual(results.map((device) => device.id), devices.map((device) => device.id));
+  } finally { await adapters.close(); }
+});
+
+test("cancelled large inventory stops assigning rows and waits for every active inspection to clean up", async () => {
+  const devices = Array.from({ length: 100 }, (_, index) => deviceSchema.parse({
+    id: `device-${index}`, name: `Device ${index}`, platform: "Other", kind: "physical", connection: { type: "capture" },
+  }));
+  const controller = new AbortController();
+  let started = 0, active = 0, settled = false;
+  const observed: Device[] = [];
+  let cleanup!: () => void;
+  const cleaned = new Promise<void>((resolve) => { cleanup = resolve; });
+  const adapters = new Adapters(() => config, async () => { throw new Error("No subprocess expected"); });
+  adapters.inspect = async (device) => {
+    started++; active++;
+    await cleaned;
+    active--;
+    return { ...device, online: false, locked: false, capabilities: [], healthDetail: "Fixture" };
+  };
+  const scan = adapters.inspectAll(devices, controller.signal, (device) => observed.push(device));
+  const rejection = assert.rejects(scan, /abort/i).then(() => { settled = true; });
+  try {
+    assert.equal(started, 8);
+    controller.abort();
+    await setImmediate();
+    assert.equal(started, 8);
+    assert.equal(settled, false, "cancellation cannot finish before active work cleans up");
+    cleanup();
+    await rejection;
+    assert.equal(active, 0);
+    assert.equal(started, 8);
+    assert.equal(observed.length, 0);
+  } finally { cleanup(); await rejection; await adapters.close(); }
 });

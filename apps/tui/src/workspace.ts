@@ -141,6 +141,7 @@ export class Workspace {
   private generation = 0;
   private sendingKeys = false;
   private inputQueue: string[] = [];
+  private inventoryLifetime = new AbortController();
   constructor(
     readonly io: Dependencies = dependencies,
     options: {
@@ -159,6 +160,11 @@ export class Workspace {
   }
   changed() {
     this.version++;
+  }
+  dispose() {
+    this.done = true;
+    this.generation++;
+    this.inventoryLifetime.abort();
   }
   notice(message: string, error = false) {
     this.status = clean(message);
@@ -208,7 +214,7 @@ export class Workspace {
     this.refreshing = true;
     const generation = this.generation;
     try {
-      const snapshot: Snapshot = await this.io.call("inventory");
+      const snapshot: Snapshot = await this.io.call("inventory", {}, "TUI", this.inventoryLifetime.signal);
       if (this.done || generation !== this.generation) return;
       const selection = this.selected?.id;
       this.snapshot = snapshot;
@@ -230,6 +236,7 @@ export class Workspace {
         this.notice("Ready. Select an item; Enter shows its actions.");
       this.changed();
     } catch (e) {
+      if (this.done || this.inventoryLifetime.signal.aborted) return;
       this.notice(
         `${(e as Error).message} · R retries; W opens the dashboard.`,
         true,
@@ -308,25 +315,25 @@ export class Workspace {
     const s = this.snapshot;
     if (!s) return [];
     if (this.discovery)
-      return this.discovery.devices.map((d) => {
-        const issue = isDeviceConfigured(s.config, d)
-          ? "Already added"
-          : registrationIssue(d);
-        return {
-          id: d.id,
-          label: `${issue ? "[-]" : this.selectedDevices.has(d.id) ? "[x]" : "[ ]"} ${d.name}`,
-          meta: `${d.platform} · ${issue || "Ready to add"}`,
-          detail: [
-            d.name,
-            d.platform,
-            d.model,
-            issue ||
-              "Space selects this device. A selects all available devices.",
-            ...this.discovery!.diagnostics,
-          ],
-          tone: issue ? "warn" : "good",
-        };
-      });
+      return this.discovery.devices
+        .filter((d) => !isDeviceConfigured(s.config, d))
+        .map((d) => {
+          const issue = registrationIssue(d);
+          return {
+            id: d.id,
+            label: `${issue ? "[-]" : this.selectedDevices.has(d.id) ? "[x]" : "[ ]"} ${d.name}`,
+            meta: `${d.platform} · ${issue || "Ready to add"}`,
+            detail: [
+              d.name,
+              d.platform,
+              d.model,
+              issue ||
+                "Space selects this device. A selects all available devices.",
+              ...this.discovery!.diagnostics,
+            ],
+            tone: issue ? "warn" : "good",
+          };
+        });
     switch (this.view) {
       case "Devices":
         return s.devices
@@ -343,11 +350,12 @@ export class Workspace {
             return {
               id: d.id,
               label: d.name,
-              meta: `${d.platform} · ${d.kind === "virtual" ? "Sim" : "Real"} · ${recording ? "REC" : d.simulatorState === "starting" ? "Launching" : d.simulatorState === "stopping" ? "Closing" : d.locked ? "LOCKED" : session ? "RESERVED" : d.online ? "Ready" : d.simulatorState === "shutdown" ? "Stopped" : "Offline"}`,
+              meta: `${d.platform} · ${d.kind === "virtual" ? "Sim" : "Real"} · ${recording ? "REC" : d.observation?.observedAt === null ? "Checking" : d.simulatorState === "starting" ? "Launching" : d.simulatorState === "stopping" ? "Closing" : d.locked ? "LOCKED" : session ? "RESERVED" : d.online ? "Ready" : d.simulatorState === "shutdown" ? "Stopped" : "Offline"}`,
               detail: [
                 d.name,
                 `${d.platform} · ${d.kind} · ${d.model}`,
                 d.healthDetail,
+                d.observation?.stale ? d.observation.observedAt === null ? "Availability has not been checked yet" : `Status last checked ${date(d.observation.observedAt)}${d.observation.error ? ` · ${d.observation.error}` : ""}` : "",
                 d.locked ? `Locked: ${d.lockReason || ""}` : "",
                 session
                   ? `${this.lease(d.id) ? "Your TUI session" : session.owner}: ${session.reason}`
@@ -484,8 +492,12 @@ export class Workspace {
     }
   }
   subtitle() {
-    if (this.discovery)
-      return `${this.selectedDevices.size} selected · ${this.discovery.devices.length} discovered`;
+    if (this.discovery) {
+      const selected = this.eligibleDiscovery().filter((d) =>
+        this.selectedDevices.has(d.id),
+      ).length;
+      return `${selected} selected · ${this.rows().length} discovered`;
+    }
     if (this.remote)
       return `${remoteProfile(this.remote)} remote · ${this.remote.name}`;
     if (this.view === "Devices")
@@ -1061,7 +1073,7 @@ export class Workspace {
   }
   discover() {
     this.run("Discovering devices", async () => {
-      this.discovery = await this.io.call("discover");
+      this.discovery = await this.io.call("discover", { refresh: true });
       this.selectedDevices.clear();
       this.index = 0;
       this.notice(
@@ -1120,7 +1132,7 @@ export class Workspace {
       return;
     }
     if (!this.leases.size) {
-      this.done = true;
+      this.dispose();
       return;
     }
     this.confirm(
@@ -1132,7 +1144,7 @@ export class Workspace {
             await this.io.call("sessions.release", lease);
             this.leases.delete(id);
           }
-          this.done = true;
+          this.dispose();
         }),
     );
   }

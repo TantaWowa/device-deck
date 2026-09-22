@@ -1,39 +1,53 @@
-import { execFile, spawn } from "node:child_process";
-import { promisify } from "node:util";
+import { spawn } from "node:child_process";
 import { constants } from "node:fs";
 import { access, stat } from "node:fs/promises";
 import path from "node:path";
 import { DeckError } from "../../core/src/local/types";
-const exec = promisify(execFile);
 export async function run(
   command: string,
   args: string[],
   timeout = 15000,
-  options: { cwd?: string } = {},
+  options: { cwd?: string; signal?: AbortSignal } = {},
 ) {
-  try {
-    const { stdout, stderr } = await exec(command, args, {
-      timeout,
-      maxBuffer: 32 * 1024 * 1024,
-      encoding: "buffer",
-      windowsHide: true,
-      cwd: options.cwd,
-    });
-    return {
-      stdout: Buffer.from(stdout),
-      stderr: Buffer.from(stderr).toString(),
+  if (options.signal?.aborted)
+    throw new DeckError("adapter-cancelled", `${command}: Command cancelled.`, 499);
+  return new Promise<{ stdout: Buffer; stderr: string }>((resolve, reject) => {
+    const child = spawn(command, args, { cwd: options.cwd, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+    const stdout: Buffer[] = [], stderr: Buffer[] = [];
+    let bytes = 0, failure: string | undefined, cancelled = false;
+    let escalation: ReturnType<typeof setTimeout> | undefined;
+    const terminate = (reason: string, abort = false) => {
+      if (failure) return;
+      failure = reason; cancelled = abort;
+      child.kill("SIGTERM");
+      escalation = setTimeout(() => child.kill("SIGKILL"), 1000);
+      escalation.unref();
     };
-  } catch (e) {
-    const err = e as Error & { stderr?: Buffer | string; killed?: boolean };
-    const detail = String(err.stderr || "").trim() || (err.killed
-      ? `Timed out after ${Math.round(timeout / 1000)} seconds.`
-      : err.message);
-    throw new DeckError(
-      "adapter-failed",
-      `${command}: ${detail.slice(-1800)}`,
-      502,
-    );
-  }
+    const abort = () => terminate("Command cancelled.", true);
+    const timer = timeout > 0 ? setTimeout(() => terminate(`Timed out after ${Math.round(timeout / 1000)} seconds.`), timeout) : undefined;
+    timer?.unref();
+    options.signal?.addEventListener("abort", abort, { once: true });
+    // An abort between the preflight and listener registration must also cancel.
+    if (options.signal?.aborted) abort();
+    const collect = (chunks: Buffer[]) => (chunk: Buffer) => {
+      bytes += chunk.length;
+      if (bytes > 32 * 1024 * 1024) { terminate("Command output exceeded 32 MiB."); return; }
+      chunks.push(chunk);
+    };
+    child.stdout.on("data", collect(stdout));
+    child.stderr.on("data", collect(stderr));
+    child.once("error", (error) => { failure ||= error.message; });
+    // Do not settle on abort/timeout until the owned child has actually closed.
+    child.once("close", (code, signal) => {
+      clearTimeout(timer); clearTimeout(escalation);
+      options.signal?.removeEventListener("abort", abort);
+      const errorOutput = Buffer.concat(stderr).toString();
+      if (failure || code !== 0) {
+        const detail = failure || errorOutput.trim() || `Command failed (exit ${code ?? signal}).`;
+        reject(new DeckError(cancelled ? "adapter-cancelled" : "adapter-failed", `${command}: ${detail.slice(-1800)}`, cancelled ? 499 : 502));
+      } else resolve({ stdout: Buffer.concat(stdout), stderr: errorOutput });
+    });
+  });
 }
 export async function available(command: string) {
   // Tool checks run for every online device. Spawning `which`/`test` stalls

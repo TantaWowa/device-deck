@@ -143,7 +143,7 @@ export function LivePreview({ name, deviceId, sourceId, operation, getSnapshot, 
   if (!queue.current) queue.current = new PointerQueue((event) => send({ type: "pointer", event }));
 
   useEffect(() => {
-    const hidden = () => { if (document.hidden) cancel(); setVisible(!document.hidden); };
+    const hidden = () => { if (document.hidden) { latest.current.isControlling = false; cancel(); } setVisible(!document.hidden); };
     window.addEventListener("blur", cancel);
     window.addEventListener("offline", cancel);
     document.addEventListener("visibilitychange", hidden);
@@ -164,7 +164,7 @@ export function LivePreview({ name, deviceId, sourceId, operation, getSnapshot, 
   }, [snapshotMode]);
 
   useEffect(() => {
-    if (!active || !visible || snapshotMode) return;
+    if (!active || snapshotMode) return;
     const abort = new AbortController();
     let peer: RTCPeerConnection | undefined;
     let dataChannel: RTCDataChannel | undefined;
@@ -255,7 +255,7 @@ export function LivePreview({ name, deviceId, sourceId, operation, getSnapshot, 
           ...(deviceId ? { deviceId } : { sourceId }), offer: peer.localDescription!.sdp, profile,
           control: Boolean(controlLease), ...(controlLease || {}),
         }, AbortSignal.any([abort.signal, AbortSignal.timeout(30_000)]));
-        // Signaling may finish after this viewer has been hidden or changed devices.
+        // Signaling may finish after this viewer unmounted or changed devices.
         if (closed) { void operation("streams.close", { id: result.id, token: result.token }, AbortSignal.timeout(5000)).catch(() => {}); return; }
         credentials = { id: result.id, token: result.token };
         setMode(result.mode); setCapabilities(result.capabilities); setSupportsInputBarrier(result.supportsInputBarrier === true);
@@ -273,10 +273,10 @@ export function LivePreview({ name, deviceId, sourceId, operation, getSnapshot, 
     };
     void start();
     return close;
-  }, [active, visible, snapshotMode, deviceId, sourceId, operation, profile, generation, controlLease?.sessionId, controlLease?.leaseToken]);
+  }, [active, snapshotMode, deviceId, sourceId, operation, profile, generation, controlLease?.sessionId, controlLease?.leaseToken]);
 
   useEffect(() => {
-    if (!snapshotMode || !active || !visible) return;
+    if (!snapshotMode || !active) return;
     const abort = new AbortController();
     let timer: ReturnType<typeof setTimeout>;
     let url = "";
@@ -294,7 +294,7 @@ export function LivePreview({ name, deviceId, sourceId, operation, getSnapshot, 
     };
     void update();
     return () => { abort.abort(); clearTimeout(timer); if (url) URL.revokeObjectURL(url); setSnapshotUrl(""); };
-  }, [snapshotMode, active, visible, deviceId, sourceId]);
+  }, [snapshotMode, active, deviceId, sourceId]);
 
   const pointFor = (event: React.PointerEvent<HTMLVideoElement>) => {
     const media = video.current;

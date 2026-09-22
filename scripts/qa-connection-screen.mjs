@@ -34,20 +34,29 @@ const server = createServer(async (request, response) => {
 });
 const deferred = () => { let release; const promise = new Promise((resolve) => { release = resolve; }); return { promise, release }; };
 const json = (route, body, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
-async function fixture({ bootstrap, inventory, width = 1280, reducedMotion, clock = false } = {}) {
+async function fixture({ bootstrap, inventory, operation, width = 1280, reducedMotion, clock = false, hidden = false } = {}) {
   const page = currentPage = await browser.newPage({ viewport: { width, height: width === 390 ? 844 : 800 }, reducedMotion });
   page.setDefaultTimeout(10_000);
   if (clock) await page.clock.install();
+  await page.addInitScript((hidden) => {
+    window.syntheticHidden = hidden;
+    Object.defineProperty(document, "hidden", { configurable: true, get: () => window.syntheticHidden });
+    window.setSyntheticHidden = (hidden) => { window.syntheticHidden = hidden; document.dispatchEvent(new Event("visibilitychange")); };
+  }, hidden);
   const requests = { bootstrap: 0, inventory: 0 };
+  const operations = [];
   page.on("pageerror", (error) => results.browserErrors.push(error.message));
   await page.route("**/v1/**", async (route) => {
     const pathname = new URL(route.request().url()).pathname;
+    if (pathname.startsWith("/v1/operations/")) operations.push({ name: pathname.split("/v1/operations/")[1], args: route.request().postDataJSON() });
     if (pathname === "/v1/bootstrap") { requests.bootstrap++; if (bootstrap) return bootstrap(route, requests); return json(route, { ok: true }); }
     if (pathname === "/v1/operations/inventory") { requests.inventory++; if (inventory) return inventory(route, requests); return json(route, snapshot); }
     if (pathname === "/v1/hub/status") return json(route, { paired: false });
+    if (pathname === "/v1/operations/capture-cards.list") { requests.cards = (requests.cards || 0) + 1; return json(route, { sources: [], diagnostics: [] }); }
+    if (operation && pathname.startsWith("/v1/operations/")) return operation(route, pathname.split("/v1/operations/")[1]);
     return json(route, { message: `Unexpected synthetic endpoint ${pathname}` }, 404);
   });
-  return { page, requests };
+  return { page, requests, operations };
 }
 const connecting = (page) => page.getByRole("heading", { name: "Connecting to Device Deck", exact: true });
 const failed = (page) => page.getByRole("heading", { name: /couldn.t connect to device deck/i });
@@ -71,6 +80,94 @@ try {
   base = `http://127.0.0.1:${server.address().port}`;
   browser = await chromium.launch({ headless: true, channel: process.env.PLAYWRIGHT_CHANNEL || "chrome" });
   results.browser = browser.version();
+
+  {
+    const { page, operations } = await fixture({ operation: (route, name) => json(route, name === "discover" ? { devices: [], sources: [], diagnostics: [] } : {}) });
+    await page.goto(base); await loaded(page);
+    await page.getByRole("button", { name: "Capture Cards", exact: true }).click();
+    const manual = page.getByRole("button", { name: "Discover / refresh", exact: true });
+    await expect(manual).toBeEnabled();
+    await manual.click();
+    await expect.poll(() => operations.filter((request) => request.name === "capture-cards.list").length).toBe(2);
+    assert.deepEqual(operations.filter((request) => request.name === "capture-cards.list").map((request) => request.args), [{}, { refresh: true }]);
+    await page.locator(".live-sidebar").getByRole("button", { name: /^Devices/ }).click();
+    await page.getByRole("button", { name: "Discover / add devices", exact: true }).click();
+    await expect.poll(() => operations.filter((request) => request.name === "discover").length).toBe(1);
+    assert.deepEqual(operations.find((request) => request.name === "discover").args, { refresh: true });
+    results.cases.push({ name: "explicit-discovery-intent", passed: true, ordinaryReadsRemainCached: true });
+    await close(page);
+  }
+  {
+    let launched = false, afterLaunch = 0;
+    const config = { id: "waiting-sim", name: "Synthetic Waiting Simulator", platform: "Apple", kind: "virtual", model: "QA", visibility: "local", connection: { type: "simulator", udid: "ea415a3a-39fa-4dcb-a028-a5260f5156c3", os: "ios" }, captureSourceId: "native-waiting" };
+    const source = { id: "native-waiting", name: "Synthetic Waiting Screen", kind: "native", deviceId: config.id };
+    const { page } = await fixture({
+      inventory: (route) => {
+        const ready = launched && ++afterLaunch >= 3;
+        const device = { ...config, online: ready, locked: false, capabilities: ready ? ["preview"] : [], healthDetail: ready ? "Ready" : "Checking status", simulatorState: ready ? "booted" : "shutdown", observation: { observedAt: ready || !launched ? Date.now() : null, stale: launched && !ready, refreshing: launched && !ready, error: null, nextRefreshAt: 0 } };
+        return json(route, { ...snapshot, devices: [device], sources: [{ ...source, status: ready ? "connected" : launched ? "unknown" : "missing" }], config: { ...snapshot.config, devices: [config], sources: [source] } });
+      },
+      operation: (route, name) => {
+        if (name === "devices.simulator") { launched = true; return json(route, { deviceId: config.id, action: "launch", state: "booted", changed: true }); }
+        return json(route, { message: "Synthetic preview unavailable; this case only checks feed selection." }, 503);
+      },
+    });
+    await page.goto(`${base}/?view=feeds&sources=`); await loaded(page);
+    await page.getByRole("button", { name: "Start simulator", exact: true }).click();
+    await page.getByRole("button", { name: `Launch ${config.name} and show feed`, exact: true }).click();
+    await expect(page.locator(".feed-launch-status")).toContainText("Waiting for its updated screen status");
+    await expect(page.locator(".feed-launch-error,.feed-selector-error")).toHaveCount(0);
+    await expect(page.locator('[data-feed-source="native-waiting"]')).toBeVisible({ timeout: 12_000 });
+    await expect(page.locator(".feed-launch-error,.feed-selector-error")).toHaveCount(0);
+    assert.ok(afterLaunch >= 3, "Feed reveal waits through checking snapshots for published readiness");
+    results.cases.push({ name: "successful-launch-awaits-inventory", passed: true, checkingReads: afterLaunch - 1 });
+    await close(page);
+  }
+
+  if (process.env.QA_CONNECTION_FOCUS !== "refresh") {
+
+  {
+    const { page, requests } = await fixture({ hidden: true });
+    await page.goto(base);
+    await page.waitForTimeout(2800);
+    assert.equal(requests.inventory, 0, "A hidden mount must not create inventory demand");
+    await page.evaluate(() => window.setSyntheticHidden(false));
+    await loaded(page);
+    await page.getByRole("button", { name: "Capture Cards", exact: true }).click();
+    await expect.poll(() => requests.cards).toBe(1);
+    await page.evaluate(() => window.setSyntheticHidden(true));
+    const before = { ...requests };
+    await page.waitForTimeout(10_500);
+    assert.deepEqual(requests, before, "Inventory and card discovery stop while hidden");
+    await page.evaluate(() => window.setSyntheticHidden(false));
+    await expect.poll(() => requests.inventory).toBe(before.inventory + 1);
+    await expect.poll(() => requests.cards).toBe(before.cards + 1);
+    await page.context().setOffline(true);
+    const offline = { ...requests };
+    await page.waitForTimeout(2800);
+    assert.deepEqual(requests, offline);
+    await page.context().setOffline(false);
+    await expect.poll(() => requests.inventory).toBe(offline.inventory + 1);
+    await expect.poll(() => requests.cards).toBe(offline.cards + 1);
+    results.cases.push({ name: "hidden-offline-inventory-and-cards", passed: true, immediateResume: true, noCatchup: true });
+    await close(page);
+  }
+  {
+    const gate = deferred();
+    const { page, requests } = await fixture({ inventory: async (route, calls) => { if (calls.inventory === 1) await gate.promise; await json(route, snapshot).catch(() => {}); } });
+    await page.goto(base);
+    await expect.poll(() => requests.inventory).toBe(1);
+    await page.evaluate(() => window.setSyntheticHidden(true));
+    gate.release();
+    await page.waitForTimeout(300);
+    await expect(connecting(page)).toBeVisible();
+    await expect(failed(page)).toHaveCount(0);
+    await page.evaluate(() => window.setSyntheticHidden(false));
+    await loaded(page);
+    assert.equal(requests.inventory, 2);
+    results.cases.push({ name: "hide-aborts-pending-inventory", passed: true, lateResultIgnored: true });
+    await close(page);
+  }
 
   {
     const gate = deferred();
@@ -160,6 +257,7 @@ try {
     if (target === "bootstrap") assert.equal(requests.inventory, 0);
     results.cases.push({ name: `${target}-timeout`, passed: true, elapsedAfterClockMs: Date.now() - began });
     gate.release(); await close(page);
+  }
   }
   assert.deepEqual(results.browserErrors, []);
   results.passed = true;

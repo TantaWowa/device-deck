@@ -28,6 +28,16 @@ function client() {
   return new RTCPeerConnection({ bundlePolicy: "max-bundle", iceServers: [], iceAdditionalHostAddresses: ["127.0.0.1"], iceUseIpv6: false, codecs: { video: [new RTCRtpCodecParameters({ mimeType: "video/H264", clockRate: 90000, payloadType: 96, parameters: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f" })] } });
 }
 
+test("audio offers are rejected before acquiring video or interactive capture", async () => {
+  const f = fixture();
+  try {
+    await assert.rejects(f.streams.open({ deviceId: device.id, control: true, ...credentials,
+      offer: "v=0\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\na=rtpmap:96 H264/90000\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=rtpmap:111 opus/48000/2\r\n",
+    }), /video only/);
+    assert.deepEqual(f.counts(), { acquired: 0, closed: 0 });
+  } finally { await f.streams.close(); }
+});
+
 test("iOS simulator streams use native video independently of touch and never show an assigned USB image to a controller", { timeout: 25000 }, async () => {
   const ios: DeviceConfig = { ...device, platform: "Apple", kind: "virtual", connection: { type: "simulator", os: "ios", udid: "fixture-ios" } };
   for (const control of [false, true]) {

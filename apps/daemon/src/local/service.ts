@@ -31,10 +31,13 @@ import {
   type Operation,
   type Snapshot,
   type SourceConfig,
+  type Source,
 } from "../../../../packages/core/src/local/types";
 import { Store } from "./store";
+import { InventoryCache } from "./inventory-cache";
 import { captureStorage, openCaptureFolder } from "./capture-library";
 import { CaptureThumbnails } from "./thumbnails";
+import { CaptureCardThumbnails } from "./capture-card-thumbnails";
 import { LiveStreams, type LiveTarget, type LiveAuthorization } from "../live";
 import { phoneHardwareButtons } from "../../../../packages/core/src/remote";
 import type { StreamOpen } from "../../../../packages/core/src/live";
@@ -56,6 +59,7 @@ export class DeckService {
   readonly licensing: EntitlementService;
   readonly streams: LiveStreams;
   readonly thumbnails: CaptureThumbnails;
+  readonly captureCardThumbnails = new CaptureCardThumbnails();
   store!: Store;
   private control = new Map<string, SerialQueue>();
   private global = new SerialQueue();
@@ -66,14 +70,23 @@ export class DeckService {
     { handle: ProcessHandle; timer: ReturnType<typeof setTimeout> }
   >();
   private closing = new Map<string, Promise<Session>>();
-  private health: Device[] = [];
-  private healthAt = 0;
+  private healthCache = new InventoryCache<Device>();
+  // Project camera observations frequently; hardware freshness belongs to the
+  // shared camera owner, not a second 30-second cache layered on top of it.
+  private sourceCache = new InventoryCache<Source>(Date.now, 1000, 30_000);
+  private inventoryRevision = "";
+  private inventoryConfig?: Config;
+  private inventoryReads: Record<string, number> = {};
   private healthPending?: Promise<Device[]>;
   private timer?: ReturnType<typeof setInterval>;
   private shuttingDown = false;
   private changingConfig = false;
   private simulatorActions = new Map<string, "launch" | "close">();
   diagnostics: string[] = [];
+  inventoryDiagnostics() {
+    return { requests: { ...this.inventoryReads }, ...this.adapters.inventoryStats(),
+      health: this.healthCache.observation(this.config.config.devices.map((d) => d.id)) };
+  }
   constructor(
     readonly directory: string,
     configFile = path.join(directory, "config.json"),
@@ -172,7 +185,7 @@ export class DeckService {
   };
   private async refresh() {
     await this.global.run(async () => {
-      if (await this.config.refresh(this.prepareConfig)) this.healthAt = 0;
+      if (await this.config.refresh(this.prepareConfig)) this.invalidateInventory();
       this.changingConfig = false;
     });
   }
@@ -200,21 +213,53 @@ export class DeckService {
       throw e;
     }
   };
+  private invalidateInventory(deviceId?: string) {
+    const current = this.config.config, previous = this.inventoryConfig;
+    const configChanged = this.inventoryRevision !== this.config.revision;
+    const sameTools = previous && JSON.stringify(previous.tools) === JSON.stringify(current.tools);
+    const sameSource = (id?: string | null) => !id || JSON.stringify(previous?.sources.find((s) => s.id === id)) === JSON.stringify(current.sources.find((s) => s.id === id));
+    const preservedDevices = sameTools ? current.devices.filter((d) =>
+      JSON.stringify(previous.devices.find((old) => old.id === d.id)) === JSON.stringify(d) && sameSource(d.captureSourceId),
+    ).map((d) => d.id) : [];
+    const preservedSources = sameTools ? current.sources.filter((s) => sameSource(s.id) &&
+      (s.kind !== "native" || !s.deviceId || preservedDevices.includes(s.deviceId)),
+    ).map((s) => s.id) : [];
+    const affectedSources = current.sources.filter((s) => s.kind === "native" && s.deviceId === deviceId ||
+      current.devices.some((d) => d.id === deviceId && d.captureSourceId === s.id)).map((s) => s.id);
+    this.inventoryRevision = this.config.revision;
+    this.inventoryConfig = structuredClone(current);
+    // Retain known facts for unchanged identities. A lifecycle action expires
+    // only its target; unrelated live feeds must not become unknown mid-refresh.
+    this.healthCache.invalidate(preservedDevices, deviceId ? [deviceId] : configChanged ? [] : preservedDevices);
+    this.sourceCache.invalidate(preservedSources, deviceId ? affectedSources : configChanged ? [] : preservedSources);
+    this.adapters.invalidateInventory(deviceId);
+  }
+  private configuredHealth(devices = this.config.config.devices): Device[] {
+    const rows = new Map(this.healthCache.peek(devices.map((d) => d.id)).map((d) => [d.id, d]));
+    return this.decorate(devices.map((d) => ({
+      ...(rows.get(d.id) || { ...d, online: false, locked: false, capabilities: [], healthDetail: "Checking device status…" }),
+      observation: this.healthCache.observation([d.id]),
+    })));
+  }
+  private refreshHealth(devices = this.config.config.devices, force = false) {
+    const due = force ? devices : devices.filter((d) => this.healthCache.observation([d.id]).stale);
+    const ids = due.map((d) => d.id);
+    const captured = structuredClone(due);
+    const work = this.healthCache.refresh(ids, (signal, publish) => this.adapters.inspectAll(captured, signal, publish), force);
+    const pending = work.then(() => this.configuredHealth(devices));
+    this.healthPending = pending;
+    void pending.finally(() => { if (this.healthPending === pending) this.healthPending = undefined; });
+    return pending;
+  }
   async devices(force = false): Promise<Device[]> {
-    if (!force && Date.now() - this.healthAt < 4000)
-      return this.decorate(this.health);
-    if (!this.healthPending) {
-      this.healthPending = this.adapters.inspectAll(this.config.config.devices)
-        .then((ds) => {
-          this.health = ds;
-          this.healthAt = Date.now();
-          return this.decorate(ds);
-        })
-        .finally(() => {
-          this.healthPending = undefined;
-        });
-    }
-    return this.healthPending;
+    if (this.inventoryRevision !== this.config.revision) this.invalidateInventory();
+    await this.refreshHealth(this.config.config.devices, force);
+    // A scoped snapshot may have owned the previous shared cycle. A synchronous
+    // caller needs its missing scope observed, not the other request's promise.
+    const observed = new Set(this.healthCache.peek(this.config.config.devices.map((d) => d.id)).map((d) => d.id));
+    if (this.config.config.devices.some((d) => !observed.has(d.id)))
+      await this.refreshHealth(this.config.config.devices, force);
+    return this.configuredHealth();
   }
   private decorate(ds: Device[]) {
     return ds.map((d) => ({
@@ -239,22 +284,36 @@ export class DeckService {
       lockReason: this.store.lockReason(d.id),
     }));
   }
-  async snapshot(): Promise<Snapshot> {
+  async snapshot(deviceIds?: string[]): Promise<Snapshot> {
     await this.refresh();
-    const [devices, sources] = await Promise.all([
-      this.devices(),
-      this.adapters.inspectSources(this.config.config.sources),
-    ]);
+    if (this.inventoryRevision !== this.config.revision) this.invalidateInventory();
+    const selected = deviceIds ? new Set(deviceIds) : null;
+    const configured = this.config.config.devices.filter((d) => !selected || selected.has(d.id));
+    const configuredSources = this.config.config.sources.filter((s) => !selected || configured.some((d) => d.captureSourceId === s.id));
+    void this.refreshHealth(configured);
+    const capturedSources = structuredClone(configuredSources);
+    void this.sourceCache.refresh(configuredSources.map((s) => s.id), () => this.adapters.inspectSources(capturedSources));
+    const devices = this.configuredHealth(configured);
+    const cachedSources = new Map(this.sourceCache.peek(configuredSources.map((s) => s.id)).map((s) => [s.id, s]));
+    const sources: Source[] = configuredSources.map((s) => {
+      const cached = cachedSources.get(s.id);
+      const current = this.sourceCache.observation([s.id]);
+      const observation = cached?.observation || current;
+      return {
+        ...(cached || { ...s, status: "unknown" as const, detail: "Checking capture source…" }),
+        observation: { ...observation, refreshing: current.refreshing,
+          stale: observation.observedAt === null || Date.now() - observation.observedAt >= 30_000 || Boolean(observation.error) },
+      };
+    });
     for (const d of devices) {
       const source = sources.find((s) => s.id === d.captureSourceId);
       if (!source || source.status === "missing")
-        d.capabilities = d.capabilities.filter(
-          (c) => !["preview", "screenshot", "record"].includes(c),
-        );
-      if (source?.kind === "native" && !d.online) source.status = "missing";
+        d.capabilities = d.capabilities.filter((c) => !["preview", "screenshot", "record"].includes(c));
+      if (source?.kind === "native" && !d.online && d.observation?.observedAt !== null) source.status = "missing";
     }
     return {
       mode: "local",
+      inventoryObservation: this.healthCache.observation(configured.map((d) => d.id)),
       license: this.licensing.status(),
       devices,
       sources,
@@ -289,7 +348,8 @@ export class DeckService {
     if (!args) fail("unknown-operation", "Unknown operation.", 404);
     switch (operation) {
       case "inventory":
-        return this.snapshot();
+        this.inventoryReads[`inventory:${origin}`] = (this.inventoryReads[`inventory:${origin}`] || 0) + 1;
+        return this.snapshot(args.deviceIds);
       case "license.status":
         return this.licensing.status();
       case "license.activate":
@@ -312,11 +372,16 @@ export class DeckService {
         } catch (e) {
           fail("invalid-range", (e as Error).message, 400);
         }
-      case "capture-cards.list":
+      case "capture-cards.list": {
+        this.inventoryReads[`capture-cards:${origin}`] = (this.inventoryReads[`capture-cards:${origin}`] || 0) + 1;
         await this.refresh();
-        return this.adapters.captureCards(this.config.config.sources);
+        const cards = await this.adapters.captureCards(this.config.config.sources, args.refresh === true);
+        const ignored = new Set(this.config.config.ignoredCaptureCardIds);
+        return { ...cards, sources: cards.sources.filter((card) => !card.uniqueId || !ignored.has(card.uniqueId)) };
+      }
       case "discover":
-        return this.adapters.discover();
+        this.inventoryReads[`discover:${origin}`] = (this.inventoryReads[`discover:${origin}`] || 0) + 1;
+        return this.adapters.discover(args.refresh === true);
       case "config.get":
         await this.refresh();
         return {
@@ -332,7 +397,7 @@ export class DeckService {
             .finally(() => {
               this.changingConfig = false;
             });
-          this.healthAt = 0;
+          this.invalidateInventory();
           this.store.event({
             deviceId: "",
             owner: origin,
@@ -359,8 +424,14 @@ export class DeckService {
               409,
               matches.map((d) => ({ id: d.id, name: d.name })),
             );
-          const d = matches[0];
+          if (this.simulatorActions.has(matches[0].id))
+            fail("device-offline", matches[0].healthDetail, 409);
+          if (this.store.lockReason(matches[0].id))
+            fail("device-locked", "Device is locked for maintenance.", 409);
+          const d = await this.adapters.inspect(this.device(matches[0].id));
           if (!d.online) fail("device-offline", d.healthDetail, 409);
+          if (!matchDevices(this.decorate([d]), this.store.sessions(), args.selector).length)
+            fail("no-match", "The device no longer matches the requested state or capabilities. Refresh and select it again.", 409);
           if (supportsSimulatorLifecycle(d) && d.connection.type === "adb") {
             const configured = this.device(d.id);
             const resolved = await this.adapters.verifyIdentity(configured);
@@ -393,7 +464,7 @@ export class DeckService {
                 this.config.revision,
                 this.validateChange,
               );
-              this.healthAt = 0;
+              this.invalidateInventory(d.id);
             }
           }
           const source = this.config.config.sources.find(
@@ -540,7 +611,7 @@ export class DeckService {
               throw error;
             } finally {
               if (this.healthPending) await this.healthPending.catch(() => {});
-              this.healthAt = 0;
+              this.invalidateInventory(args.deviceId);
             }
           }),
         );
@@ -612,7 +683,7 @@ export class DeckService {
                 this.validateChange(next, device.id),
               );
               device = this.device(device.id);
-              this.healthAt = 0;
+              this.invalidateInventory();
             }
             return device;
           } catch (error) {
@@ -643,7 +714,7 @@ export class DeckService {
             this.simulatorActions.delete(device.id);
             this.store.lock(device.id, null);
             if (this.healthPending) await this.healthPending.catch(() => {});
-            this.healthAt = 0;
+            this.invalidateInventory(device.id);
           }
         });
       }
@@ -677,7 +748,7 @@ export class DeckService {
                     await this.adapters.restart(d);
                   } finally {
                     this.store.lock(id, previous || null);
-                    this.healthAt = 0;
+                    this.invalidateInventory(id);
                   }
                 } else
                   this.store.lock(
@@ -728,7 +799,7 @@ export class DeckService {
                 pairing.handle.log() || "Pairing failed.",
                 502,
               );
-            this.healthAt = 0;
+            this.invalidateInventory(s.deviceId);
             return { paired: true };
           } finally {
             clearTimeout(timeout);
@@ -1037,6 +1108,41 @@ export class DeckService {
         );
       return this.capture.preview(null, source, 100);
     });
+  }
+  async captureCardThumbnail(sourceId: string) {
+    const resolve = () => {
+      if (this.changingConfig || this.shuttingDown)
+        fail("configuration-changing", "Capture configuration is being updated.", 409);
+      const card = this.adapters.cachedCaptureCards(this.config.config.sources).sources.find((source) => source.id === sourceId);
+      if (!card?.uniqueId || card.kind !== "usb" || this.config.config.ignoredCaptureCardIds.includes(card.uniqueId))
+        fail("source-missing", "This capture card is no longer available. Refresh Capture Cards.", 404);
+      if (card.status !== "connected")
+        fail("source-missing", "Connect this capture card and refresh Capture Cards to preview it.", 404);
+      const device = this.config.config.devices.find((item) => item.captureSourceId === card.id) ?? null;
+      if (device && this.store.lockReason(device.id))
+        fail("device-locked", "Device is locked for maintenance.", 409);
+      if (device && this.store.sessions().some((session) => session.deviceId === device.id && session.state === "closing"))
+        fail("session-closing", "Capture source is being released.", 409);
+      const source: SourceConfig = { id: card.id, name: card.name, kind: "usb", uniqueId: card.uniqueId };
+      return { source, device, key: JSON.stringify([this.config.revision, source, device]) };
+    };
+    const target = resolve();
+    const validate = () => {
+      const current = resolve();
+      if (current.key !== target.key)
+        fail("source-changed", "This capture card changed while its preview was loading. Try again.", 409);
+    };
+    const data = await this.captureCardThumbnails.get(target.key, () =>
+      this.queue(target.device?.id ?? `source:${target.source.id}`).run(async () => {
+        validate();
+        // Share active capture work, but close a worker opened only for this still.
+        const image = await this.capture.preview(target.device, target.source, 30_000, true);
+        validate();
+        return image;
+      }),
+    );
+    validate();
+    return data;
   }
   private artifact(
     s: Session,
@@ -1586,7 +1692,9 @@ export class DeckService {
       ),
     );
     await this.streams.close();
-    await this.capture.close();
+    await Promise.all([this.captureCardThumbnails.close(), this.capture.close()]);
+    await this.adapters.close();
+    await Promise.all([this.healthCache.close(), this.sourceCache.close()]);
     await this.thumbnails.close();
     this.store.close();
   }

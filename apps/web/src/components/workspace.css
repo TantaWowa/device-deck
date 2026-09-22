@@ -188,7 +188,7 @@
 }
 .capture-card-row {
   display: grid;
-  grid-template-columns: minmax(180px, 1.15fr) 110px minmax(200px, 1fr) 76px;
+  grid-template-columns: minmax(280px, 1.15fr) 110px minmax(200px, 1fr) 154px;
   align-items: center;
   gap: 16px;
   min-height: 58px;
@@ -256,7 +256,78 @@
 }
 .card-view-action {
   min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
 }
+.capture-card.is-selected {
+  border-color: #5284d6;
+  box-shadow: 0 0 0 1px #5284d6;
+}
+.capture-card-heading-actions,
+.capture-card-bulk {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.capture-card-bulk {
+  margin: 16px 0;
+  padding: 12px;
+  border: 1px solid #cbd7e7;
+  border-radius: 8px;
+  background: #eef4fd;
+  font-size: 13px;
+}
+.capture-card-bulk label { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+.capture-card-bulk p { flex-basis: 100%; margin: 0; color: #536680; }
+.capture-card-select,
+.capture-card-bulk input[type="checkbox"] { width: 18px; height: 18px; flex: 0 0 18px; accent-color: #245bc7; cursor: pointer; }
+.capture-card-select:focus-visible,
+.capture-card-bulk input:focus-visible { outline: 3px solid #7da4ed; outline-offset: 3px; }
+.capture-card-bulk button,
+.capture-card-delete,
+.capture-card-dialog button {
+  display: inline-flex;
+  justify-content: center;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid #b9c9df;
+  border-radius: 6px;
+  background: white;
+  color: #193250;
+  font: inherit;
+  font-size: 13px;
+  min-height: 36px;
+  padding: 8px 10px;
+  cursor: pointer;
+}
+.capture-card-page .card-danger,
+.capture-card-dialog .card-danger { color: #a52c21; border-color: #e1b9b4; }
+.capture-card-dialog .card-primary { background: #245bc7; color: white; border-color: #245bc7; }
+.capture-card-page button:disabled,
+.capture-card-dialog button:disabled { opacity: .5; cursor: not-allowed; }
+.capture-card-dialog {
+  width: min(580px, calc(100vw - 32px));
+  max-height: calc(100dvh - 40px);
+  box-sizing: border-box;
+  overflow: auto;
+  padding: 24px;
+  border: 1px solid #cbd7e7;
+  border-radius: 12px;
+  background: white;
+  color: #193250;
+  box-shadow: 0 20px 80px #14283f40;
+}
+.capture-card-dialog::backdrop { background: #14283f66; }
+.capture-card-dialog h2 { margin: 0 0 12px; font-size: 21px; }
+.capture-card-dialog p { font-size: 14px; line-height: 1.5; }
+.capture-card-dialog li { margin: 8px 0; overflow-wrap: anywhere; }
+.capture-card-dialog footer { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 10px; margin-top: 24px; }
+.capture-card-assignment-list { display: grid; gap: 16px; margin-top: 20px; }
+.capture-card-assignment-list label { display: grid; gap: 6px; font-size: 14px; }
+.capture-card-assignment-list select { width: 100%; min-width: 0; padding: 10px; border: 1px solid #b9c9df; border-radius: 6px; background: white; color: #193250; font: inherit; }
+.capture-card-dialog :is(button, select):focus-visible { outline: 3px solid #7da4ed; outline-offset: 3px; }
 .capture-card-view {
   display: inline-flex;
   align-items: center;
@@ -317,7 +388,7 @@
   outline: 3px solid #7da4ed;
   outline-offset: 3px;
 }
-@media (max-width: 1050px) {
+@media (max-width: 1350px) {
   .range-metrics {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }

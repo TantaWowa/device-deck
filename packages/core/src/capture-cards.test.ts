@@ -2,7 +2,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   assignCaptureCard,
+  assignCaptureCards,
   assignCustomCaptureCard,
+  deleteCaptureCards,
   mergeCaptureCards,
 } from "./capture-cards";
 import { validateConfig } from "../../config/src";
@@ -246,4 +248,120 @@ test("custom assignments reject invalid names, duplicate identities and source c
     /name already exists/,
   );
   assert.deepEqual(config, before);
+});
+
+const pairedConfig = () => validateConfig({
+  ...emptyConfig(),
+  sources: cards,
+  devices: ["one", "two"].map((id, index) => ({
+    id,
+    name: id,
+    platform: "Android",
+    kind: "physical",
+    connection: { type: "adb", serial: id },
+    captureSourceId: cards[index].id,
+  })),
+});
+
+test("bulk assignments swap selected cards atomically using stable aliases", () => {
+  const config = pairedConfig();
+  const before = structuredClone(config);
+  const next = assignCaptureCards(config, [
+    { card: { ...cards[0], id: "driver-alias" }, deviceId: "two" },
+    { card: cards[1], deviceId: "one" },
+  ]);
+  assert.deepEqual(next.devices.map((device) => device.captureSourceId), [cards[1].id, cards[0].id]);
+  assert.deepEqual(next.sources, config.sources);
+  validateConfig(next);
+  assert.deepEqual(config, before);
+});
+
+test("bulk assignments reject duplicate targets, hardware, source IDs and unknown devices without partially applying", () => {
+  const config = pairedConfig();
+  const before = structuredClone(config);
+  assert.throws(() => assignCaptureCards(config, [
+    { card: cards[0], deviceId: "one" },
+    { card: cards[1], deviceId: "one" },
+  ]), /target device only once/);
+  assert.throws(() => assignCaptureCards(config, [
+    { card: cards[0], deviceId: "two" },
+    { card: { ...cards[0], id: "alias" }, deviceId: "one" },
+  ]), /capture card only once/);
+  assert.throws(() => assignCaptureCards(config, [
+    { card: cards[0], deviceId: null },
+    { card: cards[1], deviceId: "unknown" },
+  ]), /configured device/);
+  assert.throws(() => assignCaptureCard(config, cards[0], ""), /configured device/);
+  assert.throws(() => assignCaptureCard(config, { ...cards[0], uniqueId: "different-hardware" }, "one"), /source ID is already used/);
+  assert.throws(() => assignCaptureCards(emptyConfig(), [
+    { card: cards[0], deviceId: null },
+    { card: { ...cards[1], id: cards[0].id }, deviceId: null },
+  ]), /source ID is already used/);
+  assert.throws(() => assignCaptureCard(config, cards[2], "one"), /physical USB/);
+  assert.deepEqual(config, before);
+});
+
+test("bulk assignments preserve capture-only devices by allowing swaps and rejecting orphaning", () => {
+  const config = pairedConfig();
+  config.devices[0].connection = { type: "capture" };
+  config.devices[0].platform = "Other";
+  validateConfig(config);
+  assert.throws(() => assignCaptureCard(config, cards[0], null), /Capture-only devices require/);
+  assert.throws(() => assignCaptureCards(config, [
+    { card: cards[0], deviceId: "two" },
+    { card: cards[1], deviceId: null },
+  ]), /Capture-only devices require/);
+  const next = assignCaptureCards(config, [
+    { card: cards[0], deviceId: "two" },
+    { card: cards[1], deviceId: "one" },
+  ]);
+  assert.equal(next.devices.length, 2);
+  validateConfig(next);
+});
+
+test("bulk deletion clears ordinary bindings, removes capture-only targets and remembers hardware identities", () => {
+  const config = pairedConfig();
+  config.devices[1].connection = { type: "capture" };
+  config.devices[1].platform = "Other";
+  config.ignoredCaptureCardIds = ["previously-deleted"];
+  const before = structuredClone(config);
+  const next = deleteCaptureCards(config, [{ ...cards[0], id: "new-alias" }, cards[1]]);
+  assert.deepEqual(next.sources, [cards[2]]);
+  assert.deepEqual(next.devices, [{ ...config.devices[0], captureSourceId: null }]);
+  assert.deepEqual(next.ignoredCaptureCardIds, ["previously-deleted", "hardware-1", "hardware-2"]);
+  assert.deepEqual(deleteCaptureCards(next, cards.slice(0, 2)), next);
+  validateConfig(next);
+  assert.deepEqual(config, before);
+});
+
+test("deleting newly discovered cards persists suppression and rejects non-USB cards atomically", () => {
+  const config = emptyConfig();
+  assert.deepEqual(deleteCaptureCards(config, [cards[0]]).ignoredCaptureCardIds, ["hardware-1"]);
+  assert.throws(() => deleteCaptureCards(config, [cards[0], cards[2]]), /physical USB/);
+  assert.deepEqual(config.ignoredCaptureCardIds, []);
+});
+
+test("assigning a previously deleted card restores it and strips observed fields without retaining input references", () => {
+  const config = pairedConfig();
+  const removed = deleteCaptureCards(config, [cards[0]]);
+  const card = { ...cards[0], status: "connected", detail: "Observed" };
+  const next = assignCaptureCards(removed, [{ card, deviceId: "one" }]);
+  assert.deepEqual(next.ignoredCaptureCardIds, []);
+  assert.deepEqual(next.sources.find((source) => source.id === card.id), cards[0]);
+  next.sources.find((source) => source.id === card.id)!.name = "Updated output";
+  assert.equal(card.name, cards[0].name);
+  const custom = assignCustomCaptureCard(removed, card, { id: "custom", name: "Custom" });
+  assert.deepEqual(custom.ignoredCaptureCardIds, []);
+  validateConfig(custom);
+});
+
+test("configuration defaults deleted hardware IDs and prevents duplicate, empty, or simultaneously configured IDs", () => {
+  assert.deepEqual(emptyConfig().ignoredCaptureCardIds, []);
+  for (const ignoredCaptureCardIds of [[""], ["  "], ["hardware-1", "hardware-1"]])
+    assert.throws(() => validateConfig({ ...emptyConfig(), ignoredCaptureCardIds }));
+  assert.throws(() => validateConfig({
+    ...emptyConfig(),
+    sources: [cards[0]],
+    ignoredCaptureCardIds: [cards[0].uniqueId],
+  }), /deleted capture card cannot remain configured/);
 });

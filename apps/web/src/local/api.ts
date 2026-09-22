@@ -11,9 +11,11 @@ export async function api<T = any>(operation: Operation, args: unknown = {}, sig
     throw new Error(body.message || `Service returned ${response.status}`);
   return body;
 }
+let interruptedTicket: string | null = null;
 export async function bootstrap(signal?: AbortSignal) {
-  const ticket = new URLSearchParams(location.hash.slice(1)).get("ticket");
+  const ticket = new URLSearchParams(location.hash.slice(1)).get("ticket") || interruptedTicket;
   if (ticket) {
+    interruptedTicket = ticket;
     history.replaceState(null, "", location.pathname + location.search);
     const r = await fetch("/v1/bootstrap", {
       method: "POST",
@@ -21,6 +23,7 @@ export async function bootstrap(signal?: AbortSignal) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ticket }),
     });
+    interruptedTicket = null;
     if (!r.ok)
       throw new Error("This launch link expired. Run devdeck ui again.");
   }

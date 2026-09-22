@@ -21,6 +21,13 @@ export function FeedViewer({ sources, devices, renderActions, renderPreview, lau
     const ids = query.get("sources");
     return ids !== null ? ids.split(",").filter(Boolean) : cards.filter((source) => source.status === "connected").map((source) => source.id);
   });
+  const selectInitialFeeds = useRef(!query.has("sources"));
+  useEffect(() => {
+    if (!selectInitialFeeds.current) return;
+    if (selected.length) { selectInitialFeeds.current = false; return; }
+    const connected = cards.filter((source) => source.status === "connected").map((source) => source.id);
+    if (connected.length) { selectInitialFeeds.current = false; setSelected(connected); }
+  }, [cards, selected.length]);
   const [layout, setLayout] = useState(query.get("layout") === "single" ? "single" : "grid");
   const [active, setActive] = useState(query.get("active") || selected[0] || "");
   const [error, setError] = useState("");
@@ -28,9 +35,10 @@ export function FeedViewer({ sources, devices, renderActions, renderPreview, lau
   const [pickerOpen, setPickerOpen] = useState(false);
   const [pickerHeight, setPickerHeight] = useState<number>();
   const [search, setSearch] = useState("");
-  const [simulatorsOnly, setSimulatorsOnly] = useState(false);
+  const [inputKind, setInputKind] = useState<"all" | "simulators" | "capture-cards">("all");
   const [formFactor, setFormFactor] = useState(() => ["tv", "phone", "other"].includes(query.get("deviceType") || "") ? query.get("deviceType")! : "");
   const [launching, setLaunching] = useState<string | null>(null);
+  const [awaitingFeed, setAwaitingFeed] = useState<{ id: string; name: string } | null>(null);
   const viewer = useRef<HTMLDivElement>(null);
   const picker = useRef<HTMLDivElement>(null);
   const pickerButton = useRef<HTMLButtonElement>(null);
@@ -58,7 +66,7 @@ export function FeedViewer({ sources, devices, renderActions, renderPreview, lau
       setActive(requestedSources[0].id); setLayout(requestedSources.length > 1 ? "grid" : "single"); setPickerOpen(false);
     } else {
       const target = devices.find((device) => device.id === request.deviceIds[0]);
-      setSearch(target?.name || ""); setSimulatorsOnly(Boolean(target && supportsSimulatorLifecycle(target))); setPickerOpen(true);
+      setSearch(target?.name || ""); setInputKind(target && supportsSimulatorLifecycle(target) ? "simulators" : "all"); setPickerOpen(true);
       setNotice(target ? `Choose or launch the screen feed for ${target.name}. Touch starts disabled.` : "Choose a screen feed to continue.");
     }
   }, [request, cards, devices]);
@@ -66,18 +74,32 @@ export function FeedViewer({ sources, devices, renderActions, renderPreview, lau
     if (launching) return;
     setLaunching(device.id); setError(""); setNotice(`Booting ${device.name}. Waiting for its screen…`);
     try {
-      const latest = await launchSimulator(device);
+      await launchSimulator(device);
       if (!mounted.current) return;
-      const started = latest.devices.find((entry) => entry.id === device.id);
-      const source = latest.sources.find((entry) => entry.kind === "native" && entry.deviceId === device.id) || latest.sources.find((entry) => entry.id === started?.captureSourceId);
-      if (!started?.online || deviceIsBooting(started)) throw new Error(`${device.name} has not finished booting. ${started?.healthDetail || "Try again once its runtime is ready."}`);
-      if (!source || source.status !== "connected") throw new Error(`${device.name} started, but its screen feed is unavailable. ${source?.detail || started.healthDetail || "Check the simulator runtime and capture tools."}`);
-      setFormFactor((current) => !current || deviceFormFactor(started) === current ? current : "");
-      reveal(source.id);
-      setNotice(`${device.name} started. Connecting its feed; use the feed's controls once video arrives.`);
-    } catch (failure) { if (mounted.current) { setError((failure as Error).message); setNotice(""); } }
-    finally { if (mounted.current) setLaunching(null); }
+      // Ordinary inventory returns immediately while readiness is refreshed.
+      // A checking/stale snapshot after a successful launch is not a failure.
+      setAwaitingFeed({ id: device.id, name: device.name });
+      setNotice(`${device.name} started. Waiting for its updated screen status…`);
+    } catch (failure) { if (mounted.current) { setError((failure as Error).message); setNotice(""); setLaunching(null); } }
   };
+  useEffect(() => {
+    if (!awaitingFeed) return;
+    const started = devices.find((entry) => entry.id === awaitingFeed.id);
+    const source = sources.find((entry) => entry.kind === "native" && entry.deviceId === awaitingFeed.id) || sources.find((entry) => entry.id === started?.captureSourceId);
+    if (!started?.online || deviceIsBooting(started) || started.observation?.stale || source?.status !== "connected" || source.observation?.stale) return;
+    setFormFactor((current) => !current || deviceFormFactor(started) === current ? current : "");
+    reveal(source.id);
+    setNotice(`${awaitingFeed.name} started. Connecting its feed; use the feed's controls once video arrives.`);
+    setAwaitingFeed(null); setLaunching(null);
+  }, [awaitingFeed, devices, sources]);
+  useEffect(() => {
+    if (!awaitingFeed) return;
+    const timer = setTimeout(() => {
+      setError(`${awaitingFeed.name} started, but its screen status has not become ready. Check the device status and choose its feed when it is available.`);
+      setAwaitingFeed(null); setLaunching(null); setNotice("");
+    }, 60_000);
+    return () => clearTimeout(timer);
+  }, [awaitingFeed]);
   const fullscreen = async () => {
     try { if (document.fullscreenElement) await document.exitFullscreen(); else await viewer.current?.requestFullscreen(); }
     catch (failure) { setError((failure as Error).message); }
@@ -113,8 +135,8 @@ export function FeedViewer({ sources, devices, renderActions, renderPreview, lau
   const rows: { key: string; source?: Source; device?: Device; name: string }[] = [
     ...cards.map((source) => ({ key: source.id, source, device: deviceFor(source), name: source.name })),
     ...devices.filter((device) => supportsSimulatorLifecycle(device) && !cards.some((source) => deviceFor(source)?.id === device.id))
-      .map((device) => ({ key: `device:${device.id}`, device, name: device.name })),
-  ].filter((row) => matchesType(row.device) && (!simulatorsOnly || Boolean(row.device && supportsSimulatorLifecycle(row.device))) && `${row.name} ${row.device?.name || ""} ${row.device?.platform || ""}`.toLowerCase().includes(search.toLowerCase().trim()));
+      .map((device) => ({ key: `device:${device.id}`, source: undefined, device, name: device.name })),
+  ].filter((row) => matchesType(row.device) && (inputKind === "all" || (inputKind === "capture-cards" ? row.source?.kind === "usb" : Boolean(row.device && supportsSimulatorLifecycle(row.device)))) && `${row.name} ${row.device?.name || ""} ${row.device?.platform || ""}`.toLowerCase().includes(search.toLowerCase().trim()));
   const visible = layout === "grid" ? feeds : current ? [current] : [];
   return <div ref={viewer} className="feed-viewer">
     <div className="live-heading"><div><span className="eyebrow">CAPTURE WORKSPACE</span><h1>Live feeds</h1><p>Choose a feed or start a simulator, then control its screen.</p></div><div className="live-actions">
@@ -125,24 +147,25 @@ export function FeedViewer({ sources, devices, renderActions, renderPreview, lau
     <div className="feed-toolbar">
       <DeviceTypeFilter value={formFactor} onChange={setFormFactor} />
       <div ref={picker} className="feed-selector">
-        <button ref={pickerButton} className="feed-selector-trigger" aria-expanded={pickerOpen} aria-controls="local-feed-selector" onClick={() => { setSimulatorsOnly(false); setPickerOpen((open) => !open); }}><ListFilter size={17} />Choose feeds<span>{feeds.length} selected</span><ChevronDown size={15} /></button>
-        <button className="feed-launch-trigger" onClick={() => { setSearch(""); setSimulatorsOnly(true); setPickerOpen(true); }}><Play size={15} />Start simulator</button>
+        <button ref={pickerButton} className="feed-selector-trigger" aria-expanded={pickerOpen} aria-controls="local-feed-selector" onClick={() => { setInputKind("all"); setPickerOpen((open) => !open); }}><ListFilter size={17} />Choose feeds<span>{feeds.length} selected</span><ChevronDown size={15} /></button>
+        <button className="feed-launch-trigger" onClick={() => { setSearch(""); setInputKind("simulators"); setPickerOpen(true); }}><Play size={15} />Start simulator</button>
         {pickerOpen && <div id="local-feed-selector" className="feed-selector-panel" style={{ maxHeight: pickerHeight }} role="dialog" aria-label="Choose feeds" aria-busy={Boolean(launching)}>
-          <header><strong>{simulatorsOnly ? "Simulators & emulators" : "Available feeds"}</strong><button aria-label="Close feed selector" onClick={() => setPickerOpen(false)}><X size={17} /></button></header>
+          <header><strong>{inputKind === "simulators" ? "Simulators & emulators" : "Available feeds"}</strong><button aria-label="Close feed selector" onClick={() => setPickerOpen(false)}><X size={17} /></button></header>
           <div className="feed-selector-search"><Search size={16} /><input ref={searchInput} aria-label="Search feeds" placeholder="Search devices and inputs" value={search} onChange={(event) => setSearch(event.target.value)} /></div>
-          <div className="feed-selector-filters"><button aria-pressed={!simulatorsOnly} onClick={() => setSimulatorsOnly(false)}>All inputs</button><button aria-pressed={simulatorsOnly} onClick={() => setSimulatorsOnly(true)}>Simulators</button></div>
+          <div className="feed-selector-filters" role="group" aria-label="Input type"><button aria-pressed={inputKind === "all"} onClick={() => setInputKind("all")}>All inputs</button><button aria-pressed={inputKind === "simulators"} onClick={() => setInputKind("simulators")}>Simulators</button><button aria-pressed={inputKind === "capture-cards"} onClick={() => setInputKind("capture-cards")}>Capture cards</button></div>
           {error && <p className="feed-selector-error" role="alert">{error}</p>}
           <div className="feed-selector-list">{rows.map(({ key, source, device, name }) => {
             const simulator = device && supportsSimulatorLifecycle(device);
             const booting = launching === device?.id || Boolean(device && deviceIsBooting(device));
             const pending = booting || device?.simulatorState === "stopping";
-            const stopped = simulator && !device.online;
+            const checking = source?.status === "unknown" || device?.observation?.observedAt === null;
+            const stopped = simulator && !device.online && !checking;
             return <div className="feed-selector-row" key={key} data-feed-option={key}>
               {source ? <input type="checkbox" aria-label={`Show ${name}`} checked={selected.includes(source.id)} onChange={(event) => setSelected((ids) => event.target.checked ? [...ids, source.id] : ids.filter((id) => id !== source.id))} /> : <Monitor size={17} />}
-              <div><strong>{name}</strong><small>{device?.name !== name && device?.name ? `${device.name} · ` : ""}{pending ? device?.simulatorState === "stopping" ? "Stopping…" : "Booting…" : stopped ? `${device.platform} · Stopped` : source?.status === "connected" ? "Available" : "Input unavailable"}</small>{device?.simulatorState === "unavailable" && <small>{device.healthDetail}</small>}</div>
+              <div><strong>{name}</strong><small>{device?.name !== name && device?.name ? `${device.name} · ` : ""}{checking ? "Checking availability…" : pending ? device?.simulatorState === "stopping" ? "Stopping…" : "Booting…" : stopped ? `${device.platform} · Stopped` : source?.status === "connected" ? "Available" : "Input unavailable"}</small>{device?.simulatorState === "unavailable" && <small>{device.healthDetail}</small>}</div>
               {stopped || (simulator && !source) ? <button type="button" aria-label={`Launch ${device.name} and show feed`} disabled={Boolean(launching) || pending || device.locked || device.simulatorState === "unavailable" || !canLaunchSimulator(device)} onClick={() => void launch(device)}>{pending ? <LoaderCircle className="simulator-spinner" size={14} /> : <Play size={14} />}{pending ? device.simulatorState === "stopping" ? "Stopping…" : "Booting…" : "Launch & show feed"}</button> : source && <button type="button" aria-label={`Open ${name} feed`} onClick={() => reveal(source.id)}>{selected.includes(source.id) && <Check size={14} />}Show feed</button>}
             </div>;
-          })}{!rows.length && <p className="feed-selector-empty">{search || formFactor ? "No feeds match your filters." : simulatorsOnly ? "No simulators configured. Add one from Devices." : "No capture inputs configured yet."}</p>}</div>
+          })}{!rows.length && <p className="feed-selector-empty">{search || formFactor ? "No feeds match your filters." : inputKind === "simulators" ? "No simulators configured. Add one from Devices." : inputKind === "capture-cards" ? "No capture cards available. Discover cards from Capture Cards." : "No capture inputs configured yet."}</p>}</div>
           <footer><span>{feeds.length} shown · {selected.length} selected</span><button onClick={() => setSelected((ids) => [...new Set([...ids, ...rows.flatMap((row) => row.source?.status === "connected" ? [row.source.id] : [])])])}>Show available</button><button onClick={() => setSelected((ids) => ids.filter((id) => !rows.some((row) => row.source?.id === id)))}>Clear</button></footer>
         </div>}
       </div>
@@ -160,7 +183,7 @@ export function FeedViewer({ sources, devices, renderActions, renderPreview, lau
         const stopping = device?.simulatorState === "stopping";
         return <section key={source.id} data-feed-source={source.id} className={`feed-tile ${current?.id === source.id ? "active" : ""}`}>
           <button className="feed-title" onClick={() => { setActive(source.id); setLayout("single"); }} title="Open this feed"><strong>{source.name}</strong><span className={booting ? "feed-booting-label" : ""}>{booting ? `${device?.name || source.name} · Booting…` : device?.name || (source.kind === "usb" ? "USB capture" : "Device screen")}</span></button>
-          {booting || stopping || source.status === "missing" ? <div className={`feed-offline${booting ? " feed-booting" : ""}`} role="status">{booting && <LoaderCircle className="simulator-spinner" size={24} />}<span>{booting ? `${device?.name || source.name} is booting. Waiting for its screen…` : stopping ? `${device?.name} is stopping…` : device && supportsSimulatorLifecycle(device) && !device.online ? `${device.name} is stopped.` : "Input unavailable. Connect the device to resume."}</span>{device && canLaunchSimulator(device) && !device.online && !booting && !stopping && <button type="button" className="primary" disabled={Boolean(launching) || device.locked || device.simulatorState === "unavailable"} onClick={() => void launch(device)}><Play size={15} />Launch & show feed</button>}</div> : renderPreview ? renderPreview(source) : <CapturePreview name={source.name} endpoint={source.kind === "usb" ? `/v1/source-preview/${encodeURIComponent(source.id)}` : `/v1/preview/${encodeURIComponent(source.deviceId!)}`} />}
+          {source.status === "unknown" ? <div className="feed-offline" role="status"><LoaderCircle className="simulator-spinner" size={24} /><span>Checking capture input…</span></div> : booting || stopping || source.status === "missing" ? <div className={`feed-offline${booting ? " feed-booting" : ""}`} role="status">{booting && <LoaderCircle className="simulator-spinner" size={24} />}<span>{booting ? `${device?.name || source.name} is booting. Waiting for its screen…` : stopping ? `${device?.name} is stopping…` : device && supportsSimulatorLifecycle(device) && !device.online ? `${device.name} is stopped.` : "Input unavailable. Connect the device to resume."}</span>{device && canLaunchSimulator(device) && !device.online && !booting && !stopping && <button type="button" className="primary" disabled={Boolean(launching) || device.locked || device.simulatorState === "unavailable"} onClick={() => void launch(device)}><Play size={15} />Launch & show feed</button>}</div> : renderPreview ? renderPreview(source) : <CapturePreview name={source.name} endpoint={source.kind === "usb" ? `/v1/source-preview/${encodeURIComponent(source.id)}` : `/v1/preview/${encodeURIComponent(source.deviceId!)}`} />}
           {renderActions(source)}
         </section>;
       })}

@@ -307,7 +307,7 @@ try {
           ? "../../../packages/mcp/src/index"
           : "../../tui/src/index"
       );
-    } else if (command === "discover") result = await callOperation("discover");
+    } else if (command === "discover") result = await callOperation("discover", { refresh: true });
     else if (command === "config") {
       const sub = p[1] || "get";
       if (sub === "validate") {

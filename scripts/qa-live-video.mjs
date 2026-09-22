@@ -11,6 +11,7 @@ import { chromium, expect } from "@playwright/test";
 const output = path.resolve(process.env.QA_LIVE_OUTPUT || "outputs/live-video-qa");
 const portalOnly = process.env.QA_LIVE_FOCUS === "portal";
 const mobileOnly = process.env.QA_LIVE_FOCUS === "mobile";
+const backgroundOnly = process.env.QA_LIVE_FOCUS === "background";
 const fixture = JSON.parse(await readFile(path.join(output, "fixture.json"), "utf8"));
 const origin = new URL(fixture.base);
 assert.equal(origin.hostname, "127.0.0.1", "Only the loopback synthetic fixture may be controlled.");
@@ -358,6 +359,51 @@ async function fallbackCase() {
     console.log("PASS profile switching and explicit view-only snapshot fallback");
   } finally { await page.close(); }
 }
+async function backgroundCase(isPortal) {
+  const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+  const observed = observe(page);
+  const requests = [];
+  page.on("request", (request) => { const operation = request.url().split("/v1/operations/")[1]; if (operation) requests.push(operation); });
+  await page.addInitScript(() => {
+    window.syntheticHidden = false;
+    Object.defineProperty(document, "hidden", { configurable: true, get: () => window.syntheticHidden });
+    window.setSyntheticHidden = (hidden) => { window.syntheticHidden = hidden; document.dispatchEvent(new Event("visibilitychange")); };
+  });
+  try {
+    await page.goto(isPortal ? portal.url : await ticketUrl());
+    if (!isPortal) await page.getByRole("button", { name: "Feeds", exact: true }).click();
+    await movingVideo(page);
+    const count = (operation) => requests.filter((name) => name === operation).length;
+    const hideAndCheck = async (milliseconds) => {
+      const before = { inventory: count("inventory"), open: count("streams.open"), close: count("streams.close"), ping: count("streams.ping") };
+      await page.evaluate(() => window.setSyntheticHidden(true));
+      await movingVideo(page, milliseconds);
+      assert.equal(count("inventory"), before.inventory, "Hidden pages must stop ordinary inventory");
+      assert.equal(count("streams.open"), before.open, "Hiding must retain the existing media peer");
+      assert.equal(count("streams.close"), before.close, "Hiding must not close the media peer");
+      assert.ok(count("streams.ping") > before.ping, "Active streams retain their independent heartbeat");
+      await page.evaluate(() => window.setSyntheticHidden(false));
+      await expect.poll(() => count("inventory")).toBe(before.inventory + 1);
+    };
+    await hideAndCheck(16_500);
+    const feed = page.locator('[data-feed-source="qa-native"]');
+    const toggle = feed.getByRole("switch", { name: "Enable touch", exact: true });
+    await toggle.click();
+    await feed.locator(".deck-touch-enabled").waitFor({ timeout: 35_000 });
+    await movingVideo(page);
+    await hideAndCheck(6500);
+    await expect(toggle).not.toBeChecked();
+    await expect(feed.locator(".deck-touch-enabled")).toHaveCount(0);
+    const beforeInput = (await readInputs()).filter((event) => ["down", "move", "up", "tap"].includes(event.type)).length;
+    await feed.locator("video").click();
+    await page.waitForTimeout(300);
+    assert.equal((await readInputs()).filter((event) => ["down", "move", "up", "tap"].includes(event.type)).length, beforeInput, "Returning to the page cannot reapprove touch");
+    assert.ok((await api("inventory")).sessions.some((session) => session.deviceId === "android" && session.state === "active"));
+    assert.deepEqual(observed.errors, []);
+    results.cases.push({ name: `${isPortal ? "portal" : "local"}-background-lifetimes`, passed: true, simulatedVisibility: true, hiddenVideoBeyondStreamExpiry: true, independentHeartbeats: true, touchRequiresReapproval: true });
+    console.log(`PASS ${isPortal ? "portal" : "local"}: ordinary polls stop; hidden preview and pings survive; touch stays disarmed`);
+  } finally { await Promise.all(observed.pending); await page.close(); await cleanup(); }
+}
 async function startPortal() {
   await build({ entryPoints: ["scripts/fixtures/live-portal.tsx"], bundle: true, format: "esm", outfile: path.join(output, "portal-harness.js"), loader: { ".css": "css" } });
   const server = createServer(async (request, response) => {
@@ -392,6 +438,10 @@ try {
   browser = await chromium.launch({ headless: true, channel: process.env.PLAYWRIGHT_CHANNEL || "chrome" });
   results.browser = browser.version();
   portal = await startPortal();
+  if (backgroundOnly) {
+    await backgroundCase(false);
+    await backgroundCase(true);
+  } else {
   for (const isPortal of portalOnly ? [true] : [false, true])
     for (const viewport of mobileOnly ? [{ width: 390, height: 844 }] : [{ width: 1440, height: 1000 }, { width: 390, height: 844 }])
       await workspaceCase(viewport, isPortal);
@@ -401,6 +451,7 @@ try {
     await simulatorCase(isPortal, "apple-sim", "Synthetic Apple simulator");
   }
   if (!portalOnly && !mobileOnly) await simulatorCase(false, "android-sim", "Synthetic Android emulator", true);
+  }
   results.passed = true;
 } catch (error) {
   results.failure = error instanceof Error ? error.stack : String(error);
@@ -410,7 +461,7 @@ try {
   await cleanup();
   await portal?.close();
   results.finishedAt = new Date().toISOString();
-  const resultFile = path.join(output, mobileOnly ? "mobile-results.json" : portalOnly ? "portal-results.json" : "results.json");
+  const resultFile = path.join(output, backgroundOnly ? "background-results.json" : mobileOnly ? "mobile-results.json" : portalOnly ? "portal-results.json" : "results.json");
   await writeFile(resultFile, JSON.stringify(results, null, 2));
   console.log(`Evidence: ${resultFile}`);
 }

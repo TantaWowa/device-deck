@@ -16,16 +16,19 @@ type TableDevice = Pick<
   | "readiness"
   | "captureSourceId"
   | "visibility"
+  | "observation"
 >;
 type TableSession = Pick<Session, "deviceId" | "state" | "owner" | "reason">;
 
 export function deviceConnectionLabel(
-  device: Pick<Device, "online" | "simulatorState" | "readiness">,
+  device: Pick<Device, "online" | "simulatorState" | "readiness" | "observation">,
 ) {
   return deviceIsBooting(device)
     ? "Booting…"
     : device.simulatorState === "stopping"
       ? "Closing…"
+      : device.observation?.observedAt === null
+        ? device.observation.error ? "Status unavailable" : "Checking…"
       : device.simulatorState === "shutdown"
         ? "Stopped"
         : device.online
@@ -34,9 +37,9 @@ export function deviceConnectionLabel(
 }
 
 export function deviceAvailabilityLabel(
-  device: Pick<Device, "locked" | "online" | "readiness" | "simulatorState">,
+  device: Pick<Device, "locked" | "online" | "readiness" | "simulatorState" | "observation">,
 ) {
-  return device.locked ? "Locked" : device.online && !deviceIsBooting(device) && device.simulatorState !== "stopping" ? "Available" : "Unavailable";
+  return device.locked ? "Locked" : device.observation?.observedAt === null && !deviceIsBooting(device) ? "Checking…" : device.online && !deviceIsBooting(device) && device.simulatorState !== "stopping" ? "Available" : "Unavailable";
 }
 
 export function deviceIsBooting(device: Pick<Device, "readiness" | "simulatorState">) {

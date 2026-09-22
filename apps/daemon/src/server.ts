@@ -204,6 +204,7 @@ export function createService(
             pid: process.pid,
             operations: Object.keys(operations),
             diagnostics: deck.diagnostics,
+            inventory: deck.inventoryDiagnostics?.(),
           });
           return;
         }
@@ -272,6 +273,12 @@ export function createService(
           };
           authorize.access = hub;
           reply(200, await deck.execute(operation as Operation, value, origin, authorize));
+          return;
+        }
+        if (req.method === "GET" && url.pathname.startsWith("/v1/capture-card-thumbnail/")) {
+          const data = await deck.captureCardThumbnail(decodeURIComponent(url.pathname.slice("/v1/capture-card-thumbnail/".length)));
+          res.writeHead(200, { "Content-Type": "image/jpeg", "Content-Length": data.length });
+          res.end(data);
           return;
         }
         if (

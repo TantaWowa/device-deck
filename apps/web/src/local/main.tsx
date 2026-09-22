@@ -1,6 +1,7 @@
 import { FloatingRemote } from "./FloatingRemote";
 import { AccountConnection } from "./AccountConnection";
 import { ConnectionScreen } from "./ConnectionScreen";
+import { useInventoryPolling } from "./useInventoryPolling";
 import { browserUUID } from "../../../../packages/ui/src/uuid";
 import { AnchoredPopover } from "./AnchoredPopover";
 import type { PopupAnchor } from "./anchored-popup";
@@ -31,11 +32,12 @@ import { CaptureCards, type CardView } from "../components/CaptureCards";
 import {
   assignCaptureCard,
   assignCustomCaptureCard,
+  assignCaptureCards,
+  deleteCaptureCards,
 } from "../../../../packages/core/src/capture-cards";
 import React, {
   useState,
   useEffect,
-  useCallback,
   useRef,
   type ReactNode,
 } from "react";
@@ -184,12 +186,13 @@ function App() {
   } | null>(null);
   const [cards, setCards] = useState<{
     sources: (SourceConfig & {
-      status: "connected" | "missing";
+      status: "connected" | "missing" | "unknown";
       detail?: string;
     })[];
     diagnostics: string[];
   }>({ sources: [], diagnostics: [] });
   const [cardsLoading, setCardsLoading] = useState(false);
+  const currentSnapshot = useRef<Snapshot | null>(null);
   const [data, setData] = useState<Snapshot | null>(null),
     [connectionError, setConnectionError] = useState(""),
     [error, setError] = useState(""),
@@ -200,22 +203,17 @@ function App() {
         ? "Feeds"
         : "Devices",
     );
-  const refreshCards = async () => {
+  const refreshCards = useInventoryPolling(async (signal, manual) => {
     setCardsLoading(true);
     try {
-      setCards(await api("capture-cards.list"));
+      const result = await api<typeof cards>("capture-cards.list", manual ? { refresh: true } : {}, AbortSignal.any([signal, AbortSignal.timeout(15_000)]));
+      if (!signal.aborted) setCards(result);
     } catch (e) {
-      setCards((prev) => ({ ...prev, diagnostics: [(e as Error).message] }));
+      if (!signal.aborted) setCards((prev) => ({ ...prev, diagnostics: [(e as Error).message] }));
     } finally {
-      setCardsLoading(false);
+      if (!signal.aborted) setCardsLoading(false);
     }
-  };
-  useEffect(() => {
-    if (tab !== "Capture Cards" || !data) return;
-    void refreshCards();
-    const timer = setInterval(refreshCards, 10000);
-    return () => clearInterval(timer);
-  }, [tab, Boolean(data), data?.configRevision]);
+  }, { enabled: tab === "Capture Cards" && Boolean(data), intervalMs: 10_000, identity: data?.configRevision });
   const [filter, setFilter] = useState({
       search: "",
       platform: "",
@@ -263,36 +261,27 @@ function App() {
   const [overlay, setOverlay] = useState(true);
   const [openArtifactId, setOpenArtifactId] = useState<string | null>(null);
   const captureFeedback = useCaptureFeedback(data?.artifacts);
-  const polling = useRef(false);
-  const refresh = useCallback(async () => {
-    if (polling.current) return;
-    polling.current = true;
+  const bootstrapped = useRef(false);
+  const bootstrapFailed = useRef(false);
+  const refresh = useInventoryPolling(async (signal) => {
+    if (bootstrapFailed.current) return;
     try {
-      const d = await api("inventory", {}, AbortSignal.timeout(30_000));
+      if (!bootstrapped.current) {
+        await bootstrap(AbortSignal.any([signal, AbortSignal.timeout(15_000)]));
+        if (signal.aborted) return;
+        bootstrapped.current = true;
+      }
+      const d = await api("inventory", {}, AbortSignal.any([signal, AbortSignal.timeout(30_000)]));
+      if (signal.aborted) return;
+      currentSnapshot.current = d;
       setData(d);
       setConnectionError("");
     } catch (e) {
+      if (signal.aborted) return;
+      if (!bootstrapped.current) bootstrapFailed.current = true;
       setConnectionError((e as Error).name === "TimeoutError" ? "The connection timed out. Check that Device Deck is running and this machine is reachable." : (e as Error).message);
-    } finally {
-      polling.current = false;
     }
-  }, []);
-  useEffect(() => {
-    let stopped = false;
-    let timer: ReturnType<typeof setInterval> | undefined;
-    void bootstrap(AbortSignal.timeout(15_000))
-      .then(async () => {
-        if (!stopped) await refresh();
-        if (!stopped) timer = setInterval(refresh, 2500);
-      })
-      .catch((e) => {
-        if (!stopped) setConnectionError(e.name === "TimeoutError" ? "The connection timed out. Check that Device Deck is running and this machine is reachable." : e.message);
-      });
-    return () => {
-      stopped = true;
-      clearInterval(timer);
-    };
-  }, [refresh]);
+  }, { intervalMs: 2500 });
   useEffect(
     () => localStorage.setItem("deck-local-leases", JSON.stringify(leases)),
     [leases],
@@ -641,6 +630,10 @@ function App() {
         {data.configError && (
           <div className="live-alert">{data.configError}</div>
         )}
+        {data.inventoryObservation?.stale && <div className="live-notice" role="status">
+          {data.inventoryObservation.observedAt === null ? "Checking device availability…" : `Showing device status last checked ${new Date(data.inventoryObservation.observedAt).toLocaleTimeString()}.`}
+          {data.inventoryObservation.error ? ` ${data.inventoryObservation.error}` : data.inventoryObservation.refreshing ? " Refreshing…" : " Status refreshes while this page is visible."}
+        </div>}
         {notice && (
           <div className="live-notice" role="status">
             {notice}
@@ -654,9 +647,8 @@ function App() {
             devices={data.devices}
             launchSimulator={async (device) => {
               await api("devices.simulator", { deviceId: device.id, action: "launch" }, AbortSignal.timeout(300_000));
-              const latest = await api<Snapshot>("inventory");
-              setData(latest);
-              return latest;
+              await refresh();
+              return currentSnapshot.current || data;
             }}
             renderPreview={(source) => {
               const device = data.devices.find((entry) => entry.id === source.deviceId || entry.captureSourceId === source.id);
@@ -715,7 +707,7 @@ function App() {
                   className="primary"
                   onClick={() =>
                     perform(async () => {
-                      setDiscovery(await action("discover"));
+                      setDiscovery(await action("discover", { refresh: true }));
                       setShowDiscovery(true);
                     })
                   }
@@ -1251,6 +1243,7 @@ function App() {
             cards={cards.sources.map((s) => ({
               ...s,
               uniqueId: s.uniqueId!,
+              thumbnailUrl: `/v1/capture-card-thumbnail/${encodeURIComponent(s.id)}`,
               deviceId: data.devices.find((d) => d.captureSourceId === s.id)
                 ?.id,
             }))}
@@ -1264,7 +1257,26 @@ function App() {
             busy={busy}
             loading={cardsLoading}
             diagnostics={cards.diagnostics}
-            refresh={() => void refreshCards()}
+            revision={data.configRevision}
+            deletedCount={data.config.ignoredCaptureCardIds?.length || 0}
+            restoreDeleted={async () => {
+              await saveConfig({ ...data.config, ignoredCaptureCardIds: [] });
+              await refreshCards();
+            }}
+            remove={async (selectedCards) => {
+              await saveConfig(deleteCaptureCards(data.config, selectedCards.map((card) => ({
+                id: card.id, name: card.name, kind: "usb", uniqueId: card.uniqueId,
+              }))));
+              await refreshCards();
+            }}
+            assignMany={async (assignments) => {
+              await saveConfig(assignCaptureCards(data.config, assignments.map(({ card, deviceId }) => ({
+                card: { id: card.id, name: card.name, kind: "usb", uniqueId: card.uniqueId }, deviceId,
+              }))));
+              await refreshCards();
+            }}
+            viewMany={openDeviceFeeds}
+            refresh={() => void refreshCards(true)}
             view={(id) => {
               setTab("Devices");
               openViewer([id]);

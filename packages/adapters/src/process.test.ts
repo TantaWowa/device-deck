@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { chmod, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { setTimeout as delay } from "node:timers/promises";
 import os from "node:os";
 import path from "node:path";
 import { available, run } from "./process";
@@ -8,6 +9,31 @@ import { available, run } from "./process";
 test("commands with empty stderr still report a useful failure or timeout", async () => {
   await assert.rejects(run(process.execPath, ["-e", "process.exit(7)"]), /Command failed/);
   await assert.rejects(run(process.execPath, ["-e", "setTimeout(() => {}, 5000)"], 100), /Timed out/);
+});
+
+test("aborting a probe escalates an uncooperative owned child and waits for its exit", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "deck-probe-abort-"));
+  const pidFile = path.join(directory, "pid");
+  const controller = new AbortController();
+  const pending = run(process.execPath, ["-e", "process.on('SIGTERM', () => {}); require('node:fs').writeFileSync(process.argv[1], String(process.pid)); setInterval(() => {}, 1000)", pidFile], 10_000, { signal: controller.signal });
+  const rejected = assert.rejects(pending, /cancelled/);
+  try {
+    let pid: number | undefined;
+    for (let i = 0; i < 200; i++) {
+      const text = await readFile(pidFile, "utf8").catch(() => "");
+      if (text) { pid = Number(text); break; }
+      await delay(10);
+    }
+    assert.ok(pid, "the controlled fixture started");
+    controller.abort();
+    await rejected;
+    assert.throws(() => process.kill(pid!, 0), /ESRCH/, "run cannot settle while the child remains alive");
+    await assert.rejects(run(process.execPath, ["-e", "process.exit(0)"], 1000, { signal: controller.signal }), /cancelled/);
+  } finally {
+    controller.abort();
+    await rejected;
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test("tool availability follows executable files and symlinks without retaining stale installation state", async () => {

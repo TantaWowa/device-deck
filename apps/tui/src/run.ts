@@ -30,6 +30,7 @@ export async function runWorkspace(
       }
     }
   } finally {
+    workspace.dispose();
     ui.close();
   }
 }

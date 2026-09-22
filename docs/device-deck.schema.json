@@ -346,6 +346,14 @@
           },
           "default": []
         },
+        "ignoredCaptureCardIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "default": []
+        },
         "settings": {
           "type": "object",
           "properties": {

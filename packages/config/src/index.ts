@@ -44,6 +44,8 @@ export function validateConfig(value: unknown) {
     ids.add(s.id);
     if (s.kind === "usb" && !s.uniqueId)
       fail("invalid-config", "USB sources require a stable uniqueId.");
+    if (s.kind === "usb" && c.ignoredCaptureCardIds.includes(s.uniqueId!))
+      fail("invalid-config", "A deleted capture card cannot remain configured.");
     if (s.kind === "native" && !s.deviceId)
       fail("invalid-config", "Native sources require a deviceId.");
     const identity = sourceIdentity(s);

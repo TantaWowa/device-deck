@@ -8,7 +8,7 @@
 .feed-selector-panel > header > button { display: grid; place-items: center; padding: 5px; border: 0; background: transparent; }
 .feed-selector-search { display: flex; align-items: center; gap: 8px; margin: 5px 14px 10px; padding: 7px 10px; border: 1px solid #d9e0e9; border-radius: 7px; color: #7a8796; }
 .feed-selector-search input { padding: 0; min-width: 0; width: 100%; border: 0; outline: 0; font-size: 13px; }
-.feed-selector-filters { display: flex; gap: 6px; padding: 0 14px 10px; }
+.feed-selector-filters { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 14px 10px; }
 .feed-selector-filters button { font-size: 11px; padding: 5px 9px; }
 .feed-selector-list { max-height: min(420px, 50dvh); overflow-y: auto; border-top: 1px solid #edf0f4; }
 .feed-selector-row { display: flex; align-items: center; gap: 10px; padding: 11px 14px; border-bottom: 1px solid #edf0f4; }

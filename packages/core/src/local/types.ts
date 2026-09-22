@@ -144,6 +144,9 @@ export const configSchema = z
     network: networkSchema.optional(),
     devices: z.array(deviceSchema).default([]),
     sources: z.array(sourceSchema).default([]),
+    ignoredCaptureCardIds: z.array(z.string().min(1).refine((id) => Boolean(id.trim()), "A capture card hardware ID cannot be blank."))
+      .refine((ids) => new Set(ids).size === ids.length, "Ignored capture card hardware IDs must be unique.")
+      .default([]),
     settings: settingsSchema,
     tools: z
       .object({
@@ -167,7 +170,15 @@ export const configSchema = z
   })
   .strict();
 export type Config = z.infer<typeof configSchema>;
+export type Observation = {
+  observedAt: number | null;
+  refreshing: boolean;
+  stale: boolean;
+  error: string | null;
+  nextRefreshAt: number;
+};
 export type Device = DeviceConfig & {
+  observation?: Observation;
   readiness?: "starting" | "ready" | "offline";
   simulatorState?:
     "booted" | "shutdown" | "starting" | "stopping" | "unavailable";
@@ -189,8 +200,9 @@ export const canLaunchSimulator = (d: DeviceConfig) =>
   supportsSimulatorLifecycle(d) &&
   (d.connection.type !== "adb" || Boolean(d.connection.avdName));
 export type Source = SourceConfig & {
-  status: "connected" | "missing";
+  status: "connected" | "missing" | "unknown";
   detail?: string;
+  observation?: Observation;
 };
 export type Session = {
   id: string;
@@ -247,6 +259,7 @@ export type Artifact = {
   origin: "Web" | "CLI" | "Agent" | "API";
 };
 export type Snapshot = {
+  inventoryObservation?: Observation;
   license: LicenseStatus;
   mode: "local";
   devices: Device[];
@@ -290,15 +303,15 @@ const remoteInputFields = {
   y: z.number().min(0).max(10000).optional(),
 };
 export const operations = {
-  inventory: z.object({}).strict(),
+  inventory: z.object({ deviceIds: z.array(z.string()).max(1000).optional() }).strict(),
   "license.status": z.object({}).strict(),
   "license.activate": z
     .object({ key: z.string().trim().min(1).max(4096) })
     .strict(),
   "license.refresh": z.object({}).strict(),
   "license.deactivate": z.object({}).strict(),
-  discover: z.object({}).strict(),
-  "capture-cards.list": z.object({}).strict(),
+  discover: z.object({ refresh: z.boolean().optional() }).strict(),
+  "capture-cards.list": z.object({ refresh: z.boolean().optional() }).strict(),
   "reports.get": reportRequestSchema,
   "config.get": z.object({}).strict(),
   "config.save": z

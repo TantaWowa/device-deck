@@ -114,6 +114,8 @@ test("shared USB live encoders provide a decodable first IDR, preserve snapshots
     }, source, path.join(dir, "recording.mp4"), 1);
     let recordingEnded = false;
     void recording.ended.then(() => { recordingEnded = true; });
+    assert.deepEqual(await engine.preview(null, source, 0, true), await readFile(jpeg));
+    assert.equal(recordingEnded, false, "a one-shot thumbnail must preserve active viewers and recording");
     await one.close();
     const stillLive = await keyframe(two, b.timestampUs);
     assert.ok(stillLive.timestampUs > b.timestampUs);

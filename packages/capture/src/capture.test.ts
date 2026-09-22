@@ -20,6 +20,22 @@ test("process stdout retains an Android PID emitted before readiness completes",
     await stop(handle);
   }
 });
+test("recording validation rejects audio and annotation strips it from historical input", async (t) => {
+  if (!(await available("ffmpeg")) || !(await available("ffprobe"))) return t.skip("ffmpeg/ffprobe required");
+  const dir = await mkdtemp(path.join(os.tmpdir(), "deck-video-only-"));
+  const input = path.join(dir, "with-audio.mp4"), output = path.join(dir, "annotated.mp4");
+  const config = validateConfig({ schemaVersion: 1, settings: { folder: dir } });
+  const engine = new CaptureEngine(new Adapters(() => config));
+  try {
+    await run("ffmpeg", ["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "color=c=blue:s=64x64:r=15",
+      "-f", "lavfi", "-i", "anullsrc=r=48000:cl=mono", "-t", "0.4", "-c:v", "libx264", "-c:a", "aac", input]);
+    await assert.rejects(engine.probe(input), /requires video-only/);
+    await engine.annotate(input, output, [], "Fixture", "fixture-session", "recording");
+    assert.ok((await engine.probe(output)).bytes > 0);
+    const streams = JSON.parse((await run("ffprobe", ["-v", "error", "-show_streams", "-of", "json", output])).stdout.toString()).streams;
+    assert.deepEqual(streams.map((stream: { codec_type: string }) => stream.codec_type), ["video"]);
+  } finally { await engine.close(); await rm(dir, { recursive: true, force: true }); }
+});
 test("independent USB recorder streams coexist; source exit ends encoder and remains interrupted", async (t) => {
   if (!(await available("ffmpeg")) || !(await available("ffprobe"))) {
     t.skip("ffmpeg/ffprobe required for real encoder fixture");

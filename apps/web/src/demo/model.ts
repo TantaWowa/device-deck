@@ -314,6 +314,7 @@ export class DemoModel {
   settings = { ...defaultSettings };
   artifacts: Artifact[] = [];
   recordings = new Map<string, Recording>();
+  deletedCards: Source[] = [];
   inputs: InputEntry[] = [];
   screenFocus: Record<string, number> = {};
   history: HistoryEvent[] = [];
@@ -461,30 +462,96 @@ export class DemoModel {
     ];
   }
   assignCard(sourceId: string, deviceId: string | null) {
-    const card = this.inventory.sources.find(
-      (s) => s.id === sourceId && s.kind === "usb",
-    );
-    if (!card) throw new Error("Choose a physical USB capture card.");
-    const previous = this.inventory.devices.find(
-      (d) => d.captureSourceId === sourceId,
-    );
-    const next = deviceId ? this.device(deviceId) : undefined;
-    for (const d of [previous, next])
-      if (d && (this.lease(d.id) || this.recordings.has(d.id)))
+    this.assignCards([{ sourceId, deviceId }]);
+  }
+  private editableCards(sourceIds: string[]) {
+    if (new Set(sourceIds).size !== sourceIds.length)
+      throw new Error("Choose each capture card only once.");
+    return sourceIds.map((sourceId) => {
+      const card = this.inventory.sources.find(
+        (s) => s.id === sourceId && s.kind === "usb",
+      );
+      if (!card) throw new Error("Choose a physical USB capture card.");
+      const devices = this.inventory.devices.filter(
+        (d) => d.captureSourceId === sourceId,
+      );
+      if (devices.length > 1)
+        throw new Error(`${card.name} has a capture source conflict.`);
+      if (
+        devices.some((d) => this.lease(d.id) || this.recordings.has(d.id)) ||
+        [...this.recordings.values()].some((r) => r.sourceId === sourceId)
+      )
         throw new Error(
           "Release the reserved device and stop recording before changing its binding.",
         );
-    if (next?.captureSourceId && next.captureSourceId !== sourceId)
-      throw new Error(
-        `${next.name} already has a capture input. Unassign it first.`,
-      );
-    if (previous) previous.captureSourceId = "";
-    if (next) next.captureSourceId = sourceId;
-    this.event(
-      next?.id || previous?.id || this.inventory.devices[0].id,
-      "Capture card assigned",
-      `${card.name} · ${next?.name || "Unassigned"}`,
+      return { card, previous: devices[0] };
+    });
+  }
+  assignCards(assignments: { sourceId: string; deviceId: string | null }[]) {
+    const cards = this.editableCards(assignments.map((a) => a.sourceId));
+    const selectedSources = new Set(assignments.map((a) => a.sourceId));
+    const targetIds = new Set<string>();
+    const changes = assignments.map((assignment, index) => {
+      const next =
+        assignment.deviceId === null
+          ? undefined
+          : this.device(assignment.deviceId);
+      if (next) {
+        if (targetIds.has(next.id))
+          throw new Error("Assign only one capture card to each device.");
+        targetIds.add(next.id);
+        if (this.lease(next.id) || this.recordings.has(next.id))
+          throw new Error(
+            "Release the reserved device and stop recording before changing its binding.",
+          );
+        if (next.captureSourceId && !selectedSources.has(next.captureSourceId))
+          throw new Error(
+            `${next.name} already has a capture input. Unassign it first.`,
+          );
+      }
+      return { ...cards[index], next };
+    });
+    for (const { previous } of changes)
+      if (previous) previous.captureSourceId = "";
+    for (const { card, next, previous } of changes) {
+      if (next) next.captureSourceId = card.id;
+      const eventDevice = next || previous || this.inventory.devices[0];
+      if (eventDevice)
+        this.event(
+          eventDevice.id,
+          "Capture card assigned",
+          `${card.name} · ${next?.name || "Unassigned"}`,
+        );
+    }
+  }
+  removeCards(sourceIds: string[]) {
+    const cards = this.editableCards(sourceIds);
+    const selectedSources = new Set(sourceIds);
+    for (const { previous } of cards)
+      if (previous) previous.captureSourceId = "";
+    this.inventory.sources = this.inventory.sources.filter(
+      (source) => !selectedSources.has(source.id),
     );
+    this.deletedCards.push(...cards.map(({ card }) => card));
+    for (const { card, previous } of cards) {
+      const eventDevice = previous || this.inventory.devices[0];
+      if (eventDevice)
+        this.event(eventDevice.id, "Capture card deleted", card.name);
+    }
+  }
+  restoreDeletedCards() {
+    if (
+      this.deletedCards.some((card) =>
+        this.inventory.sources.some(
+          (source) =>
+            source.id === card.id ||
+            (card.uniqueId && source.uniqueId === card.uniqueId),
+        ),
+      )
+    )
+      throw new Error("A deleted capture card is already present.");
+    this.inventory.sources.push(...this.deletedCards);
+    this.deletedCards = [];
   }
   device(id: string) {
     const d = this.inventory.devices.find((x) => x.id === id);
@@ -835,6 +902,7 @@ export class DemoModel {
       settings: this.settings,
       savedViews: this.savedViews,
       recordings: [...this.recordings],
+      deletedCards: this.deletedCards,
     });
   }
   restore(raw: string) {
@@ -851,6 +919,22 @@ export class DemoModel {
         !Array.isArray(data.savedViews)
       )
         return false;
+      const deletedCards = data.deletedCards ?? [];
+      if (
+        !Array.isArray(deletedCards) ||
+        deletedCards.some(
+          (card) =>
+            !card ||
+            typeof card.id !== "string" ||
+            typeof card.name !== "string" ||
+            card.kind !== "usb" ||
+            !["connected", "missing"].includes(card.status) ||
+            (card.uniqueId !== undefined && typeof card.uniqueId !== "string") ||
+            data.inventory.sources.some((source: Source) => source.id === card.id),
+        ) ||
+        new Set(deletedCards.map((card) => card.id)).size !== deletedCards.length
+      )
+        return false;
       for (const d of data.inventory.devices) {
         if (
           typeof d.id !== "string" ||
@@ -863,6 +947,7 @@ export class DemoModel {
       }
       this.saveSettings({ ...defaultSettings, ...data.settings });
       this.inventory = data.inventory;
+      this.deletedCards = deletedCards;
       this.artifacts = data.artifacts;
       this.inputs = data.inputs;
       this.screenFocus = data.screenFocus || {};

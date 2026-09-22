@@ -84,6 +84,8 @@ export class LiveStreams {
   private async openReady(args: StreamOpen, authorize: LiveAuthorization): Promise<StreamAnswer> {
     if (this.entries.size >= 32) fail("stream-limit", "Too many live viewers. Close an unused viewer.", 429);
     if (!await authorize()) fail("unauthorized", "Machine access expired. Reconnect before opening the viewer.", 401);
+    if (/^m=audio\s+(?!0(?:\s|\/))\d+/m.test(args.offer))
+      fail("unsupported-audio", "Device Deck supports video only. Audio media must not be offered.", 400);
     if (!/^v=0\r?\n/.test(args.offer) || !/^m=video /m.test(args.offer) || !/^a=rtpmap:\d+ H264\/90000\r?$/im.test(args.offer))
       fail("unsupported-video", "The browser must offer an H.264 WebRTC video receiver. Try a current Chrome, Safari or Firefox browser.", 400);
     const target = this.backend.resolve(args);

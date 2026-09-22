@@ -233,6 +233,22 @@ test("refresh follows current selection instead of jumping back to the row selec
   assert.equal(workspace.selected!.id, "31");
 });
 
+test("quitting aborts an outstanding inventory read without replacing the status with a late error", async () => {
+  const { workspace, io } = fixture();
+  let observed: AbortSignal | undefined;
+  io.call = (_operation, _args, _origin, signal) => new Promise((_resolve, reject) => {
+    observed = signal;
+    signal!.addEventListener("abort", () => reject(signal!.reason), { once: true });
+  });
+  const status = workspace.status;
+  const pending = workspace.refresh();
+  workspace.quit();
+  assert.equal(observed?.aborted, true);
+  await pending;
+  assert.equal(workspace.done, true);
+  assert.equal(workspace.status, status);
+});
+
 test("remote acquisition, input and quit preserve lease ownership and never render credentials", async () => {
   const { workspace, calls } = fixture();
   key(workspace, "c");
@@ -437,6 +453,13 @@ test("batch discovery excludes configured devices and saves all selected additio
   assert.equal(calls.filter((c) => c.operation === "config.save").length, 1);
   assert.equal(workspace.discovery, undefined);
   assert.equal(workspace.snapshot!.devices.length, 34);
+});
+
+test("explicit TUI discovery requests a bounded manual refresh", async () => {
+  const { workspace, calls } = fixture();
+  workspace.discover();
+  await settled(workspace);
+  assert.deepEqual(calls.find((call) => call.operation === "discover")?.args, { refresh: true });
 });
 
 test("feed selection opens only the requested mux and capture trash requires explicit confirmation", async () => {

@@ -57,7 +57,7 @@ import {
   type Artifact,
   type InputEntry,
 } from "./demo/model";
-import { SampleScreen, sampleBlob, download } from "./SampleScreen";
+import { SampleScreen, sampleBlob, download, artwork } from "./SampleScreen";
 const STORAGE = "device-deck-demo-v2";
 const formatTime = (n: number) =>
   new Date(n).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -1851,6 +1851,7 @@ export function Dashboard() {
                 .map((s) => ({
                   ...s,
                   uniqueId: s.uniqueId || `demo-${s.id}`,
+                  thumbnailUrl: artwork,
                   deviceId: model.inventory.devices.find(
                     (d) => d.captureSourceId === s.id,
                   )?.id,
@@ -1869,10 +1870,32 @@ export function Dashboard() {
                 );
               }}
               view={(id) => nav(`viewer/${id}`)}
+              viewMany={(ids) => nav(`multi/${ids.join(",")}`)}
               assign={async (card, id) => {
                 model.assignCard(card.id, id);
                 persist();
                 notify("Simulated capture card assignment saved.");
+              }}
+              assignMany={async (assignments) => {
+                model.assignCards(
+                  assignments.map(({ card, deviceId }) => ({
+                    sourceId: card.id,
+                    deviceId,
+                  })),
+                );
+                persist();
+                notify("Simulated capture card assignments saved.");
+              }}
+              remove={async (cards) => {
+                model.removeCards(cards.map((card) => card.id));
+                persist();
+                notify("Simulated capture cards deleted. Saved captures retained.");
+              }}
+              deletedCount={model.deletedCards.length}
+              restoreDeleted={async () => {
+                model.restoreDeletedCards();
+                persist();
+                notify("Simulated capture cards restored without assignments.");
               }}
             />
           )}

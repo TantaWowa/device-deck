@@ -30,8 +30,11 @@ export async function callOperation(
   operation: Operation,
   args: unknown = {},
   origin = "CLI",
+  signal?: AbortSignal,
 ) {
+  signal?.throwIfAborted();
   const ep = await endpoint();
+  signal?.throwIfAborted();
   const response = await fetch(`${ep.url}/v1/operations/${operation}`, {
     method: "POST",
     headers: {
@@ -40,7 +43,7 @@ export async function callOperation(
       "X-Device-Deck-Client": origin,
     },
     body: JSON.stringify(args),
-    signal: AbortSignal.timeout(operation === "devices.simulator" ? 300000 : 180000),
+    signal: AbortSignal.any([AbortSignal.timeout(operation === "devices.simulator" ? 300000 : operation === "inventory" ? 30_000 : 180000), ...(signal ? [signal] : [])]),
     redirect: "error",
   });
   const body = await response.json();

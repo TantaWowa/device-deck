@@ -3,11 +3,10 @@ import { androidBootReady, androidFeatures, avdInputMode } from "./android-state
 import { IOS_GESTURES, startIdbInteractive } from "./interactive";
 import type { InteractiveSource, VideoProfile } from "../../core/src/live";
 import { androidKeys, rokuKeys, hidKeys, iosHardwareKeys, deviceInputMode } from "../../core/src/remote";
-import { controlSimulator, simulatorState, wakeSimulator } from "./simulator";
+import { controlSimulator, simulatorState, SimulatorInventory, wakeSimulator } from "./simulator";
 import { AndroidEmulators, isAndroidEmulator } from "./android-emulator";
 import {
   mergeCaptureCards,
-  type DetectedCard,
 } from "../../core/src/capture-cards";
 // Adapted from Tawi discovery, Hosanna Tools Roku SSDP, and George Cook's tv-remote.py.
 // See docs/source-provenance.md. No personal checkout is a runtime dependency.
@@ -19,7 +18,8 @@ import { randomUUID, createHash } from "node:crypto";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import { run, available, start, stop } from "./process";
-import { healthProbeRunner } from "./health-probes";
+import { healthProbeRunner, ProbeScheduler } from "./health-probes";
+import { CameraDiscovery } from "./camera-discovery";
 import {
   type Config,
   type DeviceConfig,
@@ -56,10 +56,28 @@ export function appleHardwareInputMode(hardware: {
 }
 export class Adapters {
   readonly emulators: AndroidEmulators;
+  readonly cameras: CameraDiscovery;
+  readonly simulatorInventory: SimulatorInventory;
+  private readonly probes: ProbeScheduler;
+  private discoveryPending?: Promise<Discovery>;
+  private discoveryResult?: Discovery;
+  private discoveryAt = -Infinity;
+  private discoveryStarted = -Infinity;
+  private discoveryCounters = { requests: 0, hits: 0, shared: 0, starts: 0 };
   private inputModes = new Map<string, "touch" | "remote">();
-  constructor(private getConfig: () => Config, private execute = run) {
+  constructor(private getConfig: () => Config, private execute = run, private now: () => number = Date.now) {
     this.emulators = new AndroidEmulators(getConfig, execute);
+    this.probes = new ProbeScheduler(execute);
+    this.cameras = new CameraDiscovery(helper, this.probes.run, now);
+    this.simulatorInventory = new SimulatorInventory(now);
   }
+  invalidateInventory(deviceId?: string) {
+    if (!deviceId) this.cameras.invalidate();
+    this.simulatorInventory.invalidate(deviceId);
+    this.discoveryAt = -Infinity;
+  }
+  inventoryStats() { return { camera: this.cameras.stats(), probes: this.probes.stats(), discovery: { ...this.discoveryCounters, active: Boolean(this.discoveryPending) } }; }
+  async close() { await Promise.all([this.cameras.close(), this.probes.close()]); }
   private inputModeKey(d: DeviceConfig) {
     const c = d.connection;
     return c.type === "adb" ? `${d.id}:${c.port}:${c.avdName || c.hardwareId || c.serial}` : d.id;
@@ -93,7 +111,25 @@ export class Adapters {
       )
     ).filter(Boolean);
   }
-  async discover(): Promise<Discovery> {
+  async discover(force = false): Promise<Discovery> {
+    this.discoveryCounters.requests++;
+    if (this.discoveryPending) { this.discoveryCounters.shared++; return structuredClone(await this.discoveryPending); }
+    if (this.discoveryResult && (this.now() - this.discoveryStarted < 5000 || (!force && this.now() - this.discoveryAt < 30_000))) {
+      this.discoveryCounters.hits++;
+      return structuredClone(this.discoveryResult);
+    }
+    this.discoveryCounters.starts++;
+    this.discoveryStarted = this.now();
+    const signal = AbortSignal.timeout(30_000);
+    const execute: typeof run = (command, args, timeout, options) => this.probes.run(command, args, timeout, { ...options, signal });
+    this.discoveryPending = this.discoverNow(force, execute).then((result) => {
+      this.discoveryResult = result;
+      this.discoveryAt = this.now();
+      return result;
+    }).finally(() => { this.discoveryPending = undefined; });
+    return structuredClone(await this.discoveryPending);
+  }
+  private async discoverNow(force: boolean, execute: typeof run): Promise<Discovery> {
     const devices: DeviceConfig[] = [],
       sources: SourceConfig[] = [],
       diagnostics: string[] = [];
@@ -115,13 +151,13 @@ export class Adapters {
             ),
           ]),
         ]) {
-          const { stdout } = await run(this.tool("adb"), [
+          const { stdout } = await execute(this.tool("adb"), [
             "-P",
             String(port),
             "devices",
             "-l",
           ]);
-          const emulators = await this.emulators.running(port);
+          const emulators = await this.emulators.running(port, execute);
           for (const line of stdout.toString().split("\n").slice(1)) {
             const [serial, state, ...parts] = line.trim().split(/\s+/);
             if (
@@ -136,7 +172,7 @@ export class Adapters {
             if (state === "device" && !serial.startsWith("emulator-")) {
               hardwareId =
                 (
-                  await run(this.tool("adb"), [
+                  await execute(this.tool("adb"), [
                     "-P",
                     String(port),
                     "-s",
@@ -154,7 +190,7 @@ export class Adapters {
                 : uid("adb", hardwareId || serial),
               nativeId = `native-${id}`;
             if (devices.some((d) => d.id === id)) continue;
-            const features = state === "device" ? (await this.execute(this.tool("adb"), ["-P", String(port), "-s", serial, "shell", "pm", "list", "features"], 5000).catch(() => ({ stdout: Buffer.from("") }))).stdout.toString() : "";
+            const features = state === "device" ? (await execute(this.tool("adb"), ["-P", String(port), "-s", serial, "shell", "pm", "list", "features"], 5000).catch(() => ({ stdout: Buffer.from("") }))).stdout.toString() : "";
             const inputMode = /^feature:/m.test(features) ? androidFeatures(features).inputMode : avdName ? await avdInputMode(avdName) : undefined;
             devices.push({
               id,
@@ -181,7 +217,7 @@ export class Adapters {
             });
           }
           try {
-            for (const avdName of await this.emulators.names()) {
+            for (const avdName of await this.emulators.names(execute)) {
               const configured = this.getConfig().devices.find(
                 (d) =>
                   d.connection.type === "adb" &&
@@ -228,7 +264,7 @@ export class Adapters {
         }
       }),
       safe("Simulators", async () => {
-        const result = await run("xcrun", [
+        const result = await execute("xcrun", [
           "simctl",
           "list",
           "devices",
@@ -268,7 +304,7 @@ export class Adapters {
         const dir = await mkdtemp(path.join(os.tmpdir(), "deck-discovery-"));
         try {
           const file = path.join(dir, "devices.json");
-          await this.execute("xcrun", [
+          await execute("xcrun", [
             "devicectl",
             "list",
             "devices",
@@ -294,8 +330,9 @@ export class Adapters {
         }
       }),
       safe("USB capture", async () => {
-        const result = await run(helper, ["list"]);
-        for (const s of JSON.parse(result.stdout.toString()))
+        const result = await this.cameras.read({ force });
+        if (result.error) diagnostics.push(`USB capture: ${result.error}`);
+        for (const s of result.devices)
           sources.push({
             id: uid("usb", s.uniqueId),
             name: s.name,
@@ -323,7 +360,7 @@ export class Adapters {
       }),
       safe("Apple TV", async () => {
         if (!(await available(this.tool("python")))) return;
-        const r = await run(
+        const r = await execute(
           this.tool("python"),
           [path.join(root, "native/apple-tv.py"), "scan"],
           10000,
@@ -347,36 +384,41 @@ export class Adapters {
     ]);
     return { devices, sources, diagnostics };
   }
-  async captureCards(configs: SourceConfig[]) {
-    let detected: DetectedCard[] = [];
-    const diagnostics: string[] = [];
-    try {
-      detected = JSON.parse((await run(helper, ["list"])).stdout.toString());
-    } catch (e) {
-      diagnostics.push(`USB discovery unavailable: ${(e as Error).message}`);
-    }
+  async captureCards(configs: SourceConfig[], force = false) {
+    await this.cameras.read({ force });
+    return this.cachedCaptureCards(configs);
+  }
+  /** Project the existing observation without launching discovery from image requests. */
+  cachedCaptureCards(configs: SourceConfig[]) {
+    const { devices: detected, ...observation } = this.cameras.peek();
     return {
-      sources: mergeCaptureCards(configs, detected, (id) => uid("usb", id)),
-      diagnostics,
+      sources: mergeCaptureCards(configs, detected, (id) => uid("usb", id)).map((source): Source => ({
+        ...source,
+        status: observation.observedAt === null ? "unknown" : source.status,
+        detail: observation.error || source.detail,
+        observation,
+      })),
+      diagnostics: observation.error ? [`USB discovery unavailable: ${observation.error}`] : [],
+      observation,
     };
   }
-  async inspectSources(configs: SourceConfig[], execute = run): Promise<Source[]> {
-    let list: { uniqueId: string; inUse: string }[] = [];
-    try {
-      list = JSON.parse((await execute(helper, ["list"])).stdout.toString());
-    } catch {}
+  async inspectSources(configs: SourceConfig[], _execute = this.execute, force = false): Promise<Source[]> {
+    if (!configs.some((source) => source.kind === "usb"))
+      return configs.map((source) => ({ ...source, status: "connected" }));
+    const { devices: list, ...observation } = await this.cameras.read({ force });
     return configs.map((s) =>
       s.kind === "native"
         ? { ...s, status: "connected" }
         : {
             ...s,
-            status: list.some((x) => x.uniqueId === s.uniqueId)
+            status: observation.observedAt === null ? "unknown" : list.some((x) => x.uniqueId === s.uniqueId)
               ? "connected"
               : "missing",
             detail:
-              list.find((x) => x.uniqueId === s.uniqueId)?.inUse === "true"
+              observation.error || (list.find((x) => x.uniqueId === s.uniqueId)?.inUse === "true"
                 ? "In use by another application"
-                : undefined,
+                : undefined),
+            observation,
           },
     );
   }
@@ -390,12 +432,28 @@ export class Adapters {
   }
   /** Coalesce read-only probes within this inventory scan only. Inputs and
    * lifecycle operations use their normal fresh identity/readiness checks. */
-  async inspectAll(devices: readonly DeviceConfig[]): Promise<Device[]> {
-    const execute = healthProbeRunner(this.execute);
+  async inspectAll(devices: readonly DeviceConfig[], signal?: AbortSignal, observed?: (device: Device) => void): Promise<Device[]> {
+    const execute = healthProbeRunner(this.probes.run, 2, signal);
     let apple: ReturnType<Adapters["appleDevices"]> | undefined;
-    return Promise.all(devices.map((device) => this.inspect(device, execute, () => apple ??= this.appleDevices(execute))));
+    const results: Device[] = new Array(devices.length);
+    let cursor = 0;
+    const worker = async () => {
+      while (!signal?.aborted && cursor < devices.length) {
+        const index = cursor++;
+        const result = await this.inspect(devices[index], execute, () => apple ??= this.appleDevices(execute), true);
+        results[index] = result;
+        if (!signal?.aborted) observed?.(result);
+      }
+    };
+    // Bound pending inspection work as well as subprocesses. Each worker keeps
+    // at most one adapter probe pending; shared listings still span the scan.
+    const settled = await Promise.allSettled(Array.from({ length: Math.min(8, devices.length) }, worker));
+    signal?.throwIfAborted();
+    const failed = settled.find((result) => result.status === "rejected");
+    if (failed?.status === "rejected") throw failed.reason;
+    return results;
   }
-  async inspect(d: DeviceConfig, execute = this.execute, appleDevices = () => this.appleDevices(execute)): Promise<Device> {
+  async inspect(d: DeviceConfig, execute = this.execute, appleDevices = () => this.appleDevices(execute), inventory = false): Promise<Device> {
     const result: Device = {
       ...d,
       online: false,
@@ -410,13 +468,12 @@ export class Adapters {
         const source = this.getConfig().sources.find(
           (s) => s.id === d.captureSourceId,
         );
-        result.online = Boolean(
-          source &&
-          (await this.inspectSources([source], execute))[0]?.status === "connected",
-        );
+        const status = source ? (await this.inspectSources([source], execute, !inventory))[0] : undefined;
+        result.online = status?.status === "connected" && (inventory || !status.observation || (status.observation.observedAt !== null && !status.observation.error));
+        result.observation = status?.observation;
         result.healthDetail = result.online
           ? "USB capture connected · configure a control connection for remote input"
-          : "Capture card disconnected";
+          : status?.observation?.error || (status?.status === "unknown" ? "Checking capture connection" : "Capture card disconnected");
       }
       if (c.type === "adb") {
         result.inputMode = this.inputModes.get(this.inputModeKey(d)) || d.inputMode || (c.avdName ? await avdInputMode(c.avdName) : undefined) || "touch";
@@ -469,7 +526,7 @@ export class Adapters {
         result.capabilities.push("key", "text");
       }
       if (c.type === "simulator") {
-        result.simulatorState = await simulatorState(d, execute);
+        result.simulatorState = await (inventory ? this.simulatorInventory.state(d, execute) : simulatorState(d, execute));
         result.online = result.simulatorState === "booted";
         result.readiness = result.simulatorState === "starting" ? "starting" : "offline";
         result.healthDetail =
@@ -542,6 +599,7 @@ export class Adapters {
       result.capabilities = [];
       result.gestureCapabilities = [];
       result.healthDetail = (e as Error).message;
+      result.observation = { observedAt: null, refreshing: false, stale: true, error: (e as Error).message, nextRefreshAt: Date.now() + 5000 };
     }
     if (result.online) result.readiness = "ready";
     return result;

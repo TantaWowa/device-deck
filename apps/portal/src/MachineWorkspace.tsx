@@ -9,6 +9,7 @@ import { deviceFormFactor } from "../../../packages/core/src/device-form-factor"
 import { DeviceTypeFilter } from "../../web/src/local/DeviceTypeFilter";
 import { deviceConnectionLabel, deviceIsBooting as isBooting } from "../../../packages/core/src/device-table";
 import { LivePreview } from "../../web/src/local/LivePreview";
+import { useInventoryPolling } from "../../web/src/local/useInventoryPolling";
 import { FloatingRemote } from "../../web/src/local/FloatingRemote";
 import { popupAnchor, type PopupAnchor } from "../../web/src/local/anchored-popup";
 import { RemoteControl } from "../../web/src/local/RemoteControl";
@@ -47,6 +48,7 @@ export function MachineWorkspace({ machine, cloud, owner, leases, onBack }: {
   const [remoteId, setRemoteId] = useState<string>();
   const [remoteRequest, setRemoteRequest] = useState<{ anchor: PopupAnchor }>();
   const [touchSessions, setTouchSessions] = useState<Record<string, string>>({});
+  const [mediaSessions, setMediaSessions] = useState<Record<string, string>>({});
   const [selectedFeeds, setSelectedFeeds] = useState<string[] | null>(null);
   const [feedPickerOpen, setFeedPickerOpen] = useState(false);
   const [feedPickerMode, setFeedPickerMode] = useState<"all" | "simulators">("all");
@@ -57,11 +59,8 @@ export function MachineWorkspace({ machine, cloud, owner, leases, onBack }: {
   const [sessionOwner, setSessionOwner] = useState(owner);
   const [capturePreviewId, setCapturePreviewId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const lifecycle = useRef(new AbortController());
   const gate = useRef(new ControlGate());
   const alive = useRef(true);
-  const refreshingRef = useRef(false);
-  const refreshQueued = useRef(false);
   const touchGeneration = useRef(0);
   const feedPicker = useRef<HTMLDivElement>(null);
   const standalone = needsStandalone(machine.endpoint, location.protocol);
@@ -70,16 +69,14 @@ export function MachineWorkspace({ machine, cloud, owner, leases, onBack }: {
     transport.getBlob(`/v1/artifacts/${encodeURIComponent(item.id)}/${variant}`, signal), [transport]);
   const getCaptureThumbnail = useCallback((item: Artifact, signal?: AbortSignal) =>
     transport.getBlob(`/v1/artifacts/${encodeURIComponent(item.id)}/thumbnail`, signal), [transport]);
-  const refresh = async () => {
-    if (standalone || lifecycle.current.signal.aborted) return;
-    if (refreshingRef.current) { refreshQueued.current = true; return; }
-    refreshingRef.current = true; setRefreshing(true);
+  const refresh = useInventoryPolling(async (signal) => {
+    setRefreshing(true);
     // A status request may finish after a new reservation. Only expire the
     // credentials this request actually observed when it began.
     const observedLeases = new Map(leases);
     try {
-      const result = await transport.operation<Snapshot>("inventory", {}, AbortSignal.any([lifecycle.current.signal, AbortSignal.timeout(12_000)]));
-      if (alive.current) {
+      const result = await transport.operation<Snapshot>("inventory", {}, AbortSignal.any([signal, AbortSignal.timeout(12_000)]));
+      if (alive.current && !signal.aborted) {
         setSnapshot(result); setUpdatedAt(new Date().toISOString()); setError("");
         for (const device of result.devices) {
           const key = `${machine.id}:${device.id}`;
@@ -93,22 +90,16 @@ export function MachineWorkspace({ machine, cloud, owner, leases, onBack }: {
         })));
       }
     } catch (failure) {
+      if (signal.aborted) return;
       gate.current.cancel();
       if (alive.current) { setBusy(false); setTouchSessions({}); setError(connectionMessage(failure)); }
     }
     finally {
-      refreshingRef.current = false;
-      if (alive.current) {
-        setRefreshing(false);
-        if (refreshQueued.current) { refreshQueued.current = false; void refresh(); }
-      }
+      if (alive.current && !signal.aborted) setRefreshing(false);
     }
-  };
+  }, { enabled: !standalone, identity: transport, intervalMs: snapshot?.devices.some((target) => isBooting(target) || launchingDevice === target.id) ? 2500 : 10_000 });
   useEffect(() => {
     alive.current = true;
-    lifecycle.current = new AbortController();
-    void refresh();
-    const timer = setInterval(() => { if (!document.hidden) void refresh(); }, 10_000);
     const cancelControls = () => {
       gate.current.cancel();
       touchGeneration.current++;
@@ -120,7 +111,7 @@ export function MachineWorkspace({ machine, cloud, owner, leases, onBack }: {
     window.addEventListener("offline", cancelControls);
     document.addEventListener("visibilitychange", visibility);
     return () => {
-      alive.current = false; lifecycle.current.abort(); gate.current.cancel(); transport.dispose(); clearInterval(timer);
+      alive.current = false; gate.current.cancel(); transport.dispose();
       window.removeEventListener("offline", cancelControls); document.removeEventListener("visibilitychange", visibility);
     };
   }, [transport]);
@@ -238,11 +229,13 @@ export function MachineWorkspace({ machine, cloud, owner, leases, onBack }: {
     } else lease = await withDeviceLease(target, signal, current);
     if (!current() || touchGeneration.current !== generation) return false;
     setTouchSessions((sessions) => ({ ...sessions, [target.id]: lease.sessionId }));
+    setMediaSessions((sessions) => ({ ...sessions, [target.id]: lease.sessionId }));
     return lease;
   }, takeOver ? 180_000 : 10_000, "Touch enabled. Tap, swipe or drag on the device screen.");
   const disableFeedControl = (target: Device) => {
     touchGeneration.current++;
     setTouchSessions((sessions) => { const next = { ...sessions }; delete next[target.id]; return next; });
+    setMediaSessions((sessions) => { const next = { ...sessions }; delete next[target.id]; return next; });
     setNotice("Touch disabled. Your reservation and any recording remain active.");
   };
   const endFeedControl = (target: Device) => command(async (signal, current) => {
@@ -288,6 +281,7 @@ export function MachineWorkspace({ machine, cloud, owner, leases, onBack }: {
     touchGeneration.current++;
     const visibleIds = new Set(tab === "feeds" ? visibleFeeds.map((feed) => feed.device?.id) : []);
     setTouchSessions((sessions) => Object.fromEntries(Object.entries(sessions).filter(([id]) => visibleIds.has(id))));
+    setMediaSessions((sessions) => Object.fromEntries(Object.entries(sessions).filter(([id]) => visibleIds.has(id))));
   }, [tab, visibleFeedKey]);
   const simulators = snapshot?.devices.filter(canLaunchSimulator) || [];
   const query = feedSearch.trim().toLocaleLowerCase();
@@ -312,11 +306,6 @@ export function MachineWorkspace({ machine, cloud, owner, leases, onBack }: {
     return () => clearTimeout(timer);
   }, [touchSessions, snapshot?.sessions]);
   useEffect(() => {
-    if (!booting.length) return;
-    const timer = setInterval(() => { if (!document.hidden) void refresh(); }, 2500);
-    return () => clearInterval(timer);
-  }, [booting.length > 0, transport]);
-  useEffect(() => {
     if (!revealingDevice || !snapshot) return;
     const target = snapshot.devices.find((d) => d.id === revealingDevice);
     const source = snapshot.sources.find((s) => s.id === target?.captureSourceId || s.deviceId === revealingDevice);
@@ -329,6 +318,7 @@ export function MachineWorkspace({ machine, cloud, owner, leases, onBack }: {
     <div className="workspace-heading"><button className="secondary back-button" onClick={onBack}><ArrowLeft size={17} />Machines</button><div><h1>{machine.name}</h1><a href={`${machine.endpoint}/`} target="_blank" rel="noreferrer">{machine.endpoint}<ExternalLink size={13} /></a></div><button className="secondary" aria-label="Refresh machine" onClick={() => void refresh()} disabled={refreshing || standalone}><RefreshCw size={17} className={refreshing ? "spin" : ""} /><span>Refresh</span></button></div>
     {standalone ? <div className="empty-panel"><ExternalLink size={38} /><h2>Open this machine directly</h2><p>This address uses HTTP. Phone browsers and secure pages need trusted HTTPS for embedded feeds and controls.</p><a className="primary" href={`${machine.endpoint}/`} target="_blank" rel="noreferrer">Open standalone <ExternalLink size={16} /></a><p className="field-note">Update its address to trusted HTTPS in Machine settings to use it inside Device Deck.</p></div> : <>
       <div className="workspace-status"><span className={`status-dot ${error ? "warn" : snapshot ? "good" : ""}`} />{error ? "Connection interrupted" : snapshot ? "Connected directly from this browser" : "Connecting to machine…"}{updatedAt && <span>Last checked {time(updatedAt)}</span>}</div>
+      {snapshot?.inventoryObservation?.stale && <p className="notice" role="status">{snapshot.inventoryObservation.observedAt === null ? "Checking device availability…" : `Device status last checked ${time(snapshot.inventoryObservation.observedAt)}.`} {snapshot.inventoryObservation.error || (snapshot.inventoryObservation.refreshing ? "Refreshing…" : "Status refreshes while this page is visible.")}</p>}
       {error && <div className="notice error" role="alert">{error}<a href={`${machine.endpoint}/`} target="_blank" rel="noreferrer">Open machine address <ExternalLink size={14} /></a></div>}
       <nav className="workspace-tabs" aria-label="Machine views">{([['feeds', Grid2X2, 'Feeds', feeds.length], ['devices', Tv, 'Devices', snapshot?.devices.length], ['captures', Camera, 'Captures', snapshot?.artifacts.filter((item) => !item.deletedAt && !item.purgedAt).length]] as const).map(([key, Icon, label, count]) => <button key={key} aria-current={tab === key ? "page" : undefined} onClick={() => setTab(key)}><Icon size={18} />{label}<span>{count ?? "—"}</span></button>)}</nav>
       {booting.length > 0 && <p className="notice portal-booting-status" role="status"><LoaderCircle className="spin" size={17} />Booting: {booting.map((target) => target.name).join(", ")}. Controls become available when the device is ready.</p>}
@@ -357,12 +347,13 @@ export function MachineWorkspace({ machine, cloud, owner, leases, onBack }: {
           const lease = feedDevice ? leases.get(`${machine.id}:${feedDevice.id}`) : undefined;
           const ours = Boolean(lease && session?.id === lease.sessionId && session.state === "active");
           const enabled = Boolean(feedDevice?.online && !isTransitioning(feedDevice) && !feedDevice.locked && !error && ours && touchSessions[feedDevice.id] === lease?.sessionId);
+          const mediaControl = Boolean(ours && feedDevice && mediaSessions[feedDevice.id] === lease?.sessionId);
           const reserved = Boolean(session && !ours);
           const touchDevice = Boolean(feedDevice && deviceInputMode(feedDevice) === "touch");
           const ready = Boolean(feedDevice?.online && !isTransitioning(feedDevice) && !feedDevice.locked && !error);
           const activeRecording = snapshot.recordings.some((item) => item.deviceId === feedDevice?.id);
           return <article className="feed-card" data-feed-source={source.id} key={source.id}>
-            {feedDevice && (isTransitioning(feedDevice) || launchingDevice === feedDevice.id) ? <div className="portal-feed-booting" role="status"><LoaderCircle className="spin" size={28} /><strong>{feedDevice.simulatorState === "stopping" ? "Stopping…" : "Booting…"}</strong><span>{feedDevice.name} · {feedDevice.healthDetail}</span></div> : source.status === "missing" ? <div className="portal-feed-booting" role="status"><Monitor size={28} /><strong>{feedDevice?.simulatorState === "shutdown" ? "Stopped" : feedDevice && !feedDevice.online ? "Device offline" : "Input unavailable"}</strong><span>{feedDevice?.healthDetail || "Connect this capture input to resume."}</span>{feedDevice && canLaunchSimulator(feedDevice) && !feedDevice.online && <button className="primary" disabled={busy || feedDevice.locked || feedDevice.simulatorState === "unavailable" || Boolean(error)} onClick={() => void launchFeed(feedDevice)}><Play size={15} />Launch &amp; show feed</button>}</div> : <MachinePreview transport={transport} route={enabled && feedDevice ? `/v1/preview/${encodeURIComponent(feedDevice.id)}` : route} label={source.name} active={source.kind === "usb" || Boolean(feedDevice?.online)} lease={enabled ? lease : null} controlDevice={enabled ? feedDevice : undefined} inputEnabled={!busy && !remoteId} onControlLost={() => { touchGeneration.current++; if (feedDevice) setTouchSessions((sessions) => { if (!sessions[feedDevice.id]) return sessions; const next = { ...sessions }; delete next[feedDevice.id]; return next; }); }} />}
+            {feedDevice && (isTransitioning(feedDevice) || launchingDevice === feedDevice.id) ? <div className="portal-feed-booting" role="status"><LoaderCircle className="spin" size={28} /><strong>{feedDevice.simulatorState === "stopping" ? "Stopping…" : "Booting…"}</strong><span>{feedDevice.name} · {feedDevice.healthDetail}</span></div> : source.status === "unknown" ? <div className="portal-feed-booting" role="status"><LoaderCircle className="spin" size={28} /><strong>Checking capture input…</strong></div> : source.status === "missing" ? <div className="portal-feed-booting" role="status"><Monitor size={28} /><strong>{feedDevice?.simulatorState === "shutdown" ? "Stopped" : feedDevice && !feedDevice.online ? "Device offline" : "Input unavailable"}</strong><span>{feedDevice?.healthDetail || "Connect this capture input to resume."}</span>{feedDevice && canLaunchSimulator(feedDevice) && !feedDevice.online && <button className="primary" disabled={busy || feedDevice.locked || feedDevice.simulatorState === "unavailable" || Boolean(error)} onClick={() => void launchFeed(feedDevice)}><Play size={15} />Launch &amp; show feed</button>}</div> : <MachinePreview transport={transport} route={mediaControl && feedDevice ? `/v1/preview/${encodeURIComponent(feedDevice.id)}` : route} label={source.name} active={source.kind === "usb" || Boolean(feedDevice?.online)} lease={mediaControl ? lease : null} controlDevice={mediaControl ? feedDevice : undefined} inputEnabled={enabled && !busy && !remoteId} onControlLost={() => { touchGeneration.current++; if (feedDevice) { setTouchSessions((sessions) => { const next = { ...sessions }; delete next[feedDevice.id]; return next; }); setMediaSessions((sessions) => { const next = { ...sessions }; delete next[feedDevice.id]; return next; }); } }} />}
             <footer><div><strong>{source.name}</strong><span>{feedDevice?.name || "Unassigned input"}</span></div>{feedDevice && deviceInputMode(feedDevice) === "remote" && <button className="secondary" onClick={(event) => selectRemote(feedDevice.id, event.currentTarget)}><Radio size={16} />Remote</button>}</footer>
             {feedDevice && touchDevice && <div className="portal-feed-control" aria-label={`Touch controls for ${feedDevice.name}`}><span>{reserved ? `Reserved by ${session!.owner}. Enabling touch requires taking over their session.` : enabled ? "Touch enabled · Your reservation" : ours ? "Touch off · Your reservation remains active" : "View only · Enabling touch reserves this device for 15 minutes."}</span>
               {!session && <input aria-label={`Control session owner for ${feedDevice.name}`} value={sessionOwner} maxLength={128} onChange={(event) => setSessionOwner(event.target.value)} />}

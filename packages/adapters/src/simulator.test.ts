@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { configSchema, deviceSchema } from "../../core/src/local/types";
 import { Adapters } from "./index";
-import { controlSimulator, simulatorState, wakeSimulator } from "./simulator";
+import { controlSimulator, simulatorState, wakeSimulator, SimulatorInventory } from "./simulator";
 import type { run } from "./process";
 
 const simulator = deviceSchema.parse({
@@ -184,4 +184,53 @@ test("wake sends Home only to the exact running simulator without booting a stop
     );
     assert(stopped.calls.every((call) => call.args[1] === "list"));
   }
+});
+
+test("idle simulator observations reuse readiness but fresh actions reject a regressed target", async () => {
+  let clock = 1000, ready = true, bootstatus = 0, state = "Booted";
+  const inventory = new SimulatorInventory(() => clock);
+  const execute: typeof run = async (_command, args) => {
+    if (args[1] === "bootstatus") {
+      bootstatus++;
+      if (!ready) throw new Error("Still starting");
+      return { stdout: Buffer.from(""), stderr: "" };
+    }
+    return { stdout: Buffer.from(JSON.stringify({ devices: { "com.apple.CoreSimulator.SimRuntime.tvOS-18-0": [{ udid: simulator.connection.type === "simulator" ? simulator.connection.udid : "", state, isAvailable: true }] } })), stderr: "" };
+  };
+  assert.equal(await inventory.state(simulator, execute), "booted");
+  ready = false;
+  clock += 30_000;
+  assert.equal(await inventory.state(simulator, execute), "booted", "inventory is explicitly an aged display observation");
+  assert.equal(bootstatus, 1, "healthy idle inventory does not rerun startup readiness");
+  assert.equal(await simulatorState(simulator, execute), "starting", "action checks cannot use cached readiness");
+  state = "Shutdown";
+  assert.equal(await inventory.state(simulator, execute), "shutdown");
+  state = "Booted";
+  assert.equal(await inventory.state(simulator, execute), "starting");
+  const before = bootstatus;
+  assert.equal(await inventory.state(simulator, execute), "starting");
+  assert.equal(bootstatus, before, "failed readiness backs off across reads");
+  clock += 5000; ready = true;
+  assert.equal(await inventory.state(simulator, execute), "booted");
+  inventory.invalidate(simulator.id);
+  await inventory.state(simulator, execute);
+  assert.equal(bootstatus, before + 2);
+});
+
+test("readiness finishing after invalidation cannot restore the old simulator cache", async () => {
+  const inventory = new SimulatorInventory();
+  let finish!: () => void, entered!: () => void;
+  const gate = new Promise<void>((resolve) => { finish = resolve; });
+  const started = new Promise<void>((resolve) => { entered = resolve; });
+  let bootstatus = 0;
+  const execute: typeof run = async (_command, args) => {
+    if (args[1] === "bootstatus") { bootstatus++; entered(); await gate; return { stdout: Buffer.from(""), stderr: "" }; }
+    return { stdout: Buffer.from(JSON.stringify({ devices: { "com.apple.CoreSimulator.SimRuntime.tvOS-18-0": [{ udid: simulator.connection.type === "simulator" ? simulator.connection.udid : "", state: "Booted", isAvailable: true }] } })), stderr: "" };
+  };
+  const pending = inventory.state(simulator, execute);
+  await started;
+  inventory.invalidate(simulator.id);
+  finish(); await pending;
+  await inventory.state(simulator, execute);
+  assert.equal(bootstatus, 2);
 });

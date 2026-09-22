@@ -20,12 +20,15 @@ import {
   type Device,
   type Config,
   type Input,
+  type Source,
+  type SourceConfig,
 } from "../../../packages/core/src/local/types";
 const config: Config = {
   schemaVersion: 1,
   port: 0,
   devices: [],
   sources: [],
+  ignoredCaptureCardIds: [],
   settings: {
     folder: "./captures",
     naming: "{device}-{time}",
@@ -59,7 +62,7 @@ class TestAdapters extends Adapters {
       capabilities: ["key", "preview", "screenshot", "record"],
     };
   }
-  async inspectSources() {
+  async inspectSources(_sources: SourceConfig[] = []): Promise<Source[]> {
     return [];
   }
   async input(d: DeviceConfig) {
@@ -1690,4 +1693,76 @@ test("capture-only USB devices can reserve and record while source bindings rema
   } finally {
     await cleanup();
   }
+});
+
+test("inventory returns configured rows while a shared health probe is blocked and publishes current locks", async () => {
+  const { deck, adapters, cleanup } = await setup();
+  let finish!: () => void;
+  const gate = new Promise<void>((resolve) => { finish = resolve; });
+  let calls = 0;
+  const inspect = adapters.inspect.bind(adapters);
+  adapters.inspect = async (device) => { calls++; await gate; return inspect(device); };
+  try {
+    const snapshots = await Promise.all(Array.from({ length: 10 }, () => deck.snapshot()));
+    assert.ok(snapshots.every((snapshot) => snapshot.devices.length === 2));
+    assert.ok(snapshots.every((snapshot) => snapshot.inventoryObservation?.observedAt === null));
+    assert.equal(calls, 2, "ten clients share one inspection per configured device");
+    deck.store.lock("one", "Maintenance now");
+    assert.equal((await deck.snapshot()).devices[0].locked, true);
+    finish();
+    await deck.devices();
+    assert.ok((await deck.snapshot()).devices[0].online);
+    assert.equal(calls, 2);
+  } finally { finish(); await cleanup(); }
+});
+
+test("scoped inventory inspects only selected configured devices and capture sources", async () => {
+  const { deck, adapters, cleanup } = await setup();
+  const devices: string[] = [], sources: string[] = [];
+  const inspect = adapters.inspect.bind(adapters);
+  adapters.inspect = async (device) => { devices.push(device.id); return inspect(device); };
+  adapters.inspectSources = async (configs = []) => { sources.push(...configs.map((source: { id: string }) => source.id)); return []; };
+  try {
+    const snapshot = await deck.snapshot(["one"]);
+    assert.deepEqual(snapshot.devices.map((device) => device.id), ["one"]);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(devices, ["one"]);
+    assert.deepEqual(sources, ["screen-one"]);
+  } finally { await cleanup(); }
+});
+
+test("reservation rejects a capability selector that no longer matches fresh admission", async () => {
+  const { deck, adapters, cleanup } = await setup();
+  try {
+    await deck.devices();
+    const inspect = adapters.inspect.bind(adapters);
+    adapters.inspect = async (device) => ({ ...await inspect(device), capabilities: [] });
+    await assert.rejects(deck.execute("sessions.reserve", { selector: { device: "one", capabilities: ["key"] }, owner: "test", reason: "test" }), /no longer matches/);
+    assert.equal(deck.store.sessions().length, 0);
+  } finally { await cleanup(); }
+});
+
+test("wake and unrelated configuration changes retain known feed observations", async () => {
+  const { deck, adapters, cleanup } = await setup();
+  adapters.inspectSources = async (sources = []) => sources.map((source) => ({ ...source, status: "connected" }));
+  try {
+    await deck.devices();
+    await deck.snapshot();
+    await new Promise((resolve) => setImmediate(resolve));
+    const before = await deck.snapshot();
+    assert.equal(before.sources.find((source) => source.id === "screen-two")?.status, "connected");
+    await deck.execute("devices.wake", { deviceId: "one" });
+    const waking = await deck.snapshot();
+    assert.equal(waking.devices.find((device) => device.id === "one")?.observation?.stale, true);
+    assert.equal(waking.devices.find((device) => device.id === "two")?.online, true);
+    assert.equal(waking.devices.find((device) => device.id === "two")?.observation?.stale, false);
+    assert.equal(waking.sources.find((source) => source.id === "screen-two")?.status, "connected");
+    const changed = structuredClone(deck.config.config);
+    changed.devices[0].name = "Changed identity";
+    await deck.execute("config.save", { config: changed, revision: deck.config.revision });
+    const saved = await deck.snapshot();
+    assert.equal(saved.devices.find((device) => device.id === "one")?.observation?.observedAt, null);
+    assert.equal(saved.devices.find((device) => device.id === "two")?.online, true);
+    assert.equal(saved.sources.find((source) => source.id === "screen-two")?.status, "connected");
+  } finally { await cleanup(); }
 });

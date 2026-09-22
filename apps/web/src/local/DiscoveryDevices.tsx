@@ -24,9 +24,10 @@ export function DiscoveryDevices({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const all = useRef<HTMLInputElement>(null);
-  const available = discovery.devices.filter(
-    (d) => !isDeviceConfigured(config, d) && !registrationIssue(d),
+  const newDevices = discovery.devices.filter(
+    (d) => !isDeviceConfigured(config, d),
   );
+  const available = newDevices.filter((d) => !registrationIssue(d));
   const chosen = available.filter((d) => selected.includes(d.id));
   useEffect(() => {
     if (all.current)
@@ -90,23 +91,25 @@ export function DiscoveryDevices({
       {!discovery.devices.length && (
         <p>No devices found. Connect a device and discover again.</p>
       )}
-      {discovery.devices.length > 0 && !available.length && (
+      {discovery.devices.length > 0 && !newDevices.length && (
+        <p role="status">
+          All discovered devices are already in your device list.
+        </p>
+      )}
+      {newDevices.length > 0 && !available.length && (
         <p role="status">No new devices are ready to add.</p>
       )}
       <div className="live-discovery">
-        {discovery.devices.map((device) => {
-          const configured = isDeviceConfigured(config, device);
-          const issue = configured ? undefined : registrationIssue(device);
+        {newDevices.map((device) => {
+          const issue = registrationIssue(device);
           return (
             <div key={device.id}>
               <label className="live-discovery-device">
                 <input
                   type="checkbox"
                   aria-label={`Select ${device.name} (${device.id})`}
-                  disabled={saving || configured || Boolean(issue)}
-                  checked={
-                    !configured && !issue && selected.includes(device.id)
-                  }
+                  disabled={saving || Boolean(issue)}
+                  checked={!issue && selected.includes(device.id)}
                   onChange={(e) =>
                     setSelected((ids) =>
                       e.target.checked
@@ -123,13 +126,9 @@ export function DiscoveryDevices({
                   {issue && <small>{issue}</small>}
                 </span>
               </label>
-              {configured ? (
-                <span className="live-discovery-configured">Configured</span>
-              ) : (
-                <button disabled={saving} onClick={() => configure(device)}>
-                  Configure…
-                </button>
-              )}
+              <button disabled={saving} onClick={() => configure(device)}>
+                Configure…
+              </button>
             </div>
           );
         })}

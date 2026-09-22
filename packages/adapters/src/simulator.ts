@@ -10,6 +10,7 @@ type Runner = typeof run;
 export async function simulatorState(
   device: DeviceConfig,
   execute: Runner = run,
+  checkReadiness = true,
 ): Promise<SimulatorState> {
   if (device.connection.type !== "simulator" || device.kind !== "virtual")
     fail(
@@ -40,7 +41,7 @@ export async function simulatorState(
       Booting: "starting",
       "Shutting Down": "stopping",
     };
-    if (found.state === "Booted") {
+    if (found.state === "Booted" && checkReadiness) {
       try {
         // CoreSimulator reports Booted before SpringBoard finishes startup.
         // Without -b this only observes the exact UDID; it cannot boot a device.
@@ -51,6 +52,41 @@ export async function simulatorState(
     return states[found.state] || "unavailable";
   }
   return "unavailable";
+}
+
+/** Display observations only. Action admission always uses simulatorState fresh. */
+export class SimulatorInventory {
+  private ready = new Map<string, { identity: string; nextRetry: number; failures: number; ready: boolean }>();
+  private generation = 0;
+  constructor(private now = Date.now) {}
+  invalidate(deviceId?: string) {
+    this.generation++;
+    if (deviceId) this.ready.delete(deviceId);
+    else this.ready.clear();
+  }
+  async state(device: DeviceConfig, execute: Runner = run): Promise<SimulatorState> {
+    const generation = this.generation;
+    const state = await simulatorState(device, execute, false);
+    if (generation !== this.generation) return state === "booted" ? "starting" : state;
+    if (state !== "booted") { this.ready.delete(device.id); return state; }
+    const identity = JSON.stringify(device.connection);
+    const previous = this.ready.get(device.id);
+    if (previous?.identity === identity) {
+      if (previous.ready) return "booted";
+      if (previous.nextRetry > this.now()) return "starting";
+    }
+    if (device.connection.type !== "simulator") return "unavailable";
+    try {
+      await execute("xcrun", ["simctl", "bootstatus", device.connection.udid], 2000);
+      if (generation === this.generation) this.ready.set(device.id, { identity, nextRetry: 0, failures: 0, ready: true });
+      return "booted";
+    } catch {
+      const failures = previous?.identity === identity ? previous.failures + 1 : 1;
+      const delay = [5000, 15000, 30000, 60000][Math.min(failures - 1, 3)];
+      if (generation === this.generation) this.ready.set(device.id, { identity, nextRetry: this.now() + delay, failures, ready: false });
+      return "starting";
+    }
+  }
 }
 
 export async function controlSimulator(
