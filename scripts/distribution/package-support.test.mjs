@@ -5,8 +5,13 @@ import { promisify } from "node:util";
 import { mkdtemp, mkdir, readFile, readlink, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { appInfo, numericVersion, postinstall, preinstall, requireReleaseSettings, validateMediaBundle } from "./package-support.mjs";
+import { appInfo, applicationBuildPayload, numericVersion, postinstall, preinstall, requireReleaseSettings, validateMediaBundle } from "./package-support.mjs";
 const exec = promisify(execFile);
+
+test("every application package includes the public reservation client", () => {
+  assert.ok(applicationBuildPayload.includes("client.mjs"));
+  assert.ok(applicationBuildPayload.includes("build-metadata.json"));
+});
 
 test("public packages cannot silently fall back to unsigned or test licensing", () => {
   const complete = { release: true, mode: "live", applicationIdentity: "Developer ID Application: Team (123)", installerIdentity: "Developer ID Installer: Team (123)", notaryProfile: "device-deck" };

@@ -120,6 +120,13 @@ test("simulator launch and close are idempotent without affecting another booted
   );
   assert.equal(booted.calls.filter((c) => c.args[1] === "shutdown").length, 1);
 });
+test("finishing an externally started simulator does not claim cold-start ownership", async () => {
+  const starting = fixture("Booting");
+  const result = await controlSimulator(simulator, "launch", starting.execute);
+  assert.equal(result.state, "booted");
+  assert.equal(result.changed, false);
+  assert(!starting.calls.some((call) => call.args[1] === "boot"));
+});
 test("a simulator whose system app never becomes ready reports launch failure instead of success", async () => {
   const base = fixture();
   const execute: typeof run = async (command, args, timeout) => {

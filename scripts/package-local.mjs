@@ -9,19 +9,13 @@ import {
 } from "node:fs/promises";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
+import { applicationBuildPayload } from "./distribution/package-support.mjs";
 const destination = path.resolve("work/package/device-deck");
 const { version } = JSON.parse(await readFile("package.json", "utf8"));
 await rm(destination, { recursive: true, force: true });
 await mkdir(destination, { recursive: true });
 await mkdir(path.join(destination, "build"), { recursive: true });
-for (const name of [
-  "daemon.mjs",
-  "devdeck.mjs",
-  "tui.mjs",
-  "mcp.mjs",
-  "native",
-  "web",
-])
+for (const name of applicationBuildPayload)
   await cp(path.join("build", name), path.join(destination, "build", name), {
     recursive: true,
   });

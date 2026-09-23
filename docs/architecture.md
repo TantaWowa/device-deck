@@ -8,6 +8,8 @@ Operator configuration lives in versioned JSON. `packages/config` validates stab
 
 Runtime state lives in SQLite with WAL, a busy timeout and immediate reservation transactions. Partial unique indexes prohibit two non-closed reservations for one logical device or canonical source identity. Lease credentials are random 256-bit values; only hashes are stored with sessions. Inventory never returns those credentials. Owner labels cannot authorize anything.
 
+Reservation groups persist one credential hash and their member/startup metadata. Selection solves one distinct-device assignment before an immediate transaction claims all member devices and canonical sources. Offline virtual members are started only after that commit. Group release first marks and maintenance-locks the whole set, closes sessions and capture work, restores only group-started simulators, then removes the locks. Expiry, preparation rollback, restart recovery and explicit release share this cleanup path. The client creates and persists the group credential before dispatch so a lost success response cannot create an ownerless lease.
+
 The service marks a session `closing` synchronously before waiting for its device queue. Subsequent input fails immediately. Queued operations revalidate before execution. Recorder finalization and source cleanup complete before a successor can reserve. On restart, persisted worker identities are checked before signalling processes. Unverifiable remote cleanup keeps the reservation closing, visible and unavailable.
 
 Maintenance locks are distinct from reservations. Maintenance on a reserved device returns a per-device failure. A restart temporarily establishes a maintenance lock before awaiting adapter I/O.

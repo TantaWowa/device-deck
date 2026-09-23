@@ -28,6 +28,12 @@ const descriptions: Partial<Record<Operation, string>> = {
     "Attempt to wake a configured device without reserving it, including devices reported offline. Before waking any reserved device, warn the user that this may interrupt current work and obtain an explicit wake confirmation; send the expected current sessionId and confirmed=true. Changed, closing or expired reservations reject the request. This preserves reservations and recordings, honors maintenance locks, and reports an attempt rather than proof the device is awake.",
   "sessions.reserve":
     "Atomically reserve one device selected by name, ID or capabilities. Return the session and secret leaseToken. Keep this token for subsequent operations; owner is only a display label.",
+  "sessions.reserveGroup":
+    "Atomically claim a complete criteria-selected device set, then start stopped virtual devices in parallel and wait until every member is ready. The caller must generate and privately persist leaseToken before this call so an uncertain response can always be released. Physical matches must already be online. Failure releases every member and restores virtual devices started for the group.",
+  "sessions.renewGroup":
+    "Extend every active member of a credential-owned reservation group to one shared expiry.",
+  "sessions.releaseGroup":
+    "Idempotently release every member of a credential-owned reservation group and close only virtual devices that group started.",
   "sessions.release":
     "Release this credential-owned session after finalizing capture. Old credentials cannot control a successor.",
   "sessions.takeover":

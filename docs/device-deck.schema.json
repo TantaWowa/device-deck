@@ -128,6 +128,15 @@
                 "maxLength": 256,
                 "default": ""
               },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 48
+                },
+                "maxItems": 30
+              },
               "inputMode": {
                 "type": "string",
                 "enum": [

@@ -159,7 +159,8 @@ export async function controlSimulator(
     deviceId: device.id,
     action,
     state: current,
-    changed: state !== expected,
+    changed:
+      action === "launch" ? state === "shutdown" : state !== "shutdown",
   };
 }
 

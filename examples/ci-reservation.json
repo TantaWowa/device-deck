@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "groupId": "owner/repository/run-id/attempt/job",
+  "owner": "CI",
+  "reason": "Selected regression suites",
+  "ttlMinutes": 240,
+  "requests": {
+    "androidPhone": {
+      "selector": {
+        "platform": "Android",
+        "kind": "virtual",
+        "formFactor": "phone",
+        "tags": ["ci"]
+      }
+    },
+    "appleTv": {
+      "selector": {
+        "platform": "Apple",
+        "kind": "virtual",
+        "formFactor": "tv",
+        "tags": ["ci"]
+      }
+    }
+  }
+}

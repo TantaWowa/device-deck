@@ -68,6 +68,12 @@ export function parseSelector(values: Record<string, unknown>): Selector {
     device: values.device,
     name: values.name,
     platform,
+    kind: values.kind,
+    formFactor: values["form-factor"],
+    tags:
+      typeof values.tags === "string"
+        ? values.tags.split(",").map((tag) => tag.trim()).filter(Boolean)
+        : undefined,
     state:
       typeof values.state === "string" ? values.state.toLowerCase() : undefined,
     capabilities:

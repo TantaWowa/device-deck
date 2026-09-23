@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import {
-  appInfo, bundleId, captureSetup, digest, minimumOS, numericVersion,
+  appInfo, applicationBuildPayload, bundleId, captureSetup, digest, minimumOS, numericVersion,
   postinstall, preinstall, requireReleaseSettings, validateMediaBundle,
   verifyMachOClosure, walk, xml,
 } from "./distribution/package-support.mjs";
@@ -92,7 +92,7 @@ const packagedNode = path.join(resources, "runtime/bin/node");
 if (execFileSync(packagedNode, ["--version"], { encoding: "utf8" }).trim() !== `v${runtime.version}`) throw new Error("Bundled Node version mismatch.");
 
 await mkdir(path.join(resources, "build"));
-for (const item of ["daemon.mjs", "devdeck.mjs", "tui.mjs", "mcp.mjs", "native", "web", "build-metadata.json"])
+for (const item of applicationBuildPayload)
   await cp(path.join(root, "build", item), path.join(resources, "build", item), { recursive: true });
 await mkdir(path.join(resources, "native"));
 await cp("native/apple-tv.py", path.join(resources, "native/apple-tv.py"));

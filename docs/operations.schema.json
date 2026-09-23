@@ -1,7 +1,15 @@
 {
   "inventory": {
     "type": "object",
-    "properties": {},
+    "properties": {
+      "deviceIds": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "maxItems": 1000
+      }
+    },
     "additionalProperties": false,
     "$schema": "http://json-schema.org/draft-07/schema#"
   },
@@ -40,13 +48,21 @@
   },
   "discover": {
     "type": "object",
-    "properties": {},
+    "properties": {
+      "refresh": {
+        "type": "boolean"
+      }
+    },
     "additionalProperties": false,
     "$schema": "http://json-schema.org/draft-07/schema#"
   },
   "capture-cards.list": {
     "type": "object",
-    "properties": {},
+    "properties": {
+      "refresh": {
+        "type": "boolean"
+      }
+    },
     "additionalProperties": false,
     "$schema": "http://json-schema.org/draft-07/schema#"
   },
@@ -212,6 +228,15 @@
                   "type": "string",
                   "maxLength": 256,
                   "default": ""
+                },
+                "tags": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 48
+                  },
+                  "maxItems": 30
                 },
                 "inputMode": {
                   "type": "string",
@@ -431,6 +456,14 @@
             },
             "default": []
           },
+          "ignoredCaptureCardIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "default": []
+          },
           "settings": {
             "type": "object",
             "properties": {
@@ -578,6 +611,30 @@
               "Other"
             ]
           },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "physical",
+              "virtual"
+            ]
+          },
+          "formFactor": {
+            "type": "string",
+            "enum": [
+              "phone",
+              "tv",
+              "other"
+            ]
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 48
+            },
+            "maxItems": 30
+          },
           "name": {
             "type": "string"
           },
@@ -629,6 +686,183 @@
       "selector",
       "owner",
       "reason"
+    ],
+    "additionalProperties": false,
+    "$schema": "http://json-schema.org/draft-07/schema#"
+  },
+  "sessions.reserveGroup": {
+    "type": "object",
+    "properties": {
+      "version": {
+        "type": "number",
+        "const": 1
+      },
+      "groupId": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 160,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]*$"
+      },
+      "owner": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128
+      },
+      "reason": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 512
+      },
+      "ttlMinutes": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 240
+      },
+      "requests": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "object",
+          "properties": {
+            "selector": {
+              "type": "object",
+              "properties": {
+                "device": {
+                  "type": "string"
+                },
+                "platform": {
+                  "type": "string",
+                  "enum": [
+                    "Roku",
+                    "Android",
+                    "Apple",
+                    "Other"
+                  ]
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "physical",
+                    "virtual"
+                  ]
+                },
+                "formFactor": {
+                  "type": "string",
+                  "enum": [
+                    "phone",
+                    "tv",
+                    "other"
+                  ]
+                },
+                "tags": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 48
+                  },
+                  "maxItems": 30
+                },
+                "name": {
+                  "type": "string"
+                },
+                "state": {
+                  "type": "string",
+                  "enum": [
+                    "free",
+                    "reserved",
+                    "online",
+                    "offline",
+                    "locked"
+                  ]
+                },
+                "capabilities": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "enum": [
+                      "preview",
+                      "key",
+                      "text",
+                      "screenshot",
+                      "record",
+                      "restart",
+                      "touch"
+                    ]
+                  }
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "selector"
+          ],
+          "additionalProperties": false
+        },
+        "propertyNames": {
+          "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,63}$"
+        }
+      },
+      "leaseToken": {
+        "type": "string",
+        "minLength": 32,
+        "maxLength": 256
+      }
+    },
+    "required": [
+      "version",
+      "groupId",
+      "owner",
+      "reason",
+      "requests",
+      "leaseToken"
+    ],
+    "additionalProperties": false,
+    "$schema": "http://json-schema.org/draft-07/schema#"
+  },
+  "sessions.renewGroup": {
+    "type": "object",
+    "properties": {
+      "groupId": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 160,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]*$"
+      },
+      "leaseToken": {
+        "type": "string",
+        "minLength": 1
+      },
+      "ttlMinutes": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 240
+      }
+    },
+    "required": [
+      "groupId",
+      "leaseToken"
+    ],
+    "additionalProperties": false,
+    "$schema": "http://json-schema.org/draft-07/schema#"
+  },
+  "sessions.releaseGroup": {
+    "type": "object",
+    "properties": {
+      "groupId": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 160,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]*$"
+      },
+      "leaseToken": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "required": [
+      "groupId",
+      "leaseToken"
     ],
     "additionalProperties": false,
     "$schema": "http://json-schema.org/draft-07/schema#"

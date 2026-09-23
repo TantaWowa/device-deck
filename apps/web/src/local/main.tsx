@@ -11,6 +11,7 @@ import { CaptureToasts, useCaptureFeedback } from "./capture-feedback";
 import { SimulatorControls } from "./SimulatorControls";
 import { FeedActions, type FeedAction } from "./FeedActions";
 import { DiscoveryDevices } from "./DiscoveryDevices";
+import { deviceEditorMetadata } from "../../../../packages/core/src/device-editor";
 import { registerDiscoveredDevices } from "../../../../packages/core/src/discovery";
 import { supportsWake, deviceInputMode } from "../../../../packages/core/src/remote";
 import { deviceFormFactor } from "../../../../packages/core/src/device-form-factor";
@@ -1614,6 +1615,7 @@ function DeviceEditor({
     ),
     [source, setSource] = useState(device?.captureSourceId || ""),
     [visibility, setVisibility] = useState(device?.visibility || "local"),
+    [tags, setTags] = useState((device?.tags || []).join(", ")),
     [error, setError] = useState(""),
     [saving, setSaving] = useState(false);
   return (
@@ -1671,7 +1673,7 @@ function DeviceEditor({
                       address.startsWith("emulator-")))
                     ? "virtual"
                     : "physical",
-                model: device?.model || "",
+                ...deviceEditorMetadata(device, tags),
                 visibility,
                 connection,
                 captureSourceId: selectedSource?.id || null,
@@ -1803,6 +1805,17 @@ function DeviceEditor({
                 </option>
               ))}
           </select>
+        </label>
+        <label>
+          Tags
+          <input
+            value={tags}
+            onChange={(e) => setTags(e.target.value)}
+            placeholder="ci, nightly, shared-lab"
+          />
+          <small>
+            Comma-separated labels used by criteria-based reservations.
+          </small>
         </label>
         <label>
           Visibility label

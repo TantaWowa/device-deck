@@ -152,6 +152,7 @@ async function setup(free = false) {
     revision: deck.config.revision,
   });
   return {
+    dir,
     deck,
     adapters,
     capture,
@@ -182,6 +183,729 @@ async function useSimulator(deck: DeckService) {
     revision: deck.config.revision,
   });
 }
+test("group reservation cold-starts, authenticates, restores and releases idempotently", async () => {
+  const { deck, adapters, cleanup } = await setup();
+  let running = false;
+  const actions: string[] = [];
+  try {
+    await useSimulator(deck);
+    const current = structuredClone(deck.config.config);
+    current.devices[0].tags = ["ci"];
+    await deck.execute("config.save", {
+      config: current,
+      revision: deck.config.revision,
+    });
+    const inspect = adapters.inspect.bind(adapters);
+    adapters.inspect = async (device) =>
+      device.id === "one"
+        ? {
+            ...device,
+            online: running,
+            locked: false,
+            healthDetail: running ? "Ready" : "Stopped",
+            capabilities: [],
+            simulatorState: running ? "booted" : "shutdown",
+          }
+        : inspect(device);
+    adapters.simulator = async (device, action) => {
+      actions.push(action);
+      running = action === "launch";
+      return {
+        deviceId: device.id,
+        action,
+        state: running ? "booted" : "shutdown",
+        changed: true,
+      };
+    };
+    const request = {
+      version: 1,
+      groupId: "test/group/one",
+      leaseToken: "a".repeat(43),
+      owner: "CI",
+      reason: "Native regression",
+      requests: {
+        television: {
+          selector: {
+            platform: "Apple",
+            kind: "virtual",
+            formFactor: "tv",
+            tags: ["ci"],
+          },
+        },
+      },
+    } as const;
+    const reserved: any = await deck.execute("sessions.reserveGroup", request);
+    assert.equal(reserved.devices.television.id, "one");
+    assert.equal(reserved.devices.television.startedByGroup, true);
+    assert.deepEqual(actions, ["launch"]);
+    const retried: any = await deck.execute("sessions.reserveGroup", request);
+    assert.equal(
+      retried.devices.television.sessionId,
+      reserved.devices.television.sessionId,
+    );
+    assert.deepEqual(actions, ["launch"]);
+    await assert.rejects(
+      deck.execute("sessions.reserveGroup", {
+        ...request,
+        reason: "A different reservation request",
+      }),
+      (error) => (error as any).code === "group-conflict",
+    );
+    await assert.rejects(
+      deck.execute("sessions.reserveGroup", {
+        ...request,
+        leaseToken: "w".repeat(43),
+      }),
+      (error) => (error as any).code === "invalid-lease",
+    );
+    running = false;
+    await assert.rejects(
+      deck.execute("sessions.reserveGroup", request),
+      (error) => (error as any).code === "group-not-ready",
+    );
+    running = true;
+    await assert.rejects(
+      deck.execute("sessions.releaseGroup", {
+        groupId: reserved.groupId,
+        leaseToken: "not-the-token",
+      }),
+      /does not own/,
+    );
+    await assert.rejects(
+      deck.execute("sessions.takeover", {
+        deviceId: "one",
+        owner: "Operator",
+        reason: "interrupt",
+        confirmed: true,
+      }),
+      /owning reservation group/,
+    );
+    const released: any = await deck.execute("sessions.releaseGroup", {
+      groupId: reserved.groupId,
+      leaseToken: reserved.leaseToken,
+    });
+    assert.equal(released.state, "closed");
+    assert.deepEqual(actions, ["launch", "close"]);
+    assert.equal(running, false);
+    const repeated: any = await deck.execute("sessions.releaseGroup", {
+      groupId: reserved.groupId,
+      leaseToken: reserved.leaseToken,
+    });
+    assert.equal(repeated.state, "closed");
+    assert.deepEqual(actions, ["launch", "close"]);
+  } finally {
+    await cleanup();
+  }
+});
+
+test("group release reports a never-created group distinctly from a wrong credential", async () => {
+  const { deck, cleanup } = await setup();
+  try {
+    await assert.rejects(
+      deck.execute("sessions.releaseGroup", {
+        groupId: "test/group/never-created",
+        leaseToken: "z".repeat(43),
+      }),
+      (error) => (error as any).code === "group-not-found",
+    );
+  } finally {
+    await cleanup();
+  }
+});
+
+test("a launch race does not make the group own an already-started simulator", async () => {
+  const { deck, adapters, cleanup } = await setup();
+  let running = false;
+  const actions: string[] = [];
+  try {
+    await useSimulator(deck);
+    adapters.inspect = async (device) => ({
+      ...device,
+      online: running,
+      locked: false,
+      healthDetail: running ? "Ready" : "Stopped",
+      capabilities: [],
+      simulatorState: running ? "booted" : "shutdown",
+    });
+    adapters.simulator = async (device, action) => {
+      actions.push(action);
+      if (action === "launch") running = true;
+      else running = false;
+      return {
+        deviceId: device.id,
+        action,
+        state: running ? "booted" : "shutdown",
+        // Another actor completed startup after our inspection but before the
+        // lifecycle admission check. Device Deck did not cold-start it.
+        changed: false,
+      };
+    };
+    const reserved: any = await deck.execute("sessions.reserveGroup", {
+      version: 1,
+      groupId: "test/group/launch-race",
+      leaseToken: "r".repeat(43),
+      owner: "CI",
+      reason: "Launch race",
+      requests: { simulator: { selector: { device: "one" } } },
+    });
+    assert.equal(reserved.devices.simulator.startedByGroup, false);
+    await deck.execute("sessions.releaseGroup", {
+      groupId: reserved.groupId,
+      leaseToken: reserved.leaseToken,
+    });
+    assert.deepEqual(actions, ["launch"]);
+    assert.equal(running, true);
+  } finally {
+    await cleanup();
+  }
+});
+
+test("release during a launch race reloads ownership before restoring simulators", async () => {
+  const { deck, adapters, cleanup } = await setup();
+  let running = false;
+  let finishLaunch: (() => void) | undefined;
+  let launchEntered: (() => void) | undefined;
+  const entered = new Promise<void>((resolve) => (launchEntered = resolve));
+  const actions: string[] = [];
+  const groupId = "test/group/release-launch-race";
+  const leaseToken = "q".repeat(43);
+  try {
+    await useSimulator(deck);
+    adapters.inspect = async (device) => ({
+      ...device,
+      online: running,
+      locked: false,
+      healthDetail: running ? "Ready" : "Stopped",
+      capabilities: [],
+      simulatorState: running ? "booted" : "shutdown",
+    });
+    adapters.simulator = async (device, action) => {
+      actions.push(action);
+      if (action === "launch") {
+        launchEntered?.();
+        await new Promise<void>((resolve) => (finishLaunch = resolve));
+        running = true;
+        return {
+          deviceId: device.id,
+          action,
+          state: "booted" as const,
+          changed: false,
+        };
+      }
+      running = false;
+      return {
+        deviceId: device.id,
+        action,
+        state: "shutdown" as const,
+        changed: true,
+      };
+    };
+    const request = {
+      version: 1,
+      groupId,
+      leaseToken,
+      owner: "CI",
+      reason: "Launch/release race",
+      requests: { simulator: { selector: { device: "one" } } },
+    } as const;
+    const reserving = deck.execute("sessions.reserveGroup", request);
+    await entered;
+    await assert.rejects(
+      deck.execute("sessions.reserveGroup", request),
+      (error) => (error as any).code === "group-preparing",
+    );
+    const releasing = deck.execute("sessions.releaseGroup", {
+      groupId,
+      leaseToken,
+    });
+    while (deck.store.group(groupId).state !== "closing")
+      await new Promise((resolve) => setImmediate(resolve));
+    finishLaunch?.();
+    await assert.rejects(reserving, /expired or was cancelled/);
+    await releasing;
+    assert.deepEqual(actions, ["launch"]);
+    assert.equal(running, true);
+    assert.equal(deck.store.group(groupId).state, "closed");
+  } finally {
+    finishLaunch?.();
+    await cleanup();
+  }
+});
+
+test("group reservation rolls back every claim and cold start when preparation fails", async () => {
+  const { deck, adapters, cleanup } = await setup();
+  const actions: string[] = [];
+  const running = new Set<string>();
+  try {
+    const current = structuredClone(deck.config.config);
+    for (const [index, device] of current.devices.entries()) {
+      device.platform = "Apple";
+      device.connection = {
+        type: "simulator",
+        os: "ios",
+        udid: index
+          ? "7829DB75-6928-4E9C-982A-4AF899FA404D"
+          : "F4B9CA01-BA57-40A0-984D-38B7F91AB8A1",
+      };
+    }
+    await deck.execute("config.save", {
+      config: current,
+      revision: deck.config.revision,
+    });
+    adapters.inspect = async (device) => ({
+      ...device,
+      online: running.has(device.id),
+      locked: false,
+      healthDetail: running.has(device.id) ? "Ready" : "Stopped",
+      capabilities: [],
+      simulatorState: running.has(device.id) ? "booted" : "shutdown",
+    });
+    adapters.simulator = async (device, action) => {
+      actions.push(`${action}:${device.id}`);
+      if (action === "launch" && device.id === "two")
+        throw new Error("Fixture boot failed");
+      if (action === "launch") running.add(device.id);
+      else running.delete(device.id);
+      return {
+        deviceId: device.id,
+        action,
+        state: action === "launch" ? "booted" : "shutdown",
+        changed: true,
+      };
+    };
+    await assert.rejects(
+      deck.execute("sessions.reserveGroup", {
+        version: 1,
+        groupId: "test/group/rollback",
+        leaseToken: "b".repeat(43),
+        owner: "CI",
+        reason: "Atomic setup",
+        requests: {
+          first: { selector: { device: "one" } },
+          second: { selector: { device: "two" } },
+        },
+      }),
+      /Fixture boot failed/,
+    );
+    assert.ok(deck.store.sessions().every((session) => session.state === "closed"));
+    assert.equal(deck.store.group("test/group/rollback").state, "closed");
+    assert.equal(deck.store.lockReason("one"), undefined);
+    assert.equal(deck.store.lockReason("two"), undefined);
+    assert.ok(actions.includes("close:one"));
+    assert.ok(actions.includes("close:two"));
+  } finally {
+    await cleanup();
+  }
+});
+
+test("failed group cleanup protects config and maintenance state until retry succeeds", async () => {
+  const { deck, adapters, cleanup } = await setup();
+  let running = false;
+  let closeAttempts = 0;
+  try {
+    await useSimulator(deck);
+    adapters.inspect = async (device) => ({
+      ...device,
+      online: running,
+      locked: false,
+      healthDetail: running ? "Ready" : "Stopped",
+      capabilities: [],
+      simulatorState: running ? "booted" : "shutdown",
+    });
+    adapters.simulator = async (device, action) => {
+      if (action === "launch") running = true;
+      else if (++closeAttempts === 1) throw new Error("close failed once");
+      else running = false;
+      return {
+        deviceId: device.id,
+        action,
+        state: running ? ("booted" as const) : ("shutdown" as const),
+        changed: true,
+      };
+    };
+    const reserved: any = await deck.execute("sessions.reserveGroup", {
+      version: 1,
+      groupId: "test/group/cleanup-retry",
+      leaseToken: "c".repeat(43),
+      owner: "CI",
+      reason: "Cleanup retry",
+      requests: { simulator: { selector: { device: "one" } } },
+    });
+    await assert.rejects(
+      deck.execute("sessions.releaseGroup", {
+        groupId: reserved.groupId,
+        leaseToken: reserved.leaseToken,
+      }),
+      /close failed once/,
+    );
+    assert.equal(deck.store.group(reserved.groupId).state, "closing");
+    assert.match(deck.store.lockReason("one") || "", /cleanup/);
+
+    const changedDevice = structuredClone(deck.config.config);
+    changedDevice.devices[0].name = "Changed while closing";
+    await assert.rejects(
+      deck.execute("config.save", {
+        config: changedDevice,
+        revision: deck.config.revision,
+      }),
+      /Release the affected session/,
+    );
+    const changedTools = structuredClone(deck.config.config);
+    changedTools.tools.adb = "/different/adb";
+    await assert.rejects(
+      deck.execute("config.save", {
+        config: changedTools,
+        revision: deck.config.revision,
+      }),
+      /Release sessions/,
+    );
+    const maintenance: any = await deck.execute("devices.bulk", {
+      ids: ["one"],
+      action: "unlock",
+      reason: "Operator override",
+    });
+    assert.equal(maintenance[0].ok, false);
+    assert.match(maintenance[0].error, /Finish reservation group cleanup/);
+    assert.match(deck.store.lockReason("one") || "", /cleanup/);
+
+    const released: any = await deck.execute("sessions.releaseGroup", {
+      groupId: reserved.groupId,
+      leaseToken: reserved.leaseToken,
+    });
+    assert.equal(released.state, "closed");
+    assert.equal(deck.store.lockReason("one"), undefined);
+    assert.equal(running, false);
+  } finally {
+    await cleanup();
+  }
+});
+
+test("group expiry closes every member and restores only virtuals cold-started by the group", async () => {
+  const { deck, adapters, cleanup } = await setup();
+  const running = new Set<string>(["two"]);
+  const actions: string[] = [];
+  try {
+    const current = structuredClone(deck.config.config);
+    for (const [index, device] of current.devices.entries()) {
+      device.platform = "Apple";
+      device.connection = {
+        type: "simulator",
+        os: "ios",
+        udid: index
+          ? "7829DB75-6928-4E9C-982A-4AF899FA404D"
+          : "F4B9CA01-BA57-40A0-984D-38B7F91AB8A1",
+      };
+    }
+    await deck.execute("config.save", {
+      config: current,
+      revision: deck.config.revision,
+    });
+    adapters.inspect = async (device) => ({
+      ...device,
+      online: running.has(device.id),
+      locked: false,
+      healthDetail: running.has(device.id) ? "Ready" : "Stopped",
+      capabilities: [],
+      simulatorState: running.has(device.id) ? "booted" : "shutdown",
+    });
+    adapters.simulator = async (device, action) => {
+      actions.push(`${action}:${device.id}`);
+      if (action === "launch") running.add(device.id);
+      else running.delete(device.id);
+      return {
+        deviceId: device.id,
+        action,
+        state: action === "launch" ? "booted" : "shutdown",
+        changed: true,
+      };
+    };
+    const reserved: any = await deck.execute("sessions.reserveGroup", {
+      version: 1,
+      groupId: "test/group/expiry",
+      leaseToken: "e".repeat(43),
+      owner: "CI",
+      reason: "Expiry recovery",
+      requests: {
+        cold: { selector: { device: "one" } },
+        warm: { selector: { device: "two" } },
+      },
+    });
+    const group = deck.store.group(reserved.groupId);
+    group.expiresAt = Date.now() - 1;
+    deck.store.putGroup(group);
+    await deck.expire();
+    assert.equal(deck.store.group(reserved.groupId).state, "closed");
+    assert.ok(
+      deck.store
+        .sessions()
+        .filter((session) => session.groupId === reserved.groupId)
+        .every((session) => session.state === "closed"),
+    );
+    assert.deepEqual(actions, ["launch:one", "close:one"]);
+    assert.deepEqual([...running], ["two"]);
+  } finally {
+    await cleanup();
+  }
+});
+
+test("expiry during group preparation cannot reactivate or return a cancelled group", async () => {
+  const { deck, adapters, cleanup } = await setup();
+  let finishLaunch: (() => void) | undefined;
+  let running = false;
+  try {
+    await useSimulator(deck);
+    adapters.inspect = async (device) => ({
+      ...device,
+      online: running,
+      locked: false,
+      healthDetail: running ? "Ready" : "Stopped",
+      capabilities: [],
+      simulatorState: running ? "booted" : "shutdown",
+    });
+    adapters.simulator = async (device, action) => {
+      if (action === "launch") {
+        await new Promise<void>((resolve) => (finishLaunch = resolve));
+        running = true;
+      } else running = false;
+      return {
+        deviceId: device.id,
+        action,
+        state: running ? "booted" : "shutdown",
+        changed: true,
+      };
+    };
+    const reserving = deck.execute("sessions.reserveGroup", {
+      version: 1,
+      groupId: "test/group/preparing-expiry",
+      leaseToken: "f".repeat(43),
+      owner: "CI",
+      reason: "Slow startup",
+      requests: { slow: { selector: { device: "one" } } },
+    });
+    while (!deck.store.groups().length || !finishLaunch)
+      await new Promise((resolve) => setImmediate(resolve));
+    const group = deck.store.group("test/group/preparing-expiry");
+    group.expiresAt = Date.now() - 1;
+    deck.store.putGroup(group);
+    const expiring = deck.expire();
+    while (deck.store.group(group.id).state !== "closing")
+      await new Promise((resolve) => setImmediate(resolve));
+    finishLaunch();
+    await assert.rejects(reserving, /expired or was cancelled/);
+    await expiring;
+    assert.equal(deck.store.group(group.id).state, "closed");
+    assert.equal(running, false);
+  } finally {
+    finishLaunch?.();
+    await cleanup();
+  }
+});
+
+test("restart recovery restores a cold-started group and clears its cleanup locks", async () => {
+  const fixture = await setup();
+  const { dir, deck, adapters, capture } = fixture;
+  let running = false;
+  let recovered: DeckService | undefined;
+  try {
+    await useSimulator(deck);
+    adapters.inspect = async (device) => ({
+      ...device,
+      online: running,
+      locked: false,
+      healthDetail: running ? "Ready" : "Stopped",
+      capabilities: [],
+      simulatorState: running ? "booted" : "shutdown",
+    });
+    adapters.simulator = async (device, action) => {
+      running = action === "launch";
+      return {
+        deviceId: device.id,
+        action,
+        state: running ? "booted" : "shutdown",
+        changed: true,
+      };
+    };
+    await deck.execute("sessions.reserveGroup", {
+      version: 1,
+      groupId: "test/group/restart",
+      leaseToken: "g".repeat(43),
+      owner: "CI",
+      reason: "Crash recovery",
+      requests: { simulator: { selector: { device: "one" } } },
+    });
+    assert.equal(running, true);
+    clearInterval((deck as any).timer);
+    deck.licensing.close();
+    await Promise.all([deck.streams.close(), capture.close(), adapters.close()]);
+    deck.store.close();
+
+    const nextAdapters = new TestAdapters();
+    nextAdapters.simulator = async (device, action) => {
+      if (action === "close") running = false;
+      return {
+        deviceId: device.id,
+        action,
+        state: action === "close" ? "shutdown" : "booted",
+        changed: true,
+      };
+    };
+    const nextCapture = new TestCapture(nextAdapters);
+    const licensed = await licensedManager(dir);
+    recovered = new DeckService(
+      dir,
+      undefined,
+      nextAdapters,
+      nextCapture,
+      licensed.manager,
+    );
+    await recovered.init();
+    assert.equal(recovered.store.group("test/group/restart").state, "closed");
+    assert.equal(recovered.store.lockReason("one"), undefined);
+    assert.ok(
+      recovered.store
+        .sessions()
+        .filter((session) => session.groupId === "test/group/restart")
+        .every((session) => session.state === "closed"),
+    );
+    assert.equal(running, false);
+  } finally {
+    if (recovered) await recovered.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("group reservation returns the resolved online Android emulator serial", async () => {
+  const { deck, adapters, cleanup } = await setup();
+  let running = false;
+  try {
+    const current = structuredClone(deck.config.config);
+    current.devices[0].connection = {
+      type: "adb",
+      serial: "emulator-5554",
+      avdName: "Hosanna_Phone_API_36",
+      port: 5037,
+    };
+    current.devices[0].inputMode = "touch";
+    await deck.execute("config.save", {
+      config: current,
+      revision: deck.config.revision,
+    });
+    const inspect = adapters.inspect.bind(adapters);
+    adapters.inspect = async (device) =>
+      device.id === "one"
+        ? {
+            ...device,
+            online: running,
+            locked: false,
+            healthDetail: running ? "Ready" : "Stopped",
+            capabilities: [],
+            simulatorState: running ? "booted" : "shutdown",
+          }
+        : inspect(device);
+    adapters.simulator = async (device, action) => {
+      running = action === "launch";
+      return {
+        deviceId: device.id,
+        action,
+        state: running ? "booted" : "shutdown",
+        changed: true,
+        ...(running ? { serial: "emulator-7777" } : {}),
+      };
+    };
+    adapters.verifyIdentity = async (device) =>
+      device.connection.type === "adb"
+        ? {
+            ...device,
+            connection: { ...device.connection, serial: "emulator-7777" },
+          }
+        : device;
+    const reserved: any = await deck.execute("sessions.reserveGroup", {
+      version: 1,
+      groupId: "test/group/android",
+      leaseToken: "c".repeat(43),
+      owner: "CI",
+      reason: "Android regression",
+      requests: {
+        phone: {
+          selector: {
+            platform: "Android",
+            kind: "virtual",
+            formFactor: "phone",
+          },
+        },
+      },
+    });
+    assert.equal(reserved.devices.phone.connection.serial, "emulator-7777");
+    await deck.execute("sessions.releaseGroup", {
+      groupId: reserved.groupId,
+      leaseToken: reserved.leaseToken,
+    });
+  } finally {
+    await cleanup();
+  }
+});
+
+test("an unsatisfiable group creates no partial sessions", async () => {
+  const { deck, cleanup } = await setup();
+  try {
+    await assert.rejects(
+      deck.execute("sessions.reserveGroup", {
+        version: 1,
+        groupId: "test/group/no-match",
+        leaseToken: "d".repeat(43),
+        owner: "CI",
+        reason: "Too many devices",
+        requests: {
+          first: { selector: { platform: "Android" } },
+          second: { selector: { platform: "Android" } },
+          third: { selector: { platform: "Android" } },
+        },
+      }),
+      /complete requested device set/,
+    );
+    assert.equal(deck.store.sessions().length, 0);
+    assert.equal(deck.store.groups().length, 0);
+  } finally {
+    await cleanup();
+  }
+});
+
+test("failed group renewal changes no member or group expiry", async () => {
+  const { deck, cleanup } = await setup();
+  try {
+    const reserved: any = await deck.execute("sessions.reserveGroup", {
+      version: 1,
+      groupId: "test/group/renew-atomic",
+      leaseToken: "n".repeat(43),
+      owner: "Agent",
+      reason: "Long-running work",
+      requests: {
+        first: { selector: { device: "one" } },
+        second: { selector: { device: "two" } },
+      },
+    });
+    const groupBefore = deck.store.group(reserved.groupId);
+    const first = deck.store.session(groupBefore.members[0].sessionId);
+    const second = deck.store.session(groupBefore.members[1].sessionId);
+    const firstExpiry = first.expiresAt;
+    const groupExpiry = groupBefore.expiresAt;
+    second.state = "closed";
+    second.endedAt = Date.now();
+    deck.store.putSession(second);
+    await assert.rejects(
+      deck.execute("sessions.renewGroup", {
+        groupId: reserved.groupId,
+        leaseToken: reserved.leaseToken,
+        ttlMinutes: 120,
+      }),
+      /no longer active/,
+    );
+    assert.equal(deck.store.session(first.id).expiresAt, firstExpiry);
+    assert.equal(deck.store.group(reserved.groupId).expiresAt, groupExpiry);
+  } finally {
+    await cleanup();
+  }
+});
 test("simulator lifecycle refuses occupied/recording devices and requires close confirmation", async () => {
   const { deck, adapters, capture, cleanup } = await setup();
   const actions: string[] = [];

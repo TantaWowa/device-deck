@@ -16,6 +16,7 @@ import {
   type Event,
   type Input,
   type Artifact,
+  type ReservationGroup,
   fail,
 } from "../../../../packages/core/src/local/types";
 const hash = (token: string) =>
@@ -36,6 +37,7 @@ export class Store {
       CREATE TABLE IF NOT EXISTS inputs(id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, recording_id TEXT, payload TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS artifacts(id TEXT PRIMARY KEY, session_id TEXT NOT NULL, payload TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS workers(artifact_id TEXT PRIMARY KEY, payload TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS reservation_groups(id TEXT PRIMARY KEY, state TEXT NOT NULL, token_hash TEXT NOT NULL, payload TEXT NOT NULL);
       PRAGMA user_version=1;`);
   }
   transaction<T>(action: () => T) {
@@ -152,6 +154,190 @@ export class Store {
         detail: reason,
       });
       return { session, leaseToken };
+    });
+  }
+  reserveGroup(
+    id: string,
+    members: {
+      alias: string;
+      deviceId: string;
+      sourceId: string | null;
+      sourceKey: string | null;
+    }[],
+    owner: string,
+    reason: string,
+    requestHash: string,
+    ttlMinutes: number,
+    leaseToken: string,
+    maxSessions = Infinity,
+  ) {
+    return this.transaction(() => {
+      if (this.db.prepare("SELECT id FROM reservation_groups WHERE id=?").get(id))
+        fail(
+          "group-exists",
+          "A reservation group with this ID already exists. Release it or use a unique run attempt ID.",
+          409,
+        );
+      const active = this.sessions().filter((session) => session.state !== "closed");
+      if (active.length + members.length > maxSessions)
+        fail(
+          "pro-required",
+          `This reservation group needs ${members.length} concurrent device sessions, but the current license permits ${maxSessions}.`,
+          403,
+        );
+      const requestedDevices = new Set<string>();
+      const requestedSources = new Set<string>();
+      for (const member of members) {
+        if (requestedDevices.has(member.deviceId))
+          fail("group-conflict", "A reservation group cannot assign one device to multiple requests.", 409);
+        requestedDevices.add(member.deviceId);
+        if (this.lockReason(member.deviceId))
+          fail("device-locked", `Device ${member.deviceId} is locked for maintenance.`, 409);
+        if (active.some((session) => session.deviceId === member.deviceId))
+          fail("device-reserved", `Device ${member.deviceId} is already reserved.`, 409);
+        if (member.sourceKey) {
+          if (requestedSources.has(member.sourceKey))
+            fail("source-reserved", "Two requested devices share one capture source.", 409);
+          requestedSources.add(member.sourceKey);
+          if (
+            this.db
+              .prepare("SELECT id FROM sessions WHERE source_key=? AND state != 'closed'")
+              .get(member.sourceKey)
+          )
+            fail("source-reserved", "A requested capture source is in use by another session.", 409);
+        }
+      }
+      const createdAt = Date.now();
+      const expiresAt = createdAt + ttlMinutes * 60000;
+      const tokenHash = hash(leaseToken);
+      const sessions = members.map((member) => {
+        const session: Session = {
+          id: randomUUID(),
+          deviceId: member.deviceId,
+          sourceId: member.sourceId,
+          owner,
+          reason,
+          createdAt,
+          expiresAt,
+          state: "active",
+          groupId: id,
+          groupAlias: member.alias,
+        };
+        this.db
+          .prepare("INSERT INTO sessions VALUES (?,?,?,?,?,?)")
+          .run(
+            session.id,
+            session.deviceId,
+            member.sourceKey,
+            session.state,
+            tokenHash,
+            JSON.stringify(session),
+          );
+        this.event({
+          deviceId: session.deviceId,
+          sessionId: session.id,
+          owner,
+          action: "reserved",
+          detail: `${reason} (group ${id}, ${member.alias})`,
+        });
+        return session;
+      });
+      const group: ReservationGroup = {
+        id,
+        owner,
+        reason,
+        requestHash,
+        createdAt,
+        expiresAt,
+        state: "preparing",
+        members: sessions.map((session) => ({
+          alias: session.groupAlias!,
+          sessionId: session.id,
+          deviceId: session.deviceId,
+          startedByGroup: false,
+        })),
+      };
+      this.db
+        .prepare("INSERT INTO reservation_groups VALUES (?,?,?,?)")
+        .run(group.id, group.state, tokenHash, JSON.stringify(group));
+      return { group, sessions, leaseToken };
+    });
+  }
+  groups() {
+    return (
+      this.db.prepare("SELECT payload FROM reservation_groups").all() as { payload: string }[]
+    ).map((row) => JSON.parse(row.payload) as ReservationGroup);
+  }
+  group(id: string) {
+    const row = this.db
+      .prepare("SELECT payload FROM reservation_groups WHERE id=?")
+      .get(id) as { payload: string } | undefined;
+    if (!row) fail("group-not-found", "Reservation group not found.", 404);
+    return JSON.parse(row.payload) as ReservationGroup;
+  }
+  validateGroup(id: string, token: string, allowClosed = false) {
+    const row = this.db
+      .prepare("SELECT payload,token_hash FROM reservation_groups WHERE id=?")
+      .get(id) as LeaseRow | undefined;
+    if (!row)
+      fail("group-not-found", "Reservation group not found.", 404);
+    if (!timingSafeEqual(Buffer.from(row.token_hash), Buffer.from(hash(token))))
+      fail("invalid-lease", "The credential does not own this reservation group.", 403);
+    const group = JSON.parse(row.payload) as ReservationGroup;
+    if (
+      !allowClosed &&
+      (group.state !== "active" || group.expiresAt <= Date.now())
+    )
+      fail("stale-lease", "This reservation group is expired, closed, or not ready.", 409);
+    return group;
+  }
+  putGroup(group: ReservationGroup) {
+    this.db
+      .prepare("UPDATE reservation_groups SET state=?,payload=? WHERE id=?")
+      .run(group.state, JSON.stringify(group), group.id);
+  }
+  setGroupMemberStarted(id: string, alias: string, startedByGroup: boolean) {
+    return this.transaction(() => {
+      const group = this.group(id);
+      const member = group.members.find((item) => item.alias === alias);
+      if (!member)
+        fail("group-member-not-found", "Reservation group member not found.", 404);
+      member.startedByGroup = startedByGroup;
+      this.putGroup(group);
+      return group;
+    });
+  }
+  renewGroup(
+    id: string,
+    token: string,
+    expiresAt: number,
+    authorize: (session: Session) => void,
+  ) {
+    return this.transaction(() => {
+      const group = this.validateGroup(id, token);
+      const sessions = group.members.map((member) => this.session(member.sessionId));
+      for (const session of sessions) {
+        if (session.state !== "active")
+          fail("stale-lease", "A member of this reservation group is no longer active.", 409);
+        authorize(session);
+      }
+      for (const session of sessions) {
+        session.expiresAt = expiresAt;
+        this.putSession(session);
+      }
+      group.expiresAt = expiresAt;
+      this.putGroup(group);
+      return group;
+    });
+  }
+  finalizeGroup(group: ReservationGroup, cleanupLockReason: string) {
+    return this.transaction(() => {
+      for (const member of group.members)
+        this.db
+          .prepare("DELETE FROM locks WHERE device_id=? AND reason=?")
+          .run(member.deviceId, cleanupLockReason);
+      this.putGroup(group);
+      return group;
     });
   }
   putSession(s: Session) {
