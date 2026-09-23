@@ -599,14 +599,30 @@ export class Adapters {
       result.capabilities = [];
       result.gestureCapabilities = [];
       result.healthDetail = (e as Error).message;
+      if (
+        isAndroidEmulator(d) &&
+        [
+          "emulator-identity-pending",
+          "emulator-not-ready",
+          "emulator-offline",
+        ].includes((e as { code?: string }).code || "")
+      ) {
+        result.simulatorState = "starting";
+        result.readiness = "starting";
+      }
       result.observation = { observedAt: null, refreshing: false, stale: true, error: (e as Error).message, nextRefreshAt: Date.now() + 5000 };
     }
     if (result.online) result.readiness = "ready";
     return result;
   }
-  async simulator(d: DeviceConfig, action: "launch" | "close") {
-    if (isAndroidEmulator(d)) return this.emulators.control(d, action);
-    return controlSimulator(d, action);
+  async simulator(
+    d: DeviceConfig,
+    action: "launch" | "close",
+    beforeLaunch?: () => Promise<void>,
+  ) {
+    if (isAndroidEmulator(d))
+      return this.emulators.control(d, action, beforeLaunch);
+    return controlSimulator(d, action, undefined, beforeLaunch);
   }
   async prepareSimulator(d: DeviceConfig) {
     if (isAndroidEmulator(d)) return this.emulators.prepare(d);

@@ -57,7 +57,17 @@ function fixture(initial = "Shutdown", target = simulator) {
 }
 test("simulator launch boots the configured UDID, waits for readiness, and opens the selected Xcode Simulator", async () => {
   const { execute, calls } = fixture();
-  const result = await controlSimulator(simulator, "launch", execute);
+  let ownershipRecorded = false;
+  const result = await controlSimulator(
+    simulator,
+    "launch",
+    execute,
+    async () => {
+      assert.equal(calls.some((call) => call.args[1] === "boot"), false);
+      ownershipRecorded = true;
+    },
+  );
+  assert.equal(ownershipRecorded, true);
   assert.equal(result.state, "booted");
   assert.equal(result.changed, true);
   assert.deepEqual(

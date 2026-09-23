@@ -16,6 +16,7 @@ import {
   type RecordingHandle,
 } from "../../../packages/capture/src";
 import {
+  DeckError,
   type DeviceConfig,
   type Device,
   type Config,
@@ -114,7 +115,14 @@ class TestCapture extends CaptureEngine {
   async closeSource(_source: any) {}
   async close() {}
 }
-async function setup(free = false) {
+async function setup(
+  free = false,
+  groupReadiness: {
+    timeoutMs?: number;
+    retryIntervalMs?: number;
+    sleep?: (ms: number) => Promise<void>;
+  } = {},
+) {
   const dir = await mkdtemp(path.join(os.tmpdir(), "deck-service-"));
   const adapters = new TestAdapters(),
     capture = new TestCapture(adapters);
@@ -125,6 +133,7 @@ async function setup(free = false) {
     adapters,
     capture,
     licensed?.manager,
+    groupReadiness,
   );
   await deck.init();
   const c = structuredClone(deck.config.config);
@@ -183,6 +192,20 @@ async function useSimulator(deck: DeckService) {
     revision: deck.config.revision,
   });
 }
+async function useAndroidAvd(deck: DeckService) {
+  const c = structuredClone(deck.config.config);
+  c.devices[0].connection = {
+    type: "adb",
+    serial: "emulator-5558",
+    avdName: "Television_1080p",
+    port: 5037,
+  };
+  c.devices[0].inputMode = "remote";
+  await deck.execute("config.save", {
+    config: c,
+    revision: deck.config.revision,
+  });
+}
 test("group reservation cold-starts, authenticates, restores and releases idempotently", async () => {
   const { deck, adapters, cleanup } = await setup();
   let running = false;
@@ -207,7 +230,15 @@ test("group reservation cold-starts, authenticates, restores and releases idempo
             simulatorState: running ? "booted" : "shutdown",
           }
         : inspect(device);
-    adapters.simulator = async (device, action) => {
+    adapters.simulator = async (device, action, beforeLaunch) => {
+      if (action === "launch") {
+        await beforeLaunch?.();
+        assert.equal(
+          deck.store.group("test/group/one").members[0].startedByGroup,
+          true,
+          "cold-start ownership is durable before lifecycle mutation",
+        );
+      }
       actions.push(action);
       running = action === "launch";
       return {
@@ -301,6 +332,522 @@ test("group reservation cold-starts, authenticates, restores and releases idempo
     assert.equal(repeated.state, "closed");
     assert.deepEqual(actions, ["launch", "close"]);
   } finally {
+    await cleanup();
+  }
+});
+
+test("group reservation waits for a warm emulator identity without owning its lifecycle", async () => {
+  const { deck, adapters, cleanup } = await setup(false, {
+    timeoutMs: 100,
+    retryIntervalMs: 0,
+  });
+  const actions: string[] = [];
+  let preparationInspections = 0;
+  try {
+    await useAndroidAvd(deck);
+    adapters.inspect = async (device) => {
+      const preparing = deck.store.groups().some(
+        (group) => group.state === "preparing",
+      );
+      if (preparing && device.id === "one") preparationInspections++;
+      const ready = preparing && preparationInspections >= 3;
+      return {
+        ...device,
+        online: ready,
+        locked: false,
+        healthDetail: ready
+          ? "Ready"
+          : "An emulator connection is present but its AVD identity is not available yet.",
+        capabilities: [],
+        readiness: ready ? "ready" : "starting",
+        simulatorState: ready ? "booted" : "starting",
+      };
+    };
+    adapters.verifyIdentity = async (device) => ({
+      ...device,
+      connection: device.connection.type === "adb"
+        ? { ...device.connection, serial: "emulator-5572" }
+        : device.connection,
+    });
+    adapters.simulator = async (device, action) => {
+      actions.push(action);
+      return {
+        deviceId: device.id,
+        action,
+        state: action === "launch" ? "booted" : "shutdown",
+        changed: true,
+      };
+    };
+    const reserved: any = await deck.execute("sessions.reserveGroup", {
+      version: 1,
+      groupId: "test/group/warm-identity-pending",
+      leaseToken: "i".repeat(43),
+      owner: "CI",
+      reason: "Warm Android identity stabilization",
+      requests: { television: { selector: { device: "one" } } },
+    });
+    assert.equal(preparationInspections, 3);
+    assert.equal(reserved.devices.television.startedByGroup, false);
+    assert.equal(
+      reserved.devices.television.connection.serial,
+      "emulator-5572",
+    );
+    assert.deepEqual(actions, []);
+    await deck.execute("sessions.releaseGroup", {
+      groupId: reserved.groupId,
+      leaseToken: reserved.leaseToken,
+    });
+    assert.deepEqual(actions, []);
+  } finally {
+    await cleanup();
+  }
+});
+
+test("parallel cold AVD starts retry while a sibling launch identity is pending", async () => {
+  const { deck, adapters, cleanup } = await setup(false, {
+    timeoutMs: 1_000,
+    retryIntervalMs: 0,
+    sleep: () => new Promise((resolve) => setImmediate(resolve)),
+  });
+  const states = new Map<string, "shutdown" | "unidentified" | "booted">([
+    ["one", "shutdown"],
+    ["two", "shutdown"],
+  ]);
+  let firstSpawned: (() => void) | undefined;
+  const siblingIsUnidentified = new Promise<void>(
+    (resolve) => (firstSpawned = resolve),
+  );
+  let finishFirst: (() => void) | undefined;
+  const firstMayIdentify = new Promise<void>(
+    (resolve) => (finishFirst = resolve),
+  );
+  const actualLaunches: string[] = [];
+  let secondControlAttempts = 0;
+  try {
+    const current = structuredClone(deck.config.config);
+    current.devices[0].connection = {
+      type: "adb",
+      serial: "emulator-5554",
+      avdName: "Phone_API_36",
+      port: 5037,
+    };
+    current.devices[1].connection = {
+      type: "adb",
+      serial: "emulator-5558",
+      avdName: "Television_1080p",
+      port: 5037,
+    };
+    await deck.execute("config.save", {
+      config: current,
+      revision: deck.config.revision,
+    });
+    adapters.inspect = async (device) => {
+      const state = states.get(device.id)!;
+      return {
+        ...device,
+        online: state === "booted",
+        locked: false,
+        healthDetail: state === "booted" ? "Ready" : "Stopped",
+        capabilities: [],
+        readiness: state === "booted" ? "ready" : "offline",
+        simulatorState: state === "booted" ? "booted" : "shutdown",
+      };
+    };
+    adapters.verifyIdentity = async (device) => device;
+    adapters.prepareSimulator = async (device) => {
+      if (device.id === "two") await siblingIsUnidentified;
+      return device;
+    };
+    adapters.simulator = async (device, action, beforeLaunch) => {
+      if (action === "close") {
+        states.set(device.id, "shutdown");
+        return {
+          deviceId: device.id,
+          action,
+          state: "shutdown" as const,
+          changed: true,
+        };
+      }
+      if (device.id === "two") {
+        secondControlAttempts++;
+        if (states.get("one") === "unidentified") {
+          finishFirst?.();
+          throw new DeckError(
+            "emulator-identity-pending",
+            "A sibling emulator identity is not available yet.",
+            409,
+          );
+        }
+      }
+      await beforeLaunch?.();
+      actualLaunches.push(device.id);
+      if (device.id === "one") {
+        states.set("one", "unidentified");
+        firstSpawned?.();
+        await firstMayIdentify;
+      }
+      states.set(device.id, "booted");
+      return {
+        deviceId: device.id,
+        action,
+        state: "booted" as const,
+        changed: true,
+      };
+    };
+    const reserved: any = await deck.execute("sessions.reserveGroup", {
+      version: 1,
+      groupId: "test/group/parallel-cold-avds",
+      leaseToken: "p".repeat(43),
+      owner: "CI",
+      reason: "Parallel Android cold starts",
+      requests: {
+        phone: { selector: { device: "one" } },
+        television: { selector: { device: "two" } },
+      },
+    });
+    assert.equal(secondControlAttempts, 2);
+    assert.deepEqual(actualLaunches.sort(), ["one", "two"]);
+    assert.equal(reserved.devices.phone.startedByGroup, true);
+    assert.equal(reserved.devices.television.startedByGroup, true);
+    await deck.execute("sessions.releaseGroup", {
+      groupId: reserved.groupId,
+      leaseToken: reserved.leaseToken,
+    });
+    assert.deepEqual([...states.values()], ["shutdown", "shutdown"]);
+  } finally {
+    finishFirst?.();
+    await cleanup();
+  }
+});
+
+test("a cold start keeps ownership while its spawned AVD identity becomes readable", async () => {
+  let state: "shutdown" | "identity-pending" | "booted" = "shutdown";
+  const { deck, adapters, cleanup } = await setup(false, {
+    timeoutMs: 1_000,
+    retryIntervalMs: 0,
+    sleep: async () => {
+      if (state === "identity-pending") state = "booted";
+    },
+  });
+  let launches = 0;
+  let closes = 0;
+  try {
+    await useAndroidAvd(deck);
+    adapters.inspect = async (device) => ({
+      ...device,
+      online: state === "booted",
+      locked: false,
+      healthDetail: state === "booted" ? "Ready" : "Not ready",
+      capabilities: [],
+      readiness: state === "booted"
+        ? "ready"
+        : state === "identity-pending"
+          ? "starting"
+          : "offline",
+      simulatorState: state === "booted"
+        ? "booted"
+        : state === "identity-pending"
+          ? "starting"
+          : "shutdown",
+    });
+    adapters.verifyIdentity = async (device) => device;
+    adapters.simulator = async (device, action, beforeLaunch) => {
+      if (action === "close") {
+        closes++;
+        state = "shutdown";
+        return {
+          deviceId: device.id,
+          action,
+          state: "shutdown" as const,
+          changed: true,
+        };
+      }
+      launches++;
+      await beforeLaunch?.();
+      state = "identity-pending";
+      throw new DeckError(
+        "emulator-identity-pending",
+        "The new AVD identity is not readable yet.",
+        409,
+      );
+    };
+    const reserved: any = await deck.execute("sessions.reserveGroup", {
+      version: 1,
+      groupId: "test/group/post-launch-identity",
+      leaseToken: "u".repeat(43),
+      owner: "CI",
+      reason: "Post-launch identity stabilization",
+      requests: { television: { selector: { device: "one" } } },
+    });
+    assert.equal(launches, 1);
+    assert.equal(reserved.devices.television.startedByGroup, true);
+    await deck.execute("sessions.releaseGroup", {
+      groupId: reserved.groupId,
+      leaseToken: reserved.leaseToken,
+    });
+    assert.equal(closes, 1);
+    assert.equal(state, "shutdown");
+  } finally {
+    await cleanup();
+  }
+});
+
+test("group reservation retries transient identity verification after readiness", async () => {
+  const { deck, adapters, cleanup } = await setup(false, {
+    timeoutMs: 100,
+    retryIntervalMs: 0,
+  });
+  let identityAttempts = 0;
+  try {
+    adapters.verifyIdentity = async (device) => {
+      identityAttempts++;
+      if (identityAttempts === 1)
+        throw new DeckError(
+          "emulator-identity-pending",
+          "AVD identity is still becoming readable.",
+          409,
+        );
+      return device;
+    };
+    const reserved: any = await deck.execute("sessions.reserveGroup", {
+      version: 1,
+      groupId: "test/group/transient-identity",
+      leaseToken: "j".repeat(43),
+      owner: "CI",
+      reason: "Transient identity",
+      requests: { target: { selector: { device: "one" } } },
+    });
+    assert.equal(identityAttempts, 2);
+    assert.equal(reserved.devices.target.id, "one");
+    await deck.execute("sessions.releaseGroup", {
+      groupId: reserved.groupId,
+      leaseToken: reserved.leaseToken,
+    });
+  } finally {
+    await cleanup();
+  }
+});
+
+test("group reservation rolls back immediately on a permanent identity mismatch", async () => {
+  let sleeps = 0;
+  const { deck, adapters, cleanup } = await setup(false, {
+    timeoutMs: 120_000,
+    retryIntervalMs: 1_000,
+    sleep: async () => {
+      sleeps++;
+    },
+  });
+  let identityAttempts = 0;
+  try {
+    adapters.verifyIdentity = async () => {
+      identityAttempts++;
+      throw new DeckError(
+        "identity-mismatch",
+        "The transport belongs to another device.",
+        409,
+      );
+    };
+    await assert.rejects(
+      deck.execute("sessions.reserveGroup", {
+        version: 1,
+        groupId: "test/group/permanent-identity",
+        leaseToken: "m".repeat(43),
+        owner: "CI",
+        reason: "Permanent identity mismatch",
+        requests: { target: { selector: { device: "one" } } },
+      }),
+      (error) => (error as any).code === "identity-mismatch",
+    );
+    assert.equal(identityAttempts, 1);
+    assert.equal(sleeps, 0);
+    assert.equal(
+      deck.store.group("test/group/permanent-identity").state,
+      "closed",
+    );
+  } finally {
+    await cleanup();
+  }
+});
+
+test("sibling cancellation preserves the first permanent preparation failure", async () => {
+  const { deck, adapters, cleanup } = await setup(false, {
+    timeoutMs: 1_000,
+    retryIntervalMs: 0,
+    sleep: () => new Promise((resolve) => setImmediate(resolve)),
+  });
+  try {
+    adapters.inspect = async (device) => {
+      const preparing = deck.store.groups().some(
+        (group) => group.state === "preparing",
+      );
+      const waiting = preparing && device.id === "one";
+      return {
+        ...device,
+        online: !waiting,
+        locked: false,
+        healthDetail: waiting ? "Still becoming ready" : "Ready",
+        capabilities: [],
+        readiness: waiting ? "starting" : "ready",
+        ...(waiting ? { simulatorState: "starting" as const } : {}),
+      };
+    };
+    adapters.verifyIdentity = async (device) => {
+      if (device.id === "two")
+        throw new DeckError(
+          "identity-mismatch",
+          "The second transport belongs to another device.",
+          409,
+        );
+      return device;
+    };
+    await assert.rejects(
+      deck.execute("sessions.reserveGroup", {
+        version: 1,
+        groupId: "test/group/root-preparation-failure",
+        leaseToken: "v".repeat(43),
+        owner: "CI",
+        reason: "Preserve root failure",
+        requests: {
+          waitingFirst: { selector: { device: "one" } },
+          failingSecond: { selector: { device: "two" } },
+        },
+      }),
+      (error) =>
+        (error as any).code === "identity-mismatch" &&
+        /second transport/.test((error as Error).message),
+    );
+    assert.equal(
+      deck.store.group("test/group/root-preparation-failure").state,
+      "closed",
+    );
+  } finally {
+    await cleanup();
+  }
+});
+
+test("a warm identity-pending emulator times out without being launched or closed", async () => {
+  const { deck, adapters, cleanup } = await setup(false, {
+    timeoutMs: 0,
+    retryIntervalMs: 0,
+  });
+  const actions: string[] = [];
+  try {
+    await useAndroidAvd(deck);
+    adapters.inspect = async (device) => ({
+      ...device,
+      online: false,
+      locked: false,
+      healthDetail:
+        "An emulator connection is present but its AVD identity is not available yet.",
+      capabilities: [],
+      readiness: "starting",
+      simulatorState: "starting",
+    });
+    adapters.simulator = async (device, action) => {
+      actions.push(action);
+      return {
+        deviceId: device.id,
+        action,
+        state: action === "launch" ? "booted" : "shutdown",
+        changed: true,
+      };
+    };
+    await assert.rejects(
+      deck.execute("sessions.reserveGroup", {
+        version: 1,
+        groupId: "test/group/warm-timeout",
+        leaseToken: "k".repeat(43),
+        owner: "CI",
+        reason: "Warm identity timeout",
+        requests: { television: { selector: { device: "one" } } },
+      }),
+      (error) => {
+        assert.equal(
+          (error as any).code,
+          "group-device-readiness-timeout",
+        );
+        assert.deepEqual((error as any).details, {
+          groupId: "test/group/warm-timeout",
+          alias: "television",
+          deviceId: "one",
+          timeoutMs: 0,
+          healthDetail:
+            "An emulator connection is present but its AVD identity is not available yet.",
+          identityError: undefined,
+        });
+        return true;
+      },
+    );
+    assert.deepEqual(actions, []);
+    assert.equal(deck.store.group("test/group/warm-timeout").state, "closed");
+    assert.ok(
+      deck.store.sessions().every((session) => session.state === "closed"),
+    );
+  } finally {
+    await cleanup();
+  }
+});
+
+test("release cancels an allocator readiness wait without launching a warm emulator", async () => {
+  let continueRetry: (() => void) | undefined;
+  let retryWaiting: (() => void) | undefined;
+  const waiting = new Promise<void>((resolve) => (retryWaiting = resolve));
+  const { deck, adapters, cleanup } = await setup(false, {
+    timeoutMs: 120_000,
+    retryIntervalMs: 1_000,
+    sleep: async () => {
+      retryWaiting?.();
+      await new Promise<void>((resolve) => (continueRetry = resolve));
+    },
+  });
+  const actions: string[] = [];
+  try {
+    await useAndroidAvd(deck);
+    adapters.inspect = async (device) => ({
+      ...device,
+      online: false,
+      locked: false,
+      healthDetail: "AVD identity pending",
+      capabilities: [],
+      readiness: "starting",
+      simulatorState: "starting",
+    });
+    adapters.simulator = async (device, action) => {
+      actions.push(action);
+      return {
+        deviceId: device.id,
+        action,
+        state: action === "launch" ? "booted" : "shutdown",
+        changed: true,
+      };
+    };
+    const groupId = "test/group/release-readiness-wait";
+    const leaseToken = "l".repeat(43);
+    const reserving = deck.execute("sessions.reserveGroup", {
+      version: 1,
+      groupId,
+      leaseToken,
+      owner: "CI",
+      reason: "Cancel readiness wait",
+      requests: { television: { selector: { device: "one" } } },
+    });
+    await waiting;
+    const releasing = deck.execute("sessions.releaseGroup", {
+      groupId,
+      leaseToken,
+    });
+    while (deck.store.group(groupId).state !== "closing")
+      await new Promise((resolve) => setImmediate(resolve));
+    continueRetry?.();
+    await assert.rejects(
+      reserving,
+      (error) => (error as any).code === "group-preparation-cancelled",
+    );
+    await releasing;
+    assert.deepEqual(actions, []);
+    assert.equal(deck.store.group(groupId).state, "closed");
+  } finally {
+    continueRetry?.();
     await cleanup();
   }
 });
@@ -570,7 +1117,12 @@ test("group reservation rolls back every claim and cold start when preparation f
     assert.equal(deck.store.lockReason("one"), undefined);
     assert.equal(deck.store.lockReason("two"), undefined);
     assert.ok(actions.includes("close:one"));
-    assert.ok(actions.includes("close:two"));
+    assert.ok(actions.includes("launch:two"));
+    assert.equal(
+      actions.includes("close:two"),
+      false,
+      "a launch that fails before claiming lifecycle ownership is not closed",
+    );
   } finally {
     await cleanup();
   }

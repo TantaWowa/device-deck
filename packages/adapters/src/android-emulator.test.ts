@@ -38,6 +38,8 @@ function fixture(initial: Entry[] = []) {
     names: ["TV_API_35", "Pixel_35"],
     launchError: undefined as string | undefined,
     autoBoot: true,
+    deferLaunchIdentity: false,
+    sleeps: 0,
   };
   const calls: { command: string; args: string[] }[] = [],
     launches: { binary: string; args: string[]; port: number }[] = [];
@@ -100,14 +102,18 @@ function fixture(initial: Entry[] = []) {
         state.entries.push({
           serial: "emulator-5560",
           state: "device",
-          name: args[1],
+          name: state.deferLaunchIdentity ? undefined : args[1],
           booted: state.autoBoot,
         });
       return () => state.launchError;
     },
-    async () => {},
+    async () => {
+      state.sleeps++;
+      if (state.deferLaunchIdentity && state.sleeps === 1)
+        state.entries.at(-1)!.name = "TV_API_35";
+    },
   );
-  return { emulator, state, calls, launches, config };
+  return { emulator, state, calls, launches, config, execute };
 }
 
 test("externally started emulators wait for display readiness and cache proof only for the same boot UUID", async () => {
@@ -138,7 +144,12 @@ test("Android launch addresses an exact AVD, reconciles its new serial, and neve
     },
   ]);
   assert.equal((await f.emulator.inspect(device)).state, "shutdown");
-  const launched = await f.emulator.control(device, "launch");
+  let ownershipRecorded = false;
+  const launched = await f.emulator.control(device, "launch", async () => {
+    assert.equal(f.launches.length, 0);
+    ownershipRecorded = true;
+  });
+  assert.equal(ownershipRecorded, true);
   assert.deepEqual(launched, {
     deviceId: device.id,
     action: "launch",
@@ -179,6 +190,16 @@ test("Android launch addresses an exact AVD, reconciles its new serial, and neve
     [["-P", "5038", "-s", "emulator-5560", "emu", "kill"]],
   );
   assert.equal(f.state.entries[0].name, "Pixel_35");
+});
+
+test("Android launch waits for its newly spawned AVD identity to become readable", async () => {
+  const f = fixture();
+  f.state.deferLaunchIdentity = true;
+  const launched = await f.emulator.control(device, "launch");
+  assert.equal(launched.changed, true);
+  assert.equal(launched.serial, "emulator-5560");
+  assert.equal(f.state.sleeps, 1);
+  assert.equal(f.launches.length, 1);
 });
 
 test("legacy emulator serials can learn their exact AVD and close, but cannot launch an unknown AVD", async () => {
@@ -286,6 +307,32 @@ test("booting emulators are not falsely marked stopped or launched twice; unveri
     "TV_API_35",
     "Readable identity may be persisted even while the ADB transport is offline",
   );
+});
+
+test("an unidentified emulator on a changed serial remains starting and cannot trigger a duplicate launch", async () => {
+  const f = fixture([
+    { serial: "emulator-5558", state: "device", booted: true },
+  ]);
+  await assert.rejects(
+    f.emulator.inspect(device),
+    /AVD identity is not available/,
+  );
+  await assert.rejects(
+    f.emulator.control(device, "launch"),
+    /AVD identity is not available/,
+  );
+  assert.equal(f.launches.length, 0);
+
+  const adapters = new Adapters(() => f.config, f.execute);
+  try {
+    const inspected = await adapters.inspect(device);
+    assert.equal(inspected.online, false);
+    assert.equal(inspected.readiness, "starting");
+    assert.equal(inspected.simulatorState, "starting");
+    assert.match(inspected.healthDetail, /AVD identity is not available/);
+  } finally {
+    await adapters.close();
+  }
 });
 
 test("ambiguous instances, missing AVDs, physical targets, failed launch and boot timeout fail without guessing", async () => {

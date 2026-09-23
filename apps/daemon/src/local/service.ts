@@ -28,6 +28,7 @@ import {
   fail,
   type Config,
   type Device,
+  type DeviceConfig,
   type Session,
   type Artifact,
   type Operation,
@@ -35,6 +36,7 @@ import {
   type SourceConfig,
   type Source,
   type ReservationGroup,
+  DeckError,
 } from "../../../../packages/core/src/local/types";
 import { Store } from "./store";
 import { InventoryCache } from "./inventory-cache";
@@ -55,6 +57,24 @@ type Job = {
   timer: ReturnType<typeof setTimeout>;
   finishing?: Promise<Artifact>;
 };
+type GroupReadinessPolicy = {
+  timeoutMs: number;
+  retryIntervalMs: number;
+  sleep: (ms: number) => Promise<void>;
+};
+type GroupPreparation = { cancelled: boolean; failure?: unknown };
+const defaultGroupReadinessPolicy: GroupReadinessPolicy = {
+  timeoutMs: 120_000,
+  retryIntervalMs: 1_000,
+  sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+};
+const transientGroupIdentityErrors = new Set([
+  "emulator-identity-pending",
+  "emulator-not-ready",
+  "emulator-offline",
+]);
+const isTransientGroupIdentityError = (error: unknown) =>
+  error instanceof DeckError && transientGroupIdentityErrors.has(error.code);
 export class DeckService {
   readonly config: ConfigStore;
   readonly adapters: Adapters;
@@ -86,6 +106,7 @@ export class DeckService {
   private shuttingDown = false;
   private changingConfig = false;
   private simulatorActions = new Map<string, "launch" | "close">();
+  private readonly groupReadiness: GroupReadinessPolicy;
   diagnostics: string[] = [];
   inventoryDiagnostics() {
     return { requests: { ...this.inventoryReads }, ...this.adapters.inventoryStats(),
@@ -97,12 +118,17 @@ export class DeckService {
     adapters?: Adapters,
     capture?: CaptureEngine,
     licensing?: EntitlementService,
+    groupReadiness: Partial<GroupReadinessPolicy> = {},
   ) {
     this.config = new ConfigStore(configFile);
     this.adapters = adapters || new Adapters(() => this.config.config);
     this.capture = capture || new CaptureEngine(this.adapters);
     this.thumbnails = new CaptureThumbnails((id) => this.store.artifact(id), () => this.adapters.tool("ffmpeg"));
     this.licensing = licensing || new LicenseManager(directory);
+    this.groupReadiness = {
+      ...defaultGroupReadinessPolicy,
+      ...groupReadiness,
+    };
     this.streams = new LiveStreams({
       resolve: (args) => this.liveTarget(args),
       video: (target, profile) => {
@@ -138,6 +164,156 @@ export class DeckService {
     const d = this.config.config.devices.find((d) => d.id === id);
     if (!d) fail("device-not-found", "Device is not configured.", 404);
     return d;
+  }
+  private preparingGroup(id: string, preparation?: GroupPreparation) {
+    const group = this.store.group(id);
+    if (
+      preparation?.cancelled ||
+      this.shuttingDown ||
+      group.state !== "preparing" ||
+      group.expiresAt <= Date.now() ||
+      group.members.some(
+        (member) => this.store.session(member.sessionId).state !== "active",
+      )
+    )
+      fail(
+        "group-preparation-cancelled",
+        "The reservation group expired or was cancelled before every device became ready.",
+        409,
+      );
+    return group;
+  }
+  private markGroupMemberStarted(
+    groupId: string,
+    alias: string,
+    deviceId: string,
+    preparation: GroupPreparation,
+  ) {
+    // This validation and SQLite write are synchronous, so release/expiry
+    // cannot interleave between them. Do not acquire the global queue while
+    // holding a device queue: global operations may already be waiting for
+    // this same device queue.
+    const group = this.preparingGroup(groupId, preparation);
+    const member = group.members.find((item) => item.alias === alias);
+    if (!member || member.deviceId !== deviceId)
+      fail(
+        "group-member-not-found",
+        "Reservation group member changed during preparation.",
+        409,
+      );
+    this.store.setGroupMemberStarted(groupId, alias, true);
+  }
+  private async readyGroupMember(
+    groupId: string,
+    alias: string,
+    configured: DeviceConfig,
+    preparation: GroupPreparation,
+  ) {
+    const deadline = Date.now() + this.groupReadiness.timeoutMs;
+    let unavailable: Device | undefined;
+    let identityError: unknown;
+    let launchAttempted = false;
+    while (true) {
+      const group = this.preparingGroup(groupId, preparation);
+      const current = await this.adapters.inspect(configured);
+      unavailable = current;
+      identityError = undefined;
+      if (current.simulatorState === "unavailable")
+        fail(
+          "device-not-ready",
+          `${current.name} did not become ready: ${current.healthDetail}`,
+          502,
+        );
+      if (current.online) {
+        try {
+          const resolved = await this.adapters.verifyIdentity(current);
+          this.preparingGroup(groupId, preparation);
+          return { ...current, connection: resolved.connection };
+        } catch (error) {
+          if (!isTransientGroupIdentityError(error)) throw error;
+          identityError = error;
+        }
+      }
+      if (
+        !current.online &&
+        current.kind === "virtual" &&
+        current.simulatorState === "shutdown" &&
+        !launchAttempted
+      ) {
+        try {
+          configured = await this.adapters.prepareSimulator(configured);
+        } catch (error) {
+          if (!isTransientGroupIdentityError(error)) throw error;
+          identityError = error;
+        }
+        if (!identityError) {
+          launchAttempted = true;
+          let ownershipRecorded = false;
+          this.simulatorActions.set(current.id, "launch");
+          try {
+            try {
+              const lifecycle = await this.adapters.simulator(
+                configured,
+                "launch",
+                async () => {
+                  this.markGroupMemberStarted(
+                    groupId,
+                    alias,
+                    current.id,
+                    preparation,
+                  );
+                  ownershipRecorded = true;
+                },
+              );
+              // Test adapters and third-party adapters written against the
+              // earlier two-argument hook may not invoke beforeLaunch. Retain
+              // durable ownership for a lifecycle that reports a real start.
+              if (lifecycle.changed && !ownershipRecorded) {
+                this.store.setGroupMemberStarted(groupId, alias, true);
+                ownershipRecorded = true;
+              }
+              if (!lifecycle.changed && ownershipRecorded)
+                this.store.setGroupMemberStarted(groupId, alias, false);
+            } catch (error) {
+              // Another member launching on the same ADB server can appear
+              // before its immutable AVD name is readable. If this member has
+              // not crossed its beforeLaunch ownership boundary, wait and
+              // retry the complete inspect/preflight sequence.
+              if (!isTransientGroupIdentityError(error)) throw error;
+              if (!ownershipRecorded) launchAttempted = false;
+              identityError = error;
+            }
+          } finally {
+            this.simulatorActions.delete(current.id);
+            this.invalidateInventory(current.id);
+          }
+          if (!identityError) continue;
+        }
+      }
+      this.preparingGroup(groupId, preparation);
+      const remaining = Math.min(deadline, group.expiresAt) - Date.now();
+      if (remaining <= 0) {
+        const identity = identityError instanceof DeckError
+          ? { code: identityError.code, message: identityError.message }
+          : undefined;
+        fail(
+          "group-device-readiness-timeout",
+          `Timed out after ${Math.round(this.groupReadiness.timeoutMs / 1000)} seconds waiting for ${unavailable?.name || configured.name} to become ready: ${identity?.message || unavailable?.healthDetail || "Device readiness could not be verified."}`,
+          504,
+          {
+            groupId,
+            alias,
+            deviceId: configured.id,
+            timeoutMs: this.groupReadiness.timeoutMs,
+            healthDetail: unavailable?.healthDetail,
+            identityError: identity,
+          },
+        );
+      }
+      await this.groupReadiness.sleep(
+        Math.min(this.groupReadiness.retryIntervalMs, remaining),
+      );
+    }
   }
   private source(session: Session): SourceConfig {
     const s = this.config.config.sources.find((s) => s.id === session.sourceId);
@@ -628,7 +804,7 @@ export class DeckService {
             (device.kind === "virtual" &&
               supportsSimulatorLifecycle(device) &&
               canLaunchSimulator(device) &&
-              device.simulatorState !== "unavailable"),
+              ["shutdown", "starting"].includes(device.simulatorState || "")),
           );
           const selected = matchReservationGroup(
             eligible,
@@ -673,7 +849,9 @@ export class DeckService {
                             (device.kind === "virtual" &&
                               supportsSimulatorLifecycle(device) &&
                               canLaunchSimulator(device) &&
-                              device.simulatorState !== "unavailable"));
+                              ["shutdown", "starting"].includes(
+                                device.simulatorState || "",
+                              )));
                         return {
                           id: device.id,
                           name: device.name,
@@ -691,7 +869,9 @@ export class DeckService {
                                         ? "virtual device cannot be launched from its saved identity"
                                         : device.simulatorState === "unavailable"
                                           ? "virtual device runtime is unavailable"
-                                          : device.healthDetail,
+                                          : device.simulatorState === "starting"
+                                            ? device.healthDetail
+                                            : "virtual device state could not be verified",
                               }
                             : {}),
                         };
@@ -751,55 +931,30 @@ export class DeckService {
             });
             throw error;
           }
-          // Persist ownership of every cold-start before beginning lifecycle
-          // work, so restart recovery knows which virtual devices to restore.
-          for (const member of acquired.group.members) {
-            const device = selected[member.alias];
-            if (!device.online && device.kind === "virtual") {
-              member.startedByGroup = true;
-              this.simulatorActions.set(device.id, "launch");
-            }
-          }
-          this.store.putGroup(acquired.group);
           return { kind: "claimed" as const, ...acquired, selected };
         });
         if (admission.kind === "existing")
           return replayReservation(admission.group);
         const claimed = admission;
+        const preparation: GroupPreparation = { cancelled: false };
         const prepared = await Promise.allSettled(
           Object.entries(claimed.selected).map(async ([alias, observed]) => {
             const member = claimed.group.members.find((item) => item.alias === alias)!;
-            const launchRequested = member.startedByGroup;
             return this.queue(observed.id).run(async () => {
               try {
-                let configured = this.device(observed.id);
-                if (launchRequested) {
-                  configured = await this.adapters.prepareSimulator(configured);
-                  const lifecycle = await this.adapters.simulator(configured, "launch");
-                  if (!lifecycle.changed) {
-                    member.startedByGroup = false;
-                    this.store.setGroupMemberStarted(
-                      claimed.group.id,
-                      alias,
-                      false,
-                    );
-                  }
-                }
-                let current = await this.adapters.inspect(configured);
-                if (!current.online)
-                  fail(
-                    "device-not-ready",
-                    `${current.name} did not become ready: ${current.healthDetail}`,
-                    502,
-                  );
-                const resolved = await this.adapters.verifyIdentity(current);
-                current = { ...current, connection: resolved.connection };
+                const current = await this.readyGroupMember(
+                  claimed.group.id,
+                  alias,
+                  this.device(observed.id),
+                  preparation,
+                );
                 return { alias, member, device: current };
-              } finally {
-                if (launchRequested) {
-                  this.simulatorActions.delete(observed.id);
-                  this.invalidateInventory(observed.id);
+              } catch (error) {
+                if (!preparation.cancelled) {
+                  preparation.cancelled = true;
+                  preparation.failure = error;
                 }
+                throw error;
               }
             });
           }),
@@ -808,7 +963,8 @@ export class DeckService {
           (result): result is PromiseRejectedResult => result.status === "rejected",
         );
         if (failed) {
-          const message = (failed.reason as Error).message;
+          const failure = preparation.failure ?? failed.reason;
+          const message = (failure as Error).message;
           try {
             await this.closeReservationGroup(
               claimed.group.id,
@@ -821,7 +977,7 @@ export class DeckService {
               502,
             );
           }
-          throw failed.reason;
+          throw failure;
         }
         const activated = await this.global.run(async () => {
           const current = this.store.group(claimed.group.id);
