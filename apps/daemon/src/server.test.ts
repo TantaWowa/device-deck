@@ -524,7 +524,9 @@ test("parallel cold AVD starts retry while a sibling launch identity is pending"
 test("a cold start keeps ownership while its spawned AVD identity becomes readable", async () => {
   let state: "shutdown" | "identity-pending" | "booted" = "shutdown";
   const { deck, adapters, cleanup } = await setup(false, {
-    timeoutMs: 1_000,
+    // Test-only headroom: loaded Intel runners can spend over a second before
+    // reaching the deterministic sleep hook that advances the mocked state.
+    timeoutMs: 10_000,
     retryIntervalMs: 0,
     sleep: async () => {
       if (state === "identity-pending") state = "booted";

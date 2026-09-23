@@ -1,10 +1,30 @@
 import path from "node:path";
+import { stat } from "node:fs/promises";
 import { fail, type DeviceConfig } from "../../core/src/local/types";
 import { run } from "./process";
 
 export type SimulatorState =
   "booted" | "shutdown" | "starting" | "stopping" | "unavailable";
+export const SIMULATOR_UNAVAILABLE_MESSAGE =
+  "This simulator, its runtime, or its CoreSimulator data directory is unavailable. Check runner storage and Xcode, then rediscover devices.";
 type Runner = typeof run;
+type SimctlDevice = {
+  udid?: unknown;
+  state?: unknown;
+  isAvailable?: unknown;
+  dataPath?: unknown;
+};
+type SimctlDeviceList = {
+  devices?: Record<string, unknown>;
+};
+async function availableDataPath(value: unknown) {
+  if (typeof value !== "string" || !path.isAbsolute(value)) return false;
+  try {
+    return (await stat(value)).isDirectory();
+  } catch {
+    return false;
+  }
+}
 
 /** Every command targets one configured UDID; never use simctl's `all` or `booted` aliases. */
 export async function simulatorState(
@@ -21,18 +41,20 @@ export async function simulatorState(
     (
       await execute("xcrun", ["simctl", "list", "devices", "--json"])
     ).stdout.toString(),
-  );
+  ) as SimctlDeviceList;
   const connection = device.connection;
   for (const [runtime, devices] of Object.entries(data.devices || {})) {
-    const found = (
-      devices as { udid: string; state: string; isAvailable?: boolean }[]
-    ).find(
-      (entry) => entry.udid.toLowerCase() === connection.udid.toLowerCase(),
+    if (!Array.isArray(devices)) continue;
+    const found = (devices as SimctlDevice[]).find(
+      (entry) =>
+        typeof entry?.udid === "string" &&
+        entry.udid.toLowerCase() === connection.udid.toLowerCase(),
     );
     if (!found) continue;
     if (
       found.isAvailable === false ||
-      !(connection.os === "tvos" ? /tvOS/ : /iOS/).test(runtime)
+      !(connection.os === "tvos" ? /tvOS/ : /iOS/).test(runtime) ||
+      !(await availableDataPath(found.dataPath))
     )
       return "unavailable";
     const states: Record<string, SimulatorState> = {
@@ -49,7 +71,9 @@ export async function simulatorState(
         return "booted";
       } catch { return "starting"; }
     }
-    return states[found.state] || "unavailable";
+    return typeof found.state === "string"
+      ? states[found.state] || "unavailable"
+      : "unavailable";
   }
   return "unavailable";
 }
@@ -102,7 +126,7 @@ export async function controlSimulator(
   if (state === "unavailable")
     fail(
       "simulator-unavailable",
-      "This simulator or its runtime is unavailable. Install its runtime in Xcode, then rediscover devices.",
+      SIMULATOR_UNAVAILABLE_MESSAGE,
       409,
     );
   const udid = device.connection.udid;

@@ -55,7 +55,7 @@ function simulatorFixture(os: "ios" | "tvos" = "ios") {
   const execute: typeof run = async (executable, args) => {
     calls.push({ executable, args });
     if (executable === "xcrun") {
-      if (args[1] === "list") return { stdout: Buffer.from(JSON.stringify({ devices: { [`com.apple.CoreSimulator.SimRuntime.${os === "ios" ? "iOS" : "tvOS"}-18-0`]: [{ udid: device.connection.udid, state: state.booted ? "Booted" : "Shutdown", isAvailable: true }] } })), stderr: "" };
+      if (args[1] === "list") return { stdout: Buffer.from(JSON.stringify({ devices: { [`com.apple.CoreSimulator.SimRuntime.${os === "ios" ? "iOS" : "tvOS"}-18-0`]: [{ udid: device.connection.udid, state: state.booted ? "Booted" : "Shutdown", isAvailable: true, dataPath: "/tmp" }] } })), stderr: "" };
       assert.deepEqual(args, ["simctl", "bootstatus", device.connection.udid]);
     } else {
       assert.equal(executable, "/fixture/idb");

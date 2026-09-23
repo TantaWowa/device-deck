@@ -89,7 +89,7 @@ test("nineteen simulator rows use one list command per health scan and fresh con
     calls.push(args);
     if (args[1] === "list") {
       if (failed) throw new Error("simctl temporarily unavailable");
-      return response({ devices: { "com.apple.CoreSimulator.SimRuntime.iOS-26-2": devices.map((device, i) => ({ udid: device.connection.type === "simulator" ? device.connection.udid : "", state: i === 0 && booted ? "Booted" : "Shutdown", isAvailable: true })) } });
+      return response({ devices: { "com.apple.CoreSimulator.SimRuntime.iOS-26-2": devices.map((device, i) => ({ udid: device.connection.type === "simulator" ? device.connection.udid : "", state: i === 0 && booted ? "Booted" : "Shutdown", isAvailable: true, dataPath: "/tmp" })) } });
     }
     if (args[1] === "bootstatus") {
       assert.deepEqual(args, ["simctl", "bootstatus", "00000000-0000-4000-8000-000000000000"], "health may observe only the exact simulator and never boot it");
@@ -165,7 +165,7 @@ test("completed inventory rows publish before a slow simulator probe is cancelle
   const observed: string[] = [];
   let bootstatus = false;
   const execute: typeof run = async (_command, args, _timeout, options) => {
-    if (args[1] === "list") return response({ devices: { "com.apple.CoreSimulator.SimRuntime.iOS-26-2": devices.map((device, index) => ({ udid: device.connection.type === "simulator" ? device.connection.udid : "", state: index === 0 ? "Booted" : "Shutdown", isAvailable: true })) } });
+    if (args[1] === "list") return response({ devices: { "com.apple.CoreSimulator.SimRuntime.iOS-26-2": devices.map((device, index) => ({ udid: device.connection.type === "simulator" ? device.connection.udid : "", state: index === 0 ? "Booted" : "Shutdown", isAvailable: true, dataPath: "/tmp" })) } });
     bootstatus = true;
     await new Promise<void>((_resolve, reject) => options?.signal?.addEventListener("abort", () => reject(new Error("cancelled")), { once: true }));
     return response("");
