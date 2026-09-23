@@ -16,6 +16,8 @@ Form factor comes from stable connection/input metadata, not a friendly name. iP
 
 Physical devices must already be online. A stopped registered Apple simulator or Android AVD is eligible when its saved UDID/AVD identity can launch it. Device Deck never installs runtimes, SDKs, AVDs, or simulators.
 
+After claiming the complete set, Device Deck gives each member up to two minutes to stabilize while it rechecks readiness and transient Android AVD identity. This wait belongs to the allocator; CI jobs and test suites do not add sleeps. A virtual device already starting remains externally owned and is never shut down by group cleanup. Device Deck records `startedByGroup` immediately before it launches a definitively stopped virtual device, and release restores only those recorded cold starts. A timeout reports the affected group, alias, device, and last readiness detail, then rolls back the complete group.
+
 ## Manifest and CLI
 
 Create an ephemeral manifest after the test planner has selected its suites:

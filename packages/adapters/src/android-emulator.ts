@@ -4,6 +4,7 @@ import { spawn } from "node:child_process";
 import { run, available } from "./process";
 import { androidBootReady, androidDisplayReady } from "./android-state";
 import {
+  DeckError,
   fail,
   type Config,
   type DeviceConfig,
@@ -166,11 +167,11 @@ export class AndroidEmulators {
     if (
       !found &&
       c.avdName &&
-      entries.some((entry) => entry.serial === c.serial && !entry.avdName)
+      entries.some((entry) => !entry.avdName)
     )
       fail(
         "emulator-identity-pending",
-        "The last emulator connection is present but its AVD identity is not available yet. Wait and refresh before launching or closing it.",
+        "An emulator connection is present but its AVD identity is not available yet. Wait and refresh before launching or closing it.",
         409,
       );
     return found;
@@ -269,7 +270,11 @@ export class AndroidEmulators {
     if (identity) this.readyBoots.set(d.id, identity);
     return true;
   }
-  async control(d: DeviceConfig, action: "launch" | "close") {
+  async control(
+    d: DeviceConfig,
+    action: "launch" | "close",
+    beforeLaunch?: () => Promise<void>,
+  ) {
     if (!isAndroidEmulator(d) || d.connection.type !== "adb")
       fail("unsupported-lifecycle", "This target is not an Android emulator.");
     const c = d.connection,
@@ -327,14 +332,28 @@ export class AndroidEmulators {
         "This AVD is unavailable in the configured Android SDK.",
         409,
       );
-    const error = current
-      ? () => undefined
-      : this.launch(await this.binary(), ["-avd", c.avdName], c.port);
+    let error: () => string | undefined = () => undefined;
+    if (!current) {
+      const binary = await this.binary();
+      await beforeLaunch?.();
+      error = this.launch(binary, ["-avd", c.avdName], c.port);
+    }
     for (let attempt = 0; attempt < 120; attempt++) {
       if (error()) fail("emulator-launch-failed", error()!, 502);
-      const inspected = await this.inspect(d);
+      const inspected = await this.inspect(d).catch((inspectionError) => {
+        if (
+          inspectionError instanceof DeckError &&
+          [
+            "emulator-identity-pending",
+            "emulator-not-ready",
+            "emulator-offline",
+          ].includes(inspectionError.code)
+        )
+          return undefined;
+        throw inspectionError;
+      });
       if (
-        inspected.state === "booted" &&
+        inspected?.state === "booted" &&
         inspected.resolved?.connection.type === "adb"
       )
         return {

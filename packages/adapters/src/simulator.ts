@@ -93,6 +93,7 @@ export async function controlSimulator(
   device: DeviceConfig,
   action: "launch" | "close",
   execute: Runner = run,
+  beforeLaunch?: () => Promise<void>,
 ) {
   let presentationWarning: string | undefined;
   const state = await simulatorState(device, execute);
@@ -113,6 +114,7 @@ export async function controlSimulator(
         409,
       );
     if (state === "shutdown") {
+      await beforeLaunch?.();
       try {
         await execute("xcrun", ["simctl", "boot", udid]);
       } catch (error) {
