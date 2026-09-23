@@ -17,6 +17,7 @@ import {
   type Input,
   type Artifact,
   type ReservationGroup,
+  type SimulatorLaunchOwnership,
   fail,
 } from "../../../../packages/core/src/local/types";
 const hash = (token: string) =>
@@ -296,13 +297,21 @@ export class Store {
       .prepare("UPDATE reservation_groups SET state=?,payload=? WHERE id=?")
       .run(group.state, JSON.stringify(group), group.id);
   }
-  setGroupMemberStarted(id: string, alias: string, startedByGroup: boolean) {
+  setGroupMemberStarted(
+    id: string,
+    alias: string,
+    startedByGroup: boolean,
+    simulatorLaunch?: SimulatorLaunchOwnership,
+  ) {
     return this.transaction(() => {
       const group = this.group(id);
       const member = group.members.find((item) => item.alias === alias);
       if (!member)
         fail("group-member-not-found", "Reservation group member not found.", 404);
       member.startedByGroup = startedByGroup;
+      if (startedByGroup && simulatorLaunch)
+        member.simulatorLaunch = simulatorLaunch;
+      if (!startedByGroup) delete member.simulatorLaunch;
       this.putGroup(group);
       return group;
     });

@@ -36,6 +36,7 @@ import {
   type SourceConfig,
   type Source,
   type ReservationGroup,
+  type SimulatorLaunchOwnership,
   DeckError,
 } from "../../../../packages/core/src/local/types";
 import { Store } from "./store";
@@ -188,6 +189,7 @@ export class DeckService {
     alias: string,
     deviceId: string,
     preparation: GroupPreparation,
+    simulatorLaunch?: SimulatorLaunchOwnership,
   ) {
     // This validation and SQLite write are synchronous, so release/expiry
     // cannot interleave between them. Do not acquire the global queue while
@@ -201,7 +203,12 @@ export class DeckService {
         "Reservation group member changed during preparation.",
         409,
       );
-    this.store.setGroupMemberStarted(groupId, alias, true);
+    this.store.setGroupMemberStarted(
+      groupId,
+      alias,
+      true,
+      simulatorLaunch,
+    );
   }
   private async readyGroupMember(
     groupId: string,
@@ -255,12 +262,13 @@ export class DeckService {
               const lifecycle = await this.adapters.simulator(
                 configured,
                 "launch",
-                async () => {
+                async (simulatorLaunch) => {
                   this.markGroupMemberStarted(
                     groupId,
                     alias,
                     current.id,
                     preparation,
+                    simulatorLaunch,
                   );
                   ownershipRecorded = true;
                 },
@@ -2070,7 +2078,12 @@ export class DeckService {
                 return this.queue(member.deviceId).run(async () => {
                   try {
                     const device = this.device(member.deviceId);
-                    await this.adapters.simulator(device, "close");
+                    await this.adapters.simulator(
+                      device,
+                      "close",
+                      undefined,
+                      member.simulatorLaunch,
+                    );
                     this.store.event({
                       deviceId: member.deviceId,
                       sessionId: member.sessionId,

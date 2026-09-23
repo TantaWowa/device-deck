@@ -224,11 +224,17 @@ export type Session = {
   groupId?: string;
   groupAlias?: string;
 };
+export type SimulatorLaunchOwnership = {
+  type: "android-emulator";
+  avdName: string;
+  marker: string;
+};
 export type ReservationGroupMember = {
   alias: string;
   sessionId: string;
   deviceId: string;
   startedByGroup: boolean;
+  simulatorLaunch?: SimulatorLaunchOwnership;
   binding?: Pick<
     DeviceConfig,
     "id" | "name" | "platform" | "kind" | "connection"

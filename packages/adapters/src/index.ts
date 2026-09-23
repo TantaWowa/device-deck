@@ -26,6 +26,7 @@ import {
   type Device,
   type Source,
   type SourceConfig,
+  type SimulatorLaunchOwnership,
   fail,
 } from "../../core/src/local/types";
 let location = path.dirname(fileURLToPath(import.meta.url));
@@ -618,10 +619,13 @@ export class Adapters {
   async simulator(
     d: DeviceConfig,
     action: "launch" | "close",
-    beforeLaunch?: () => Promise<void>,
+    beforeLaunch?: (
+      ownership?: SimulatorLaunchOwnership,
+    ) => Promise<void>,
+    ownership?: SimulatorLaunchOwnership,
   ) {
     if (isAndroidEmulator(d))
-      return this.emulators.control(d, action, beforeLaunch);
+      return this.emulators.control(d, action, beforeLaunch, ownership);
     return controlSimulator(d, action, undefined, beforeLaunch);
   }
   async prepareSimulator(d: DeviceConfig) {

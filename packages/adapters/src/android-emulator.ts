@@ -1,6 +1,7 @@
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { run, available } from "./process";
 import { androidBootReady, androidDisplayReady } from "./android-state";
 import {
@@ -8,9 +9,12 @@ import {
   fail,
   type Config,
   type DeviceConfig,
+  type SimulatorLaunchOwnership,
 } from "../../core/src/local/types";
 const emulatorSerial = /^emulator-\d+$/;
 const avdName = /^[A-Za-z0-9_][A-Za-z0-9_.-]*$/;
+const launchMarker = /^[a-f0-9]{32}$/;
+const launchProperty = "qemu.devdeck_launch";
 type Runner = typeof run;
 export const isAndroidEmulator = (d: DeviceConfig) =>
   d.kind === "virtual" &&
@@ -38,6 +42,8 @@ export class AndroidEmulators {
       return () => error;
     },
     private sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms)),
+    private signal = (pid: number, signal: NodeJS.Signals) =>
+      process.kill(pid, signal),
   ) {}
   adb() {
     return this.config().tools.adb || "adb";
@@ -270,15 +276,157 @@ export class AndroidEmulators {
     if (identity) this.readyBoots.set(d.id, identity);
     return true;
   }
+  private validateOwnership(
+    d: DeviceConfig,
+    ownership: SimulatorLaunchOwnership,
+  ) {
+    const configuredName = d.connection.type === "adb"
+      ? d.connection.avdName
+      : undefined;
+    if (
+      ownership.type !== "android-emulator" ||
+      !launchMarker.test(ownership.marker) ||
+      !avdName.test(ownership.avdName) ||
+      ownership.avdName !== configuredName
+    )
+      fail(
+        "emulator-ownership-invalid",
+        "The saved Android emulator launch identity does not match this configured AVD. Cleanup will not stop an unverified process.",
+        409,
+      );
+    return ownership;
+  }
+  private async ownedProcess(
+    d: DeviceConfig,
+    ownership: SimulatorLaunchOwnership,
+  ) {
+    const owned = this.validateOwnership(d, ownership);
+    const listing = await this.execute("/bin/ps", [
+      "-axo",
+      "pid=,command=",
+    ]);
+    const escapedName = owned.avdName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const property = `${launchProperty}=${owned.marker}`;
+    const escapedProperty = property.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const namePattern = new RegExp(`(?:^|\\s)-avd\\s+${escapedName}(?:\\s|$)`);
+    const markerPattern = new RegExp(
+      `(?:^|\\s)-prop\\s+${escapedProperty}(?:\\s|$)`,
+    );
+    const matches = listing.stdout
+      .toString()
+      .split(/\r?\n/)
+      .flatMap((line) => {
+        const match = /^\s*(\d+)\s+(.+)$/.exec(line);
+        return match && namePattern.test(match[2]) && markerPattern.test(match[2])
+          ? [Number(match[1])]
+          : [];
+      });
+    if (matches.length > 1)
+      fail(
+        "ambiguous-owned-emulator",
+        "Multiple emulator processes present the same Device Deck launch marker. Cleanup will not guess which process to stop.",
+        409,
+      );
+    return matches[0];
+  }
+  private async closeOwnedProcess(
+    d: DeviceConfig,
+    ownership: SimulatorLaunchOwnership,
+  ) {
+    const pid = await this.ownedProcess(d, ownership);
+    if (!pid) return false;
+    try {
+      this.signal(pid, "SIGTERM");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+    }
+    for (let attempt = 0; attempt < 80; attempt++) {
+      if (!(await this.ownedProcess(d, ownership))) return true;
+      await this.sleep(100);
+    }
+    const remainingPid = await this.ownedProcess(d, ownership);
+    if (!remainingPid) return true;
+    try {
+      // The original PID may have exited and been reused while graceful
+      // shutdown was pending. Signal only a process that still presents the
+      // exact durable marker immediately before escalation.
+      this.signal(remainingPid, "SIGKILL");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+    }
+    await this.sleep(100);
+    if (await this.ownedProcess(d, ownership))
+      fail(
+        "emulator-transition",
+        "The Android emulator process owned by this reservation group is still closing. Retry release.",
+        409,
+      );
+    return true;
+  }
+  private async currentOwnershipMarker(
+    d: DeviceConfig,
+    serial: string,
+    ownership: SimulatorLaunchOwnership,
+  ) {
+    this.validateOwnership(d, ownership);
+    if (d.connection.type !== "adb") return undefined;
+    try {
+      const marker = (
+        await this.execute(
+          this.adb(),
+          [
+            "-P",
+            String(d.connection.port),
+            "-s",
+            serial,
+            "shell",
+            "getprop",
+            launchProperty,
+          ],
+          3000,
+        )
+      ).stdout.toString().trim();
+      return launchMarker.test(marker) ? marker : undefined;
+    } catch {
+      return undefined;
+    }
+  }
   async control(
     d: DeviceConfig,
     action: "launch" | "close",
-    beforeLaunch?: () => Promise<void>,
+    beforeLaunch?: (
+      ownership?: SimulatorLaunchOwnership,
+    ) => Promise<void>,
+    ownership?: SimulatorLaunchOwnership,
   ) {
     if (!isAndroidEmulator(d) || d.connection.type !== "adb")
       fail("unsupported-lifecycle", "This target is not an Android emulator.");
-    const c = d.connection,
+    const c = d.connection;
+    let current: Awaited<ReturnType<AndroidEmulators["running"]>>[number] | undefined;
+    try {
       current = await this.locate(d);
+    } catch (error) {
+      if (
+        action !== "close" ||
+        !ownership ||
+        !(error instanceof DeckError) ||
+        error.code !== "emulator-identity-pending"
+      )
+        throw error;
+      const changed = await this.closeOwnedProcess(d, ownership);
+      if (!changed)
+        fail(
+          "emulator-ownership-missing",
+          "An unidentified emulator is present, but it does not carry this reservation group's launch marker. Cleanup will not stop an unrelated process.",
+          409,
+        );
+      return {
+        deviceId: d.id,
+        action,
+        state: "shutdown" as const,
+        changed,
+      };
+    }
     if (current && !current.avdName)
       fail(
         "emulator-identity-pending",
@@ -286,22 +434,56 @@ export class AndroidEmulators {
         409,
       );
     if (action === "close") {
-      if (!current)
+      if (!current) {
+        const changed = ownership
+          ? await this.closeOwnedProcess(d, ownership)
+          : false;
         return {
           deviceId: d.id,
           action,
           state: "shutdown" as const,
-          changed: false,
+          changed,
         };
+      }
       const serial = current.serial;
-      await this.execute(this.adb(), [
-        "-P",
-        String(c.port),
-        "-s",
-        serial,
-        "emu",
-        "kill",
-      ]);
+      if (
+        ownership &&
+        (await this.currentOwnershipMarker(d, serial, ownership)) !==
+          ownership.marker
+      ) {
+        const changed = await this.closeOwnedProcess(d, ownership);
+        if (!changed)
+          fail(
+            "emulator-ownership-missing",
+            "This AVD is running, but its transport does not carry this reservation group's launch marker. Cleanup will not stop a replacement process.",
+            409,
+          );
+        return {
+          deviceId: d.id,
+          action,
+          state: "shutdown" as const,
+          changed,
+        };
+      }
+      try {
+        await this.execute(this.adb(), [
+          "-P",
+          String(c.port),
+          "-s",
+          serial,
+          "emu",
+          "kill",
+        ]);
+      } catch (error) {
+        if (!ownership || !(await this.closeOwnedProcess(d, ownership)))
+          throw error;
+        return {
+          deviceId: d.id,
+          action,
+          state: "shutdown" as const,
+          changed: true,
+        };
+      }
       for (let attempt = 0; attempt < 30; attempt++) {
         if (
           !(await this.running(c.port)).some((entry) => entry.serial === serial)
@@ -335,8 +517,28 @@ export class AndroidEmulators {
     let error: () => string | undefined = () => undefined;
     if (!current) {
       const binary = await this.binary();
-      await beforeLaunch?.();
-      error = this.launch(binary, ["-avd", c.avdName], c.port);
+      const launchOwnership = beforeLaunch
+        ? {
+            type: "android-emulator" as const,
+            avdName: c.avdName,
+            marker: randomBytes(16).toString("hex"),
+          }
+        : undefined;
+      await beforeLaunch?.(launchOwnership);
+      error = this.launch(
+        binary,
+        [
+          "-avd",
+          c.avdName,
+          ...(launchOwnership
+            ? [
+                "-prop",
+                `${launchProperty}=${launchOwnership.marker}`,
+              ]
+            : []),
+        ],
+        c.port,
+      );
     }
     for (let attempt = 0; attempt < 120; attempt++) {
       if (error()) fail("emulator-launch-failed", error()!, 502);

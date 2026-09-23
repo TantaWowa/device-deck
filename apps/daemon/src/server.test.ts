@@ -21,6 +21,7 @@ import {
   type Device,
   type Config,
   type Input,
+  type SimulatorLaunchOwnership,
   type Source,
   type SourceConfig,
 } from "../../../packages/core/src/local/types";
@@ -588,6 +589,119 @@ test("a cold start keeps ownership while its spawned AVD identity becomes readab
     assert.equal(closes, 1);
     assert.equal(state, "shutdown");
   } finally {
+    await cleanup();
+  }
+});
+
+test("failed group preparation restores an offline Android launch through its durable ownership marker", async () => {
+  const { deck, adapters, cleanup } = await setup(false, {
+    timeoutMs: 1_000,
+    retryIntervalMs: 0,
+    sleep: () => new Promise((resolve) => setImmediate(resolve)),
+  });
+  const ownership: SimulatorLaunchOwnership = {
+    type: "android-emulator",
+    avdName: "Television_1080p",
+    marker: "d".repeat(32),
+  };
+  let androidState: "shutdown" | "identity-pending" = "shutdown";
+  let androidStarted: (() => void) | undefined;
+  const started = new Promise<void>((resolve) => (androidStarted = resolve));
+  let cleanupOwnership: SimulatorLaunchOwnership | undefined;
+  try {
+    const current = structuredClone(deck.config.config);
+    current.devices[0].connection = {
+      type: "adb",
+      serial: "emulator-5554",
+      avdName: "Television_1080p",
+      port: 5037,
+    };
+    current.devices[1].platform = "Apple";
+    current.devices[1].connection = {
+      type: "simulator",
+      os: "tvos",
+      udid: "7829DB75-6928-4E9C-982A-4AF899FA404D",
+    };
+    await deck.execute("config.save", {
+      config: current,
+      revision: deck.config.revision,
+    });
+    adapters.inspect = async (device) => ({
+      ...device,
+      online: false,
+      locked: false,
+      healthDetail: device.id === "one" && androidState === "identity-pending"
+        ? "AVD identity is not available yet"
+        : "Stopped",
+      capabilities: [],
+      readiness: device.id === "one" && androidState === "identity-pending"
+        ? "starting"
+        : "offline",
+      simulatorState: device.id === "one" && androidState === "identity-pending"
+        ? "starting"
+        : "shutdown",
+    });
+    adapters.prepareSimulator = async (device) => device;
+    adapters.simulator = async (
+      device,
+      action,
+      beforeLaunch,
+      savedOwnership,
+    ) => {
+      if (action === "close") {
+        if (device.id === "one") {
+          cleanupOwnership = savedOwnership;
+          androidState = "shutdown";
+        }
+        return {
+          deviceId: device.id,
+          action,
+          state: "shutdown" as const,
+          changed: true,
+        };
+      }
+      if (device.id === "one") {
+        await beforeLaunch?.(ownership);
+        assert.deepEqual(
+          deck.store.group("test/group/offline-avd-rollback").members[0]
+            .simulatorLaunch,
+          ownership,
+          "the cleanup identity is durable before the emulator process starts",
+        );
+        androidState = "identity-pending";
+        androidStarted?.();
+        throw new DeckError(
+          "emulator-identity-pending",
+          "The launched AVD is offline and has no readable identity.",
+          409,
+        );
+      }
+      await started;
+      throw new Error("tvOS simulator data is missing");
+    };
+    await assert.rejects(
+      deck.execute("sessions.reserveGroup", {
+        version: 1,
+        groupId: "test/group/offline-avd-rollback",
+        leaseToken: "o".repeat(43),
+        owner: "CI",
+        reason: "Atomic native setup",
+        requests: {
+          androidTv: { selector: { device: "one" } },
+          tvos: { selector: { device: "two" } },
+        },
+      }),
+      /tvOS simulator data is missing/,
+    );
+    assert.deepEqual(cleanupOwnership, ownership);
+    assert.equal(androidState, "shutdown");
+    assert.equal(
+      deck.store.group("test/group/offline-avd-rollback").state,
+      "closed",
+    );
+    assert.equal(deck.store.lockReason("one"), undefined);
+  } finally {
+    androidStarted?.();
     await cleanup();
   }
 });
@@ -1398,6 +1512,99 @@ test("restart recovery restores a cold-started group and clears its cleanup lock
         .every((session) => session.state === "closed"),
     );
     assert.equal(running, false);
+  } finally {
+    if (recovered) await recovered.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("restart recovery retains Android launch ownership for offline cleanup", async () => {
+  const fixture = await setup();
+  const { dir, deck, adapters, capture } = fixture;
+  const ownership: SimulatorLaunchOwnership = {
+    type: "android-emulator",
+    avdName: "Television_1080p",
+    marker: "e".repeat(32),
+  };
+  let running = false;
+  let recovered: DeckService | undefined;
+  let recoveredOwnership: SimulatorLaunchOwnership | undefined;
+  try {
+    await useAndroidAvd(deck);
+    adapters.inspect = async (device) => ({
+      ...device,
+      online: running,
+      locked: false,
+      healthDetail: running ? "Ready" : "Stopped",
+      capabilities: [],
+      readiness: running ? "ready" : "offline",
+      simulatorState: running ? "booted" : "shutdown",
+    });
+    adapters.verifyIdentity = async (device) => device;
+    adapters.simulator = async (device, action, beforeLaunch) => {
+      if (action === "launch") {
+        await beforeLaunch?.(ownership);
+        running = true;
+      } else running = false;
+      return {
+        deviceId: device.id,
+        action,
+        state: running ? "booted" : "shutdown",
+        changed: true,
+      };
+    };
+    await deck.execute("sessions.reserveGroup", {
+      version: 1,
+      groupId: "test/group/android-restart",
+      leaseToken: "h".repeat(43),
+      owner: "CI",
+      reason: "Crash recovery with offline ADB",
+      requests: { television: { selector: { device: "one" } } },
+    });
+    assert.deepEqual(
+      deck.store.group("test/group/android-restart").members[0]
+        .simulatorLaunch,
+      ownership,
+    );
+    clearInterval((deck as any).timer);
+    deck.licensing.close();
+    await Promise.all([deck.streams.close(), capture.close(), adapters.close()]);
+    deck.store.close();
+
+    const nextAdapters = new TestAdapters();
+    nextAdapters.simulator = async (
+      device,
+      action,
+      _beforeLaunch,
+      savedOwnership,
+    ) => {
+      if (action === "close") {
+        recoveredOwnership = savedOwnership;
+        running = false;
+      }
+      return {
+        deviceId: device.id,
+        action,
+        state: action === "close" ? "shutdown" : "booted",
+        changed: true,
+      };
+    };
+    const nextCapture = new TestCapture(nextAdapters);
+    const licensed = await licensedManager(dir);
+    recovered = new DeckService(
+      dir,
+      undefined,
+      nextAdapters,
+      nextCapture,
+      licensed.manager,
+    );
+    await recovered.init();
+    assert.deepEqual(recoveredOwnership, ownership);
+    assert.equal(running, false);
+    assert.equal(
+      recovered.store.group("test/group/android-restart").state,
+      "closed",
+    );
   } finally {
     if (recovered) await recovered.close();
     await rm(dir, { recursive: true, force: true });
