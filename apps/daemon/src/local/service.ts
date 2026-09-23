@@ -527,9 +527,7 @@ export class DeckService {
         const requestHash = createHash("sha256")
           .update(JSON.stringify(manifest))
           .digest("hex");
-        await this.expire();
-        await this.refresh();
-        const existing = await this.global.run(async () => {
+        const existingReservation = () => {
           if (!this.store.groups().some((group) => group.id === args.groupId))
             return undefined;
           const group = this.store.validateGroup(
@@ -556,8 +554,8 @@ export class DeckService {
               409,
             );
           return group;
-        });
-        if (existing) {
+        };
+        const replayReservation = async (existing: ReservationGroup) => {
           const entries = await Promise.all(
             existing.members.map(async (member) => {
               const configured = this.device(member.deviceId);
@@ -608,8 +606,21 @@ export class DeckService {
             expiresAt: existing.expiresAt,
             devices: Object.fromEntries(entries),
           };
-        }
-        const claimed = await this.global.run(async () => {
+        };
+        await this.expire();
+        await this.refresh();
+        const existing = await this.global.run(async () =>
+          existingReservation(),
+        );
+        if (existing) return replayReservation(existing);
+        const admission = await this.global.run(async () => {
+          // The initial replay check and admission are separate queue turns.
+          // Another identical caller may have claimed this group between them,
+          // so resolve that group before matching devices or attempting a new
+          // Store transaction.
+          const raced = existingReservation();
+          if (raced)
+            return { kind: "existing" as const, group: raced };
           const observed = await this.devices(true);
           const eligible = observed.filter((device) =>
             device.online ||
@@ -749,8 +760,11 @@ export class DeckService {
             }
           }
           this.store.putGroup(acquired.group);
-          return { ...acquired, selected };
+          return { kind: "claimed" as const, ...acquired, selected };
         });
+        if (admission.kind === "existing")
+          return replayReservation(admission.group);
+        const claimed = admission;
         const prepared = await Promise.allSettled(
           Object.entries(claimed.selected).map(async ([alias, observed]) => {
             const member = claimed.group.members.find((item) => item.alias === alias)!;

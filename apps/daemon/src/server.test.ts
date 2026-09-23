@@ -298,6 +298,77 @@ test("group reservation cold-starts, authenticates, restores and releases idempo
   }
 });
 
+test("simultaneous group retries share admission and report preparation deterministically", async () => {
+  const { deck, adapters, cleanup } = await setup();
+  let running = false;
+  let finishLaunch: (() => void) | undefined;
+  let launchEntered: (() => void) | undefined;
+  const entered = new Promise<void>((resolve) => (launchEntered = resolve));
+  try {
+    await useSimulator(deck);
+    adapters.inspect = async (device) => ({
+      ...device,
+      online: running,
+      locked: false,
+      healthDetail: running ? "Ready" : "Stopped",
+      capabilities: [],
+      simulatorState: running ? "booted" : "shutdown",
+    });
+    adapters.simulator = async (device, action) => {
+      if (action === "launch") {
+        launchEntered?.();
+        await new Promise<void>((resolve) => (finishLaunch = resolve));
+        running = true;
+      } else running = false;
+      return {
+        deviceId: device.id,
+        action,
+        state: running ? ("booted" as const) : ("shutdown" as const),
+        changed: true,
+      };
+    };
+    const request = {
+      version: 1,
+      groupId: "test/group/concurrent-retry",
+      leaseToken: "y".repeat(43),
+      owner: "CI",
+      reason: "Concurrent retry",
+      requests: { simulator: { selector: { device: "one" } } },
+    } as const;
+    const attempts = [
+      deck.execute("sessions.reserveGroup", request),
+      deck.execute("sessions.reserveGroup", request),
+    ];
+    await entered;
+    const early = await Promise.race(
+      attempts.map((attempt, index) =>
+        attempt.then(
+          (value) => ({ index, status: "fulfilled" as const, value }),
+          (reason) => ({ index, status: "rejected" as const, reason }),
+        ),
+      ),
+    );
+    if (early.status !== "rejected")
+      assert.fail("The retry completed before the first reservation was ready.");
+    assert.equal((early.reason as any).code, "group-preparing");
+
+    finishLaunch?.();
+    const winning = await attempts[early.index === 0 ? 1 : 0] as any;
+    const replayed: any = await deck.execute("sessions.reserveGroup", request);
+    assert.equal(
+      replayed.devices.simulator.sessionId,
+      winning.devices.simulator.sessionId,
+    );
+    await deck.execute("sessions.releaseGroup", {
+      groupId: winning.groupId,
+      leaseToken: winning.leaseToken,
+    });
+  } finally {
+    finishLaunch?.();
+    await cleanup();
+  }
+});
+
 test("group release reports a never-created group distinctly from a wrong credential", async () => {
   const { deck, cleanup } = await setup();
   try {
