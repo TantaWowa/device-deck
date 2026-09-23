@@ -1,5 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { configSchema, deviceSchema } from "../../core/src/local/types";
 import { Adapters } from "./index";
 import { controlSimulator, simulatorState, wakeSimulator, SimulatorInventory } from "./simulator";
@@ -16,7 +19,12 @@ const simulator = deviceSchema.parse({
     udid: "F4B9CA01-BA57-40A0-984D-38B7F91AB8A1",
   },
 });
-function fixture(initial = "Shutdown", target = simulator) {
+function fixture(
+  initial = "Shutdown",
+  target = simulator,
+  dataPath: unknown = "/tmp",
+  includeDataPath = true,
+) {
   let state = initial;
   const calls: { command: string; args: string[]; timeout?: number }[] = [];
   const execute: typeof run = async (command, args, timeout) => {
@@ -39,12 +47,14 @@ function fixture(initial = "Shutdown", target = simulator) {
                     name: "Apple TV",
                     state,
                     isAvailable: true,
+                    ...(includeDataPath ? { dataPath } : {}),
                   },
                   {
                     udid: "different-simulator",
                     name: "Apple TV",
                     state: "Booted",
                     isAvailable: true,
+                    dataPath: "/tmp",
                   },
                 ],
               },
@@ -213,7 +223,7 @@ test("missing simulator/runtime and physical or Android targets never reach boot
   assert.equal(await simulatorState(simulator, missing), "unavailable");
   await assert.rejects(
     controlSimulator(simulator, "launch", missing),
-    /runtime is unavailable/,
+    /runtime, or its CoreSimulator data directory is unavailable/,
   );
   await assert.rejects(
     controlSimulator({ ...simulator, kind: "physical" }, "close", missing),
@@ -231,6 +241,69 @@ test("missing simulator/runtime and physical or Android targets never reach boot
     /configured Apple simulators/,
   );
   assert(calls.every((args) => args[1] === "list"));
+});
+test("missing or invalid simulator data paths are unavailable before ownership or boot", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "deck-simulator-path-"));
+  const file = path.join(directory, "not-a-directory");
+  await writeFile(file, "fixture");
+  try {
+    for (const { dataPath, includeDataPath } of [
+      { dataPath: undefined, includeDataPath: false },
+      { dataPath: "relative/device/data", includeDataPath: true },
+      { dataPath: path.join(directory, "missing"), includeDataPath: true },
+      { dataPath: file, includeDataPath: true },
+    ]) {
+      const current = fixture(
+        "Shutdown",
+        simulator,
+        dataPath,
+        includeDataPath,
+      );
+      let ownershipRecorded = false;
+      assert.equal(
+        await simulatorState(simulator, current.execute),
+        "unavailable",
+      );
+      await assert.rejects(
+        controlSimulator(
+          simulator,
+          "launch",
+          current.execute,
+          async () => {
+            ownershipRecorded = true;
+          },
+        ),
+        /runtime, or its CoreSimulator data directory is unavailable/,
+      );
+      await assert.rejects(
+        controlSimulator(simulator, "close", current.execute),
+        /runtime, or its CoreSimulator data directory is unavailable/,
+      );
+      const adapters = new Adapters(
+        () =>
+          configSchema.parse({
+            schemaVersion: 1,
+            settings: { folder: "/tmp/captures" },
+          }),
+        current.execute,
+      );
+      try {
+        await assert.rejects(
+          adapters.restart(simulator),
+          /runtime, or its CoreSimulator data directory is unavailable/,
+        );
+      } finally {
+        await adapters.close();
+      }
+      assert.equal(ownershipRecorded, false);
+      assert(
+        current.calls.every((call) => call.args[1] === "list"),
+        "invalid simulator storage never reaches boot",
+      );
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 test("wake sends Home only to the exact running simulator without booting a stopped target", async () => {
   const booted = fixture("Booted");
@@ -270,7 +343,7 @@ test("idle simulator observations reuse readiness but fresh actions reject a reg
       if (!ready) throw new Error("Still starting");
       return { stdout: Buffer.from(""), stderr: "" };
     }
-    return { stdout: Buffer.from(JSON.stringify({ devices: { "com.apple.CoreSimulator.SimRuntime.tvOS-18-0": [{ udid: simulator.connection.type === "simulator" ? simulator.connection.udid : "", state, isAvailable: true }] } })), stderr: "" };
+    return { stdout: Buffer.from(JSON.stringify({ devices: { "com.apple.CoreSimulator.SimRuntime.tvOS-18-0": [{ udid: simulator.connection.type === "simulator" ? simulator.connection.udid : "", state, isAvailable: true, dataPath: "/tmp" }] } })), stderr: "" };
   };
   assert.equal(await inventory.state(simulator, execute), "booted");
   ready = false;
@@ -300,7 +373,7 @@ test("readiness finishing after invalidation cannot restore the old simulator ca
   let bootstatus = 0;
   const execute: typeof run = async (_command, args) => {
     if (args[1] === "bootstatus") { bootstatus++; entered(); await gate; return { stdout: Buffer.from(""), stderr: "" }; }
-    return { stdout: Buffer.from(JSON.stringify({ devices: { "com.apple.CoreSimulator.SimRuntime.tvOS-18-0": [{ udid: simulator.connection.type === "simulator" ? simulator.connection.udid : "", state: "Booted", isAvailable: true }] } })), stderr: "" };
+    return { stdout: Buffer.from(JSON.stringify({ devices: { "com.apple.CoreSimulator.SimRuntime.tvOS-18-0": [{ udid: simulator.connection.type === "simulator" ? simulator.connection.udid : "", state: "Booted", isAvailable: true, dataPath: "/tmp" }] } })), stderr: "" };
   };
   const pending = inventory.state(simulator, execute);
   await started;

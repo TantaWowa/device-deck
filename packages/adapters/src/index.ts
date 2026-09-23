@@ -3,7 +3,7 @@ import { androidBootReady, androidFeatures, avdInputMode } from "./android-state
 import { IOS_GESTURES, startIdbInteractive } from "./interactive";
 import type { InteractiveSource, VideoProfile } from "../../core/src/live";
 import { androidKeys, rokuKeys, hidKeys, iosHardwareKeys, deviceInputMode } from "../../core/src/remote";
-import { controlSimulator, simulatorState, SimulatorInventory, wakeSimulator } from "./simulator";
+import { controlSimulator, simulatorState, SimulatorInventory, wakeSimulator, SIMULATOR_UNAVAILABLE_MESSAGE } from "./simulator";
 import { AndroidEmulators, isAndroidEmulator } from "./android-emulator";
 import {
   mergeCaptureCards,
@@ -902,9 +902,19 @@ export class Adapters {
       return;
     }
     if (d.connection.type === "simulator") {
-      await run("xcrun", ["simctl", "shutdown", d.connection.udid]);
-      await run("xcrun", ["simctl", "boot", d.connection.udid]);
-      await run(
+      if ((await simulatorState(d, this.execute)) === "unavailable")
+        fail(
+          "simulator-unavailable",
+          SIMULATOR_UNAVAILABLE_MESSAGE,
+          409,
+        );
+      await this.execute("xcrun", [
+        "simctl",
+        "shutdown",
+        d.connection.udid,
+      ]);
+      await this.execute("xcrun", ["simctl", "boot", d.connection.udid]);
+      await this.execute(
         "xcrun",
         ["simctl", "bootstatus", d.connection.udid, "-b"],
         120000,
