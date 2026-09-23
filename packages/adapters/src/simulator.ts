@@ -94,6 +94,7 @@ export async function controlSimulator(
   action: "launch" | "close",
   execute: Runner = run,
 ) {
+  let presentationWarning: string | undefined;
   const state = await simulatorState(device, execute);
   if (device.connection.type !== "simulator")
     fail("unsupported-lifecycle", "This is not an Apple simulator.");
@@ -130,16 +131,23 @@ export async function controlSimulator(
     } catch (error) {
       fail("simulator-not-ready", `${device.name} did not finish starting. Its system screen must be ready before opening the feed. Wait for Simulator to finish, then open its feed, or close and relaunch this simulator from Devices. ${(error as Error).message}`, 502);
     }
-    const developer = (await execute("xcode-select", ["-p"])).stdout
-      .toString()
-      .trim();
-    await execute("/usr/bin/open", [
-      "-a",
-      path.join(developer, "Applications/Simulator.app"),
-      "--args",
-      "-CurrentDeviceUDID",
-      udid,
-    ]);
+    try {
+      const developer = (await execute("xcode-select", ["-p"])).stdout
+        .toString()
+        .trim();
+      await execute("/usr/bin/open", [
+        "-a",
+        path.join(developer, "Applications/Simulator.app"),
+        "--args",
+        "-CurrentDeviceUDID",
+        udid,
+      ]);
+    } catch (error) {
+      // CoreSimulator lifecycle is independent of GUI presentation. In
+      // headless sessions (and when several simulators start together), macOS
+      // can reject `open` even though the exact simulator is fully booted.
+      presentationWarning = `${device.name} is booted, but Device Deck could not open its Simulator window: ${(error as Error).message}`;
+    }
   } else if (state !== "shutdown") {
     try {
       await execute("xcrun", ["simctl", "shutdown", udid], 60000);
@@ -161,6 +169,7 @@ export async function controlSimulator(
     state: current,
     changed:
       action === "launch" ? state === "shutdown" : state !== "shutdown",
+    ...(presentationWarning ? { warning: presentationWarning } : {}),
   };
 }
 

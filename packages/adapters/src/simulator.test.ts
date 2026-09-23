@@ -16,7 +16,7 @@ const simulator = deviceSchema.parse({
     udid: "F4B9CA01-BA57-40A0-984D-38B7F91AB8A1",
   },
 });
-function fixture(initial = "Shutdown") {
+function fixture(initial = "Shutdown", target = simulator) {
   let state = initial;
   const calls: { command: string; args: string[]; timeout?: number }[] = [];
   const execute: typeof run = async (command, args, timeout) => {
@@ -33,8 +33,8 @@ function fixture(initial = "Shutdown") {
                 "com.apple.CoreSimulator.SimRuntime.tvOS-18-0": [
                   {
                     udid:
-                      simulator.connection.type === "simulator"
-                        ? simulator.connection.udid
+                      target.connection.type === "simulator"
+                        ? target.connection.udid
                         : "",
                     name: "Apple TV",
                     state,
@@ -77,6 +77,64 @@ test("simulator launch boots the configured UDID, waits for readiness, and opens
     "-CurrentDeviceUDID",
     "F4B9CA01-BA57-40A0-984D-38B7F91AB8A1",
   ]);
+});
+test("simulator launch succeeds with a warning when GUI presentation fails after boot", async () => {
+  const base = fixture();
+  const execute: typeof run = async (command, args, timeout) => {
+    const result = await base.execute(command, args, timeout);
+    if (command === "/usr/bin/open")
+      throw new Error("The application could not be launched (-600)");
+    return result;
+  };
+
+  const result = await controlSimulator(simulator, "launch", execute);
+
+  assert.equal(result.state, "booted");
+  assert.equal(result.changed, true);
+  assert.match(result.warning || "", /booted.*could not open.*-600/);
+  assert(base.calls.some((call) => call.command === "/usr/bin/open"));
+});
+test("parallel simulator launches are not failed by independent GUI presentation errors", async () => {
+  const second = deviceSchema.parse({
+    ...simulator,
+    id: "apple-sim-2",
+    name: "Second Apple TV",
+    connection: {
+      ...simulator.connection,
+      udid: "8254E351-B35B-40C6-8B99-F186214B4227",
+    },
+  });
+  const firstFixture = fixture("Shutdown", simulator);
+  const secondFixture = fixture("Shutdown", second);
+  const failingPresentation = (base: ReturnType<typeof fixture>, message: string): typeof run =>
+    async (command, args, timeout) => {
+      const result = await base.execute(command, args, timeout);
+      if (command === "/usr/bin/open") throw new Error(message);
+      return result;
+    };
+
+  const results = await Promise.all([
+    controlSimulator(
+      simulator,
+      "launch",
+      failingPresentation(firstFixture, "LaunchServices error -600"),
+    ),
+    controlSimulator(
+      second,
+      "launch",
+      failingPresentation(secondFixture, "Invalid argument EINVAL"),
+    ),
+  ]);
+
+  assert.deepEqual(
+    results.map(({ state, changed }) => ({ state, changed })),
+    [
+      { state: "booted", changed: true },
+      { state: "booted", changed: true },
+    ],
+  );
+  assert.match(results[0].warning || "", /-600/);
+  assert.match(results[1].warning || "", /EINVAL/);
 });
 test("an externally booted simulator remains starting until its system apps are ready", async () => {
   const base = fixture("Booted");
