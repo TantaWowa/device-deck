@@ -61,7 +61,7 @@ devdeck reserve "$RUNNER_TEMP/device-request.json" \
 
 `--result-file` is important. The CLI generates a random group credential and atomically writes `{groupId,leaseToken}` to that owner-only file before it sends the request. On success it replaces the file with the full response. Cleanup therefore retains authority even if the CLI is interrupted or the HTTP response is lost after the daemon commits the group. Shell redirection alone cannot provide that guarantee.
 
-When `--result-file` is present, stdout deliberately omits `leaseToken`; it is safe to keep `--json` output in a CI log. The private result file is authoritative. Repeating the same command with the same manifest and result path reuses the existing credential rather than replacing it. An already-active matching request returns the same bindings; a request still preparing asks the caller to retry shortly. A different group ID or manifest cannot reuse that credential.
+When `--result-file` is present, stdout deliberately omits `leaseToken`; it is safe to keep `--json` output in a CI log. The private result file is authoritative. Repeating the same command with the same manifest and result path reuses the existing credential rather than replacing it. An already-active matching request returns the persisted original bindings without depending on a fresh identity lookup; it still verifies that every member is online. A request still preparing asks the caller to retry shortly. A different group ID or manifest cannot reuse that credential.
 
 The private result file (and the raw API response) has this shape:
 

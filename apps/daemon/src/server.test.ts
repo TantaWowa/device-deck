@@ -238,10 +238,17 @@ test("group reservation cold-starts, authenticates, restores and releases idempo
     assert.equal(reserved.devices.television.id, "one");
     assert.equal(reserved.devices.television.startedByGroup, true);
     assert.deepEqual(actions, ["launch"]);
+    adapters.verifyIdentity = async () => {
+      throw new Error("Transient simulator identity lookup failed");
+    };
     const retried: any = await deck.execute("sessions.reserveGroup", request);
     assert.equal(
       retried.devices.television.sessionId,
       reserved.devices.television.sessionId,
+    );
+    assert.deepEqual(
+      retried.devices.television.connection,
+      reserved.devices.television.connection,
     );
     assert.deepEqual(actions, ["launch"]);
     await assert.rejects(

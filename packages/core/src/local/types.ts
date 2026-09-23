@@ -229,6 +229,10 @@ export type ReservationGroupMember = {
   sessionId: string;
   deviceId: string;
   startedByGroup: boolean;
+  binding?: Pick<
+    DeviceConfig,
+    "id" | "name" | "platform" | "kind" | "connection"
+  >;
 };
 export type ReservationGroup = {
   id: string;
