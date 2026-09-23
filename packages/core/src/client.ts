@@ -1,6 +1,11 @@
 import { readFile } from "node:fs/promises";
+import { randomBytes } from "node:crypto";
 import path from "node:path";
-import { DeckError, type Operation } from "./local/types";
+import {
+  DeckError,
+  type Operation,
+  type ReservationGroupManifest,
+} from "./local/types";
 import { dataDirectory } from "./local/paths";
 import { endpointSchema } from "./hub";
 export async function endpoint() {
@@ -43,7 +48,7 @@ export async function callOperation(
       "X-Device-Deck-Client": origin,
     },
     body: JSON.stringify(args),
-    signal: AbortSignal.any([AbortSignal.timeout(operation === "devices.simulator" ? 300000 : operation === "inventory" ? 30_000 : 180000), ...(signal ? [signal] : [])]),
+    signal: AbortSignal.any([AbortSignal.timeout(operation === "sessions.reserveGroup" ? 600000 : operation === "devices.simulator" ? 300000 : operation === "inventory" ? 30_000 : 180000), ...(signal ? [signal] : [])]),
     redirect: "error",
   });
   const body = await response.json();
@@ -55,6 +60,55 @@ export async function callOperation(
       body.details,
     );
   return body;
+}
+export const createReservationGroupLeaseToken = () =>
+  randomBytes(32).toString("base64url");
+
+/** Callers should persist the token before dispatch so an uncertain response
+ * can always be cleaned up with releaseDeviceGroup. The CLI's --result-file
+ * path implements that durable hand-off automatically. */
+export async function reserveDeviceGroup(
+  manifest: ReservationGroupManifest,
+  leaseToken: string,
+  signal?: AbortSignal,
+) {
+  return callOperation(
+    "sessions.reserveGroup",
+    { ...manifest, leaseToken },
+    "API",
+    signal,
+  );
+}
+
+export async function releaseDeviceGroup(
+  groupId: string,
+  leaseToken: string,
+  signal?: AbortSignal,
+) {
+  return callOperation(
+    "sessions.releaseGroup",
+    { groupId, leaseToken },
+    "API",
+    signal,
+  );
+}
+
+export async function renewDeviceGroup(
+  groupId: string,
+  leaseToken: string,
+  ttlMinutes?: number,
+  signal?: AbortSignal,
+) {
+  return callOperation(
+    "sessions.renewGroup",
+    {
+      groupId,
+      leaseToken,
+      ...(ttlMinutes === undefined ? {} : { ttlMinutes }),
+    },
+    "API",
+    signal,
+  );
 }
 export async function callService(route: "health" | "inventory") {
   if (route === "inventory") return callOperation("inventory");

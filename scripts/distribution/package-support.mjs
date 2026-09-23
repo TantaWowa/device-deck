@@ -5,6 +5,16 @@ import path from "node:path";
 
 export const bundleId = "com.tantawowa.device-deck";
 export const minimumOS = "14.0";
+export const applicationBuildPayload = Object.freeze([
+  "daemon.mjs",
+  "devdeck.mjs",
+  "tui.mjs",
+  "mcp.mjs",
+  "client.mjs",
+  "native",
+  "web",
+  "build-metadata.json",
+]);
 export const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
 export const xml = (value) => String(value).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
 export function numericVersion(version) {

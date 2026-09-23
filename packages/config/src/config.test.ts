@@ -32,6 +32,42 @@ test("two concurrent saves with one revision have exactly one winner", async () 
     await rm(dir, { recursive: true, force: true });
   }
 });
+test("device tags are optional for existing configs and validated when present", () => {
+  const base = {
+    schemaVersion: 1,
+    settings: { folder: "./captures" },
+    devices: [
+      {
+        id: "legacy",
+        name: "Legacy phone",
+        platform: "Android",
+        kind: "virtual",
+        connection: {
+          type: "adb",
+          serial: "emulator-5554",
+          avdName: "Legacy_Phone",
+          port: 5037,
+        },
+      },
+    ],
+  };
+  assert.equal(validateConfig(base).devices[0].tags, undefined);
+  assert.deepEqual(
+    validateConfig({
+      ...base,
+      devices: [{ ...base.devices[0], tags: ["ci", "nightly"] }],
+    }).devices[0].tags,
+    ["ci", "nightly"],
+  );
+  assert.throws(
+    () =>
+      validateConfig({
+        ...base,
+        devices: [{ ...base.devices[0], tags: ["ci", "ci"] }],
+      }),
+    /tags must be unique/i,
+  );
+});
 test("duplicate USB identities and physical devices across hosts or ADB ports are rejected", () => {
   const c = validateConfig({
     schemaVersion: 1,

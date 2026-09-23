@@ -2,6 +2,7 @@ import { z } from "zod";
 import { reportRequestSchema, type UsageReport } from "../reports";
 import type { LicenseStatus } from "../../../licensing/src";
 import { streamOpenSchema, streamCredentialSchema, gestureInputSchema, pointerInputSchema, type GestureCapability } from "../live";
+import { deviceFormFactor } from "../device-form-factor";
 export const capabilitySchema = z.enum([
   "preview",
   "key",
@@ -23,6 +24,11 @@ export const deviceSchema = z
     platform: z.enum(["Roku", "Android", "Apple", "Other"]),
     kind: z.enum(["physical", "virtual"]),
     model: z.string().max(256).default(""),
+    tags: z
+      .array(z.string().trim().min(1).max(48))
+      .max(30)
+      .refine((tags) => new Set(tags).size === tags.length, "Device tags must be unique.")
+      .optional(),
     inputMode: z.enum(["touch", "remote"]).optional(),
     visibility: z.enum(["local", "shared"]).default("local"),
     connection: z.discriminatedUnion("type", [
@@ -215,6 +221,26 @@ export type Session = {
   state: "active" | "closing" | "closed";
   endedAt?: number;
   closeReason?: string;
+  groupId?: string;
+  groupAlias?: string;
+};
+export type ReservationGroupMember = {
+  alias: string;
+  sessionId: string;
+  deviceId: string;
+  startedByGroup: boolean;
+};
+export type ReservationGroup = {
+  id: string;
+  owner: string;
+  reason: string;
+  requestHash: string;
+  createdAt: number;
+  expiresAt: number;
+  state: "preparing" | "active" | "closing" | "closed";
+  members: ReservationGroupMember[];
+  endedAt?: number;
+  closeReason?: string;
 };
 export type Event = {
   id: number;
@@ -265,6 +291,7 @@ export type Snapshot = {
   devices: Device[];
   sources: Source[];
   sessions: Session[];
+  reservationGroups?: ReservationGroup[];
   artifacts: Artifact[];
   events: Event[];
   inputs: Input[];
@@ -284,6 +311,9 @@ export const selectorSchema = z
   .object({
     device: z.string().optional(),
     platform: z.enum(["Roku", "Android", "Apple", "Other"]).optional(),
+    kind: z.enum(["physical", "virtual"]).optional(),
+    formFactor: z.enum(["phone", "tv", "other"]).optional(),
+    tags: z.array(z.string().trim().min(1).max(48)).max(30).optional(),
     name: z.string().optional(),
     state: z
       .enum(["free", "reserved", "online", "offline", "locked"])
@@ -292,6 +322,29 @@ export const selectorSchema = z
   })
   .strict();
 export type Selector = z.infer<typeof selectorSchema>;
+const reservationGroupIdSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(160)
+  .regex(/^[A-Za-z0-9][A-Za-z0-9_.:/-]*$/, "Use a stable CI/job identifier without spaces.");
+export const reservationGroupManifestSchema = z
+  .object({
+    version: z.literal(1),
+    groupId: reservationGroupIdSchema,
+    owner: z.string().trim().min(1).max(128),
+    reason: z.string().trim().min(1).max(512),
+    ttlMinutes: z.number().int().min(1).max(240).optional(),
+    requests: z
+      .record(
+        z.string().regex(/^[A-Za-z][A-Za-z0-9_-]{0,63}$/),
+        z.object({ selector: selectorSchema }).strict(),
+      )
+      .refine((requests) => Object.keys(requests).length > 0, "At least one device request is required.")
+      .refine((requests) => Object.keys(requests).length <= 32, "A group can request at most 32 devices."),
+  })
+  .strict();
+export type ReservationGroupManifest = z.infer<typeof reservationGroupManifestSchema>;
 const leaseFields = {
   sessionId: z.string().min(1),
   leaseToken: z.string().min(1),
@@ -323,6 +376,22 @@ export const operations = {
       owner: z.string().trim().min(1).max(128),
       reason: z.string().trim().min(1).max(512),
       ttlMinutes: z.number().int().min(1).max(240).optional(),
+    })
+    .strict(),
+  "sessions.reserveGroup": reservationGroupManifestSchema.extend({
+    leaseToken: z.string().min(32).max(256),
+  }),
+  "sessions.renewGroup": z
+    .object({
+      groupId: reservationGroupIdSchema,
+      leaseToken: z.string().min(1),
+      ttlMinutes: z.number().int().min(1).max(240).optional(),
+    })
+    .strict(),
+  "sessions.releaseGroup": z
+    .object({
+      groupId: reservationGroupIdSchema,
+      leaseToken: z.string().min(1),
     })
     .strict(),
   "sessions.renew": z
@@ -454,6 +523,10 @@ export function matchDevices(
           selector.device.toLowerCase(),
         )) &&
       (!selector.platform || d.platform === selector.platform) &&
+      (!selector.kind || d.kind === selector.kind) &&
+      (!selector.formFactor || deviceFormFactor(d) === selector.formFactor) &&
+      (!selector.tags ||
+        selector.tags.every((tag) => (d.tags || []).includes(tag))) &&
       (!selector.name ||
         d.name
           .toLowerCase()
@@ -475,4 +548,49 @@ export function matchDevices(
                 ? d.online
                 : !d.online)),
   );
+}
+
+/** Resolve a complete set of distinct, currently claimable devices. The
+ * smallest candidate sets are assigned first so broad criteria cannot steal a
+ * device needed by a more specific request. Offline virtual devices remain
+ * eligible: the daemon claims the set first, then starts them as one unit. */
+export function matchReservationGroup(
+  devices: Device[],
+  sessions: Session[],
+  requests: ReservationGroupManifest["requests"],
+  resourceIdentity: (device: Device) => string | null | undefined =
+    (device) => device.captureSourceId,
+) {
+  const busy = new Set(
+    sessions.filter((session) => session.state !== "closed").map((session) => session.deviceId),
+  );
+  const entries = Object.entries(requests).map(([alias, request]) => {
+    const selector = request.selector.state === "free"
+      ? { ...request.selector, state: undefined }
+      : request.selector;
+    const candidates = matchDevices(devices, sessions, selector)
+      .filter((device) => !busy.has(device.id) && !device.locked)
+      .sort((a, b) => Number(b.online) - Number(a.online) || a.id.localeCompare(b.id));
+    return { alias, candidates };
+  }).sort((a, b) => a.candidates.length - b.candidates.length || a.alias.localeCompare(b.alias));
+  const selected = new Map<string, Device>();
+  const deviceIds = new Set<string>();
+  const sourceIds = new Set<string>();
+  const assign = (index: number): boolean => {
+    if (index === entries.length) return true;
+    const entry = entries[index];
+    for (const device of entry.candidates) {
+      const sourceKey = resourceIdentity(device);
+      if (deviceIds.has(device.id) || (sourceKey && sourceIds.has(sourceKey))) continue;
+      selected.set(entry.alias, device);
+      deviceIds.add(device.id);
+      if (sourceKey) sourceIds.add(sourceKey);
+      if (assign(index + 1)) return true;
+      selected.delete(entry.alias);
+      deviceIds.delete(device.id);
+      if (sourceKey) sourceIds.delete(sourceKey);
+    }
+    return false;
+  };
+  return assign(0) ? Object.fromEntries(selected) : undefined;
 }

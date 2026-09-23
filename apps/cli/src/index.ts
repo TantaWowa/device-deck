@@ -4,6 +4,7 @@ import { parseArgs } from "node:util";
 import { readFile } from "node:fs/promises";
 import { createInterface } from "node:readline/promises";
 import { spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import {
   callOperation,
   callService,
@@ -30,6 +31,7 @@ import { tailscaleCommand, tailscaleBrowserUrl } from "./tailscale";
 import { networkCommand, pairCommand } from "./network";
 import { pick, parseSelector } from "./selection";
 import { selectFeeds, feedQuery } from "./feeds";
+import { readGroupCredential, readReservationManifest, releaseGroupCredential, reservationCommandOutput, prepareGroupCredential } from "./reservation-files";
 import { checkMacUpdates, compareVersions, downloadMacUpdate } from "../../../packages/installer/src/mac-update";
 import { releaseMode } from "../../../packages/licensing/src/trust";
 import { version } from "../../../packages/core/src/version";
@@ -62,7 +64,10 @@ Usage: devdeck <command> [options]
   license activate <key-file>  Read a license key from a private file
   config [get|import|export|validate] [file]
   reserve [filters] --owner NAME --reason TEXT
+  reserve MANIFEST.json --result-file FILE --json
+                               Atomically reserve and ready a device group
   renew | release              Use --session ID --lease TOKEN
+  renew | release RESULT.json  Renew or release a reservation group
   remote [filters]             Interactive remote and device picker
   apple-pair [filters]         Reserve and pair Apple TV with its on-screen PIN
   input --key Home             Use --session and --lease; or --text TEXT
@@ -73,6 +78,7 @@ Usage: devdeck <command> [options]
   call OPERATION JSON          Every shared API operation, including metadata
 
 Filters: --device NAME_OR_ID --platform Roku|Android|Apple|Other --name TEXT
+         --kind physical|virtual --form-factor phone|tv|other --tags ci,nightly
          --state free|reserved|online|offline|locked --capabilities key,record
 Options: --json --ttl MINUTES --mode clean|annotated
 
@@ -88,6 +94,9 @@ const optionTypes: Record<string, { type: "string" | "boolean" }> =
     [
       "device",
       "platform",
+      "kind",
+      "form-factor",
+      "tags",
       "name",
       "state",
       "capabilities",
@@ -107,6 +116,7 @@ const optionTypes: Record<string, { type: "string" | "boolean" }> =
       "channel",
       "key-file",
       "output",
+      "result-file",
       "allow-user",
       "https-port",
       "host",
@@ -388,23 +398,58 @@ try {
         result = undefined;
       }
     } else if (command === "reserve") {
-      const device = await pick(selector, !v.json);
-      result = await callOperation("sessions.reserve", {
-        selector: { device: device.id },
-        owner: String(v.owner || "CLI"),
-        reason: reason(),
-        ...(v.ttl ? { ttlMinutes: Number(v.ttl) } : {}),
-      });
-    } else if (command === "renew" || command === "release")
-      result = await callOperation(
-        command === "renew" ? "sessions.renew" : "sessions.release",
-        {
-          ...lease(),
-          ...(command === "renew" && v.ttl
-            ? { ttlMinutes: Number(v.ttl) }
-            : {}),
-        },
-      );
+      if (p[1]) {
+        const manifest = await readReservationManifest(path.resolve(p[1]));
+        const resultFile = v["result-file"]
+          ? path.resolve(String(v["result-file"]))
+          : undefined;
+        const credential = resultFile
+          ? await prepareGroupCredential(
+              resultFile,
+              manifest.groupId,
+              () => randomBytes(32).toString("base64url"),
+            )
+          : {
+              groupId: manifest.groupId,
+              leaseToken: randomBytes(32).toString("base64url"),
+            };
+        const acquired = await callOperation(
+          "sessions.reserveGroup",
+          { ...manifest, leaseToken: credential.leaseToken },
+        );
+        if (resultFile)
+          await atomicWrite(resultFile, JSON.stringify(acquired, null, 2) + "\n");
+        result = reservationCommandOutput(acquired, resultFile);
+      } else {
+        const device = await pick(selector, !v.json);
+        result = await callOperation("sessions.reserve", {
+          selector: { device: device.id },
+          owner: String(v.owner || "CLI"),
+          reason: reason(),
+          ...(v.ttl ? { ttlMinutes: Number(v.ttl) } : {}),
+        });
+      }
+    } else if (command === "renew" || command === "release") {
+      if (p[1]) {
+        const credential = await readGroupCredential(path.resolve(p[1]));
+        result = command === "release"
+          ? await releaseGroupCredential(credential)
+          : await callOperation("sessions.renewGroup", {
+              ...credential,
+              ...(v.ttl ? { ttlMinutes: Number(v.ttl) } : {}),
+            });
+      } else {
+        result = await callOperation(
+          command === "renew" ? "sessions.renew" : "sessions.release",
+          {
+            ...lease(),
+            ...(command === "renew" && v.ttl
+              ? { ttlMinutes: Number(v.ttl) }
+              : {}),
+          },
+        );
+      }
+    }
     else if (command === "takeover") {
       if (!v.yes) throw new Error("Takeover requires --yes and --reason.");
       const device = await pick(selector, !v.json);

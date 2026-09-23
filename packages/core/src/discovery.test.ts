@@ -135,6 +135,7 @@ test("bulk registration adds only selected devices, creates native screens, and 
 test("rediscovery preserves configured identities, aliases and USB bindings without guessing new USB pairings", () => {
   const configured: DeviceConfig = {
     ...device("my-roku", "Desk Roku"),
+    tags: ["ci", "living-room"],
     platform: "Roku",
     kind: "physical",
     connection: { type: "roku", serial: "serial-one", host: "192.0.2.1" },
@@ -168,6 +169,7 @@ test("rediscovery preserves configured identities, aliases and USB bindings with
     found.devices.map((d) => d.id),
   );
   assert.deepEqual(result.config.devices[0], configured);
+  assert.deepEqual(result.config.devices[0].tags, ["ci", "living-room"]);
   assert.deepEqual(result.config.sources, current.sources);
   assert.equal(result.added[0].captureSourceId, null);
   validateConfig(result.config);

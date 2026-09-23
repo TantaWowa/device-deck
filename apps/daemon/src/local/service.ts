@@ -1,5 +1,5 @@
 import path from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdir, stat, rm, readFile } from "node:fs/promises";
 import { performance } from "node:perf_hooks";
 import {
@@ -22,7 +22,9 @@ import {
 import {
   operations,
   matchDevices,
+  matchReservationGroup,
   supportsSimulatorLifecycle,
+  canLaunchSimulator,
   fail,
   type Config,
   type Device,
@@ -32,6 +34,7 @@ import {
   type Snapshot,
   type SourceConfig,
   type Source,
+  type ReservationGroup,
 } from "../../../../packages/core/src/local/types";
 import { Store } from "./store";
 import { InventoryCache } from "./inventory-cache";
@@ -70,6 +73,7 @@ export class DeckService {
     { handle: ProcessHandle; timer: ReturnType<typeof setTimeout> }
   >();
   private closing = new Map<string, Promise<Session>>();
+  private groupClosing = new Map<string, Promise<ReservationGroup>>();
   private healthCache = new InventoryCache<Device>();
   // Project camera observations frequently; hardware freshness belongs to the
   // shared camera owner, not a second 30-second cache layered on top of it.
@@ -144,6 +148,29 @@ export class DeckService {
       );
     return s;
   }
+  private configurationProtectedSessions() {
+    const groupSessions = new Set(
+      this.store
+        .groups()
+        .filter((group) => group.state !== "closed")
+        .flatMap((group) => group.members.map((member) => member.sessionId)),
+    );
+    return this.store
+      .sessions()
+      .filter(
+        (session) =>
+          session.state !== "closed" || groupSessions.has(session.id),
+      );
+  }
+  private deviceHasOpenGroup(deviceId: string) {
+    return this.store
+      .groups()
+      .some(
+        (group) =>
+          group.state !== "closed" &&
+          group.members.some((member) => member.deviceId === deviceId),
+      );
+  }
   private validateChange = (next: Config, lifecycleDevice?: string) => {
     for (const id of this.simulatorActions.keys()) {
       if (id === lifecycleDevice) continue;
@@ -157,7 +184,10 @@ export class DeckService {
           409,
         );
     }
-    const active = this.store.sessions().filter((s) => s.state !== "closed");
+    // A failed group cleanup deliberately leaves closed member sessions under
+    // a durable group lock. Keep their configuration stable so a later retry
+    // can still resolve and restore every device/source with the same tools.
+    const active = this.configurationProtectedSessions();
     for (const s of active) {
       if (
         JSON.stringify(
@@ -192,7 +222,7 @@ export class DeckService {
   private prepareConfig = async (next: Config) => {
     this.validateChange(next);
     this.changingConfig = true;
-    const active = this.store.sessions().filter((s) => s.state !== "closed");
+    const active = this.configurationProtectedSessions();
     try {
       for (const source of this.config.config.sources) {
         if (active.some((s) => s.sourceId === source.id)) continue;
@@ -318,6 +348,7 @@ export class DeckService {
       devices,
       sources,
       sessions: this.store.sessions(),
+      reservationGroups: this.store.groups(),
       artifacts: this.store.artifacts(),
       events: this.store.events(),
       inputs: this.store.inputs(),
@@ -491,8 +522,366 @@ export class DeckService {
           }
         });
       }
+      case "sessions.reserveGroup": {
+        const { leaseToken: _leaseToken, ...manifest } = args;
+        const requestHash = createHash("sha256")
+          .update(JSON.stringify(manifest))
+          .digest("hex");
+        await this.expire();
+        await this.refresh();
+        const existing = await this.global.run(async () => {
+          if (!this.store.groups().some((group) => group.id === args.groupId))
+            return undefined;
+          const group = this.store.validateGroup(
+            args.groupId,
+            args.leaseToken,
+            true,
+          );
+          if (group.requestHash !== requestHash)
+            fail(
+              "group-conflict",
+              "This group ID and credential already belong to a different reservation request.",
+              409,
+            );
+          if (group.state === "preparing")
+            fail(
+              "group-preparing",
+              "This reservation request is still preparing. Keep its result-file credential and retry shortly, or release it.",
+              409,
+            );
+          if (group.state !== "active")
+            fail(
+              "group-not-active",
+              `This reservation group is ${group.state}. Use a new unique run attempt ID.`,
+              409,
+            );
+          return group;
+        });
+        if (existing) {
+          const entries = await Promise.all(
+            existing.members.map(async (member) => {
+              const configured = this.device(member.deviceId);
+              const inspected = await this.adapters.inspect(configured);
+              if (!inspected.online)
+                fail(
+                  "group-not-ready",
+                  `Reservation group member ${member.alias} is no longer ready: ${inspected.healthDetail}`,
+                  409,
+                );
+              const resolved = await this.adapters.verifyIdentity(inspected);
+              return [
+                member.alias,
+                {
+                  sessionId: member.sessionId,
+                  id: resolved.id,
+                  name: resolved.name,
+                  platform: resolved.platform,
+                  kind: resolved.kind,
+                  connection: resolved.connection,
+                  startedByGroup: member.startedByGroup,
+                },
+              ] as const;
+            }),
+          );
+          await this.global.run(async () => {
+            const current = this.store.validateGroup(
+              existing.id,
+              args.leaseToken,
+            );
+            if (
+              current.requestHash !== requestHash ||
+              current.members.some(
+                (member) =>
+                  this.store.session(member.sessionId).state !== "active",
+              )
+            )
+              fail(
+                "group-not-active",
+                "The reservation group changed while its ready bindings were being read.",
+                409,
+              );
+          });
+          return {
+            groupId: existing.id,
+            leaseToken: args.leaseToken,
+            createdAt: existing.createdAt,
+            expiresAt: existing.expiresAt,
+            devices: Object.fromEntries(entries),
+          };
+        }
+        const claimed = await this.global.run(async () => {
+          const observed = await this.devices(true);
+          const eligible = observed.filter((device) =>
+            device.online ||
+            (device.kind === "virtual" &&
+              supportsSimulatorLifecycle(device) &&
+              canLaunchSimulator(device) &&
+              device.simulatorState !== "unavailable"),
+          );
+          const selected = matchReservationGroup(
+            eligible,
+            this.store.sessions(),
+            args.requests,
+            (device) => {
+              const source = this.config.config.sources.find(
+                (candidate) => candidate.id === device.captureSourceId,
+              );
+              return source ? sourceIdentity(source) : undefined;
+            },
+          );
+          if (!selected)
+            fail(
+              "group-no-match",
+              "The complete requested device set is not currently available. Physical devices must be online; configured virtual devices may be started automatically.",
+              409,
+              Object.fromEntries(
+                Object.keys(args.requests).map((alias) => {
+                  const requested = args.requests[alias].selector;
+                  const selector = requested.state === "free"
+                    ? { ...requested, state: undefined }
+                    : requested;
+                  const matches = matchDevices(
+                    observed,
+                    this.store.sessions(),
+                    selector,
+                  );
+                  return [
+                    alias,
+                    {
+                      selector: requested,
+                      matchingConfigured: matches.map((device) => {
+                        const session = this.store.sessions().find(
+                          (item) =>
+                            item.deviceId === device.id && item.state !== "closed",
+                        );
+                        const usable =
+                          !session &&
+                          !device.locked &&
+                          (device.online ||
+                            (device.kind === "virtual" &&
+                              supportsSimulatorLifecycle(device) &&
+                              canLaunchSimulator(device) &&
+                              device.simulatorState !== "unavailable"));
+                        return {
+                          id: device.id,
+                          name: device.name,
+                          usable,
+                          online: device.online,
+                          ...(!usable
+                            ? {
+                                reason: session
+                                  ? `reserved by ${session.owner}`
+                                  : device.locked
+                                    ? `locked: ${device.lockReason || "maintenance"}`
+                                    : device.kind === "physical"
+                                      ? "physical device is offline"
+                                      : !supportsSimulatorLifecycle(device) || !canLaunchSimulator(device)
+                                        ? "virtual device cannot be launched from its saved identity"
+                                        : device.simulatorState === "unavailable"
+                                          ? "virtual device runtime is unavailable"
+                                          : device.healthDetail,
+                              }
+                            : {}),
+                        };
+                      }),
+                    },
+                  ];
+                }),
+              ),
+            );
+          const next = structuredClone(this.config.config);
+          let learnedIdentity = false;
+          for (const selectedDevice of Object.values(selected)) {
+            const configured = next.devices.find((device) => device.id === selectedDevice.id);
+            if (
+              configured?.connection.type === "adb" &&
+              selectedDevice.connection.type === "adb" &&
+              !configured.connection.avdName &&
+              selectedDevice.connection.avdName
+            ) {
+              configured.connection.avdName = selectedDevice.connection.avdName;
+              learnedIdentity = true;
+            }
+          }
+          if (learnedIdentity) {
+            await this.config.save(next, this.config.revision, this.validateChange);
+            this.invalidateInventory();
+          }
+          const members = Object.entries(selected).map(([alias, device]) => {
+            const source = this.config.config.sources.find(
+              (candidate) => candidate.id === device.captureSourceId,
+            );
+            return {
+              alias,
+              deviceId: device.id,
+              sourceId: source?.id || null,
+              sourceKey: source ? sourceIdentity(source) : null,
+            };
+          });
+          let acquired;
+          try {
+            acquired = this.store.reserveGroup(
+              args.groupId,
+              members,
+              args.owner,
+              args.reason,
+              requestHash,
+              args.ttlMinutes || this.config.config.settings.ttl,
+              args.leaseToken,
+              this.licensing.status().maxSessions ?? Infinity,
+            );
+          } catch (error) {
+            this.store.event({
+              deviceId: "",
+              owner: args.owner,
+              action: "contention",
+              detail: `Reservation group ${args.groupId}: ${(error as Error).message}`,
+            });
+            throw error;
+          }
+          // Persist ownership of every cold-start before beginning lifecycle
+          // work, so restart recovery knows which virtual devices to restore.
+          for (const member of acquired.group.members) {
+            const device = selected[member.alias];
+            if (!device.online && device.kind === "virtual") {
+              member.startedByGroup = true;
+              this.simulatorActions.set(device.id, "launch");
+            }
+          }
+          this.store.putGroup(acquired.group);
+          return { ...acquired, selected };
+        });
+        const prepared = await Promise.allSettled(
+          Object.entries(claimed.selected).map(async ([alias, observed]) => {
+            const member = claimed.group.members.find((item) => item.alias === alias)!;
+            const launchRequested = member.startedByGroup;
+            return this.queue(observed.id).run(async () => {
+              try {
+                let configured = this.device(observed.id);
+                if (launchRequested) {
+                  configured = await this.adapters.prepareSimulator(configured);
+                  const lifecycle = await this.adapters.simulator(configured, "launch");
+                  if (!lifecycle.changed) {
+                    member.startedByGroup = false;
+                    this.store.setGroupMemberStarted(
+                      claimed.group.id,
+                      alias,
+                      false,
+                    );
+                  }
+                }
+                let current = await this.adapters.inspect(configured);
+                if (!current.online)
+                  fail(
+                    "device-not-ready",
+                    `${current.name} did not become ready: ${current.healthDetail}`,
+                    502,
+                  );
+                const resolved = await this.adapters.verifyIdentity(current);
+                current = { ...current, connection: resolved.connection };
+                return { alias, member, device: current };
+              } finally {
+                if (launchRequested) {
+                  this.simulatorActions.delete(observed.id);
+                  this.invalidateInventory(observed.id);
+                }
+              }
+            });
+          }),
+        );
+        const failed = prepared.find(
+          (result): result is PromiseRejectedResult => result.status === "rejected",
+        );
+        if (failed) {
+          const message = (failed.reason as Error).message;
+          try {
+            await this.closeReservationGroup(
+              claimed.group.id,
+              `Preparation failed: ${message}`,
+            );
+          } catch (cleanupError) {
+            fail(
+              "cleanup-required",
+              `Reservation preparation failed (${message}) and automatic cleanup needs attention: ${(cleanupError as Error).message}`,
+              502,
+            );
+          }
+          throw failed.reason;
+        }
+        const activated = await this.global.run(async () => {
+          const current = this.store.group(claimed.group.id);
+          if (
+            current.state !== "preparing" ||
+            current.expiresAt <= Date.now() ||
+            this.shuttingDown ||
+            current.members.some(
+              (member) => this.store.session(member.sessionId).state !== "active",
+            )
+          )
+            return undefined;
+          current.state = "active";
+          this.store.putGroup(current);
+          return current;
+        });
+        if (!activated) {
+          await this.closeReservationGroup(
+            claimed.group.id,
+            "Reservation group expired or was cancelled during preparation",
+          );
+          fail(
+            "group-preparation-cancelled",
+            "The reservation group expired or was cancelled before every device became ready.",
+            409,
+          );
+        }
+        const devices = Object.fromEntries(
+          prepared.map((result) => {
+            const { alias, device } = (result as PromiseFulfilledResult<any>).value;
+            const member = activated.members.find((item) => item.alias === alias)!;
+            return [
+              alias,
+              {
+                sessionId: member.sessionId,
+                id: device.id,
+                name: device.name,
+                platform: device.platform,
+                kind: device.kind,
+                connection: device.connection,
+                startedByGroup: member.startedByGroup,
+              },
+            ];
+          }),
+        );
+        return {
+          groupId: claimed.group.id,
+          leaseToken: claimed.leaseToken,
+          createdAt: claimed.group.createdAt,
+          expiresAt: claimed.group.expiresAt,
+          devices,
+        };
+      }
+      case "sessions.renewGroup": {
+        const expiresAt = Date.now() +
+          (args.ttlMinutes || this.config.config.settings.ttl) * 60000;
+        const group = await this.global.run(async () =>
+          this.store.renewGroup(
+            args.groupId,
+            args.leaseToken,
+            expiresAt,
+            (session) => this.checkSessionEntitlement(session),
+          ),
+        );
+        return { groupId: group.id, expiresAt: group.expiresAt };
+      }
+      case "sessions.releaseGroup": {
+        this.store.validateGroup(args.groupId, args.leaseToken, true);
+        const group = await this.closeReservationGroup(args.groupId, "Released");
+        return { groupId: group.id, state: group.state, releasedAt: group.endedAt };
+      }
       case "sessions.renew": {
         const s = this.store.validate(args.sessionId, args.leaseToken);
+        if (s.groupId)
+          fail("group-owned", "Renew this session through its reservation group.", 409);
         this.checkSessionEntitlement(s);
         if (
           this.jobs.get(s.id)?.artifact.mode === "annotated" &&
@@ -511,6 +900,8 @@ export class DeckService {
       }
       case "sessions.release": {
         const s = this.store.validate(args.sessionId, args.leaseToken, true);
+        if (s.groupId)
+          fail("group-owned", "Release this session through its reservation group.", 409);
         return this.closeSession(s.id, "Released");
       }
       case "sessions.takeover": {
@@ -518,6 +909,8 @@ export class DeckService {
         const active = this.store
           .sessions()
           .find((s) => s.deviceId === args.deviceId && s.state !== "closed");
+        if (active?.groupId)
+          fail("group-owned", "Release the owning reservation group before taking this device.", 409);
         if (active)
           await this.closeSession(
             active.id,
@@ -738,6 +1131,12 @@ export class DeckService {
                   fail(
                     "device-reserved",
                     "Release this device before maintenance.",
+                    409,
+                  );
+                if (this.deviceHasOpenGroup(id))
+                  fail(
+                    "device-reserved",
+                    "Finish reservation group cleanup before changing maintenance state.",
                     409,
                   );
                 // A maintenance lock is established synchronously before any restart awaits.
@@ -1338,14 +1737,20 @@ export class DeckService {
       void handle.ended.then((error) => {
         if (error && !job.finishing) {
           const current = this.store.session(s.id);
-          if (current.state === "active") {
-            current.state = "closing";
-            current.closeReason = error;
-            this.store.putSession(current);
+          if (current.groupId) {
+            void this.closeReservationGroup(current.groupId, error).catch((e) =>
+              this.diagnostics.push(String(e)),
+            );
+          } else {
+            if (current.state === "active") {
+              current.state = "closing";
+              current.closeReason = error;
+              this.store.putSession(current);
+            }
+            void this.closeSession(s.id, error, true).catch((e) =>
+              this.diagnostics.push(String(e)),
+            );
           }
-          void this.closeSession(s.id, error, true).catch((e) =>
-            this.diagnostics.push(String(e)),
-          );
         }
       });
       this.store.event({
@@ -1418,11 +1823,16 @@ export class DeckService {
       if (a.status === "completed") this.store.clearWorker(a.id);
       this.jobs.delete(sessionId);
       if (a.status !== "completed" && !this.closing.has(sessionId)) {
-        void this.closeSession(
-          sessionId,
-          a.error || "Recorder interrupted",
-          true,
-        ).catch((e) => this.diagnostics.push(String(e)));
+        const session = this.store.session(sessionId);
+        const reason = a.error || "Recorder interrupted";
+        if (session.groupId)
+          void this.closeReservationGroup(session.groupId, reason).catch((e) =>
+            this.diagnostics.push(String(e)),
+          );
+        else
+          void this.closeSession(sessionId, reason, true).catch((e) =>
+            this.diagnostics.push(String(e)),
+          );
       }
       this.store.event({
         deviceId: a.deviceId,
@@ -1436,6 +1846,87 @@ export class DeckService {
       return a;
     })();
     return job.finishing;
+  }
+  private closeReservationGroup(
+    id: string,
+    reason: string,
+  ): Promise<ReservationGroup> {
+    const prior = this.groupClosing.get(id);
+    if (prior) return prior;
+    const lockReason = `Reservation group ${id} cleanup`;
+    const closing = this.global
+      .run(async () => {
+        const group = this.store.group(id);
+        if (group.state === "closed") return group;
+        group.state = "closing";
+        group.closeReason = reason;
+        this.store.putGroup(group);
+        // Keep every member unavailable through the gap between session close
+        // and simulator restoration. A successor can reserve only after all
+        // cold-started virtual devices have been shut down.
+        for (const member of group.members)
+          this.store.lock(member.deviceId, lockReason);
+        return group;
+      })
+      .then(async (group) => {
+        if (group.state === "closed") return group;
+        try {
+          await Promise.all(
+            group.members.map((member) =>
+              this.closeSession(member.sessionId, reason),
+            ),
+          );
+          await Promise.all(
+            this.store
+              .group(group.id)
+              .members
+              .filter((member) => member.startedByGroup)
+              .map((member) => {
+                this.simulatorActions.set(member.deviceId, "close");
+                return this.queue(member.deviceId).run(async () => {
+                  try {
+                    const device = this.device(member.deviceId);
+                    await this.adapters.simulator(device, "close");
+                    this.store.event({
+                      deviceId: member.deviceId,
+                      sessionId: member.sessionId,
+                      owner: group.owner,
+                      action: "simulator-close",
+                      detail: `Restored after reservation group ${group.id}`,
+                    });
+                  } finally {
+                    this.simulatorActions.delete(member.deviceId);
+                    this.invalidateInventory(member.deviceId);
+                  }
+                });
+              }),
+          );
+          const completed = this.store.group(group.id);
+          completed.state = "closed";
+          completed.endedAt = Date.now();
+          completed.closeReason = reason;
+          // Lock removal and the durable closed state commit together. A
+          // crash can therefore leave either a recoverable closing group or a
+          // fully closed/unlocked group, never a closed group with stale locks.
+          this.store.finalizeGroup(completed, lockReason);
+          this.store.event({
+            deviceId: "",
+            owner: group.owner,
+            action: "reservation-group-released",
+            detail: `${group.id}: ${reason}`,
+          });
+          return completed;
+        } catch (error) {
+          const current = this.store.group(group.id);
+          current.state = "closing";
+          current.closeReason = `Cleanup required: ${(error as Error).message}`;
+          this.store.putGroup(current);
+          throw error;
+        }
+      })
+      .finally(() => this.groupClosing.delete(id));
+    this.groupClosing.set(id, closing);
+    return closing;
   }
   closeSession(
     id: string,
@@ -1487,12 +1978,28 @@ export class DeckService {
     return closing;
   }
   async expire() {
-    await Promise.all(
-      this.store
+    const now = Date.now();
+    await Promise.all([
+      ...this.store
+        .groups()
+        .filter(
+          (group) =>
+            group.state !== "closed" &&
+            (group.expiresAt <= now || group.state === "closing"),
+        )
+        .map((group) =>
+          this.closeReservationGroup(group.id, "Reservation group expired"),
+        ),
+      ...this.store
         .sessions()
-        .filter((s) => s.state === "active" && s.expiresAt <= Date.now())
-        .map((s) => this.closeSession(s.id, "Reservation expired")),
-    );
+        .filter(
+          (session) =>
+            !session.groupId &&
+            session.state === "active" &&
+            session.expiresAt <= now,
+        )
+        .map((session) => this.closeSession(session.id, "Reservation expired")),
+    ]);
   }
   private permittedSessionIds() {
     const limit = this.licensing.status().maxSessions;
@@ -1675,11 +2182,26 @@ export class DeckService {
         detail: s.closeReason,
       });
     }
+    for (const group of this.store.groups().filter((group) => group.state !== "closed")) {
+      try {
+        await this.closeReservationGroup(group.id, "Service restarted");
+      } catch (error) {
+        this.diagnostics.push(
+          `Reservation group ${group.id} cleanup requires attention: ${(error as Error).message}`,
+        );
+      }
+    }
   }
   async close() {
     this.licensing.close();
     this.shuttingDown = true;
     clearInterval(this.timer);
+    await Promise.all(
+      this.store
+        .groups()
+        .filter((group) => group.state !== "closed")
+        .map((group) => this.closeReservationGroup(group.id, "Service stopped")),
+    );
     await Promise.all(
       this.store
         .sessions()

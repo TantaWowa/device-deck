@@ -39,6 +39,17 @@ The separate `tui` command opens fixed-screen Devices, Feeds, Captures, Sessions
 ./devdeck release --session "$SESSION_ID" --lease "$LEASE_TOKEN"
 ```
 
+Criteria filters also accept `--kind physical|virtual`, `--form-factor phone|tv|other`, and comma-separated `--tags`. For CI or agent work, reserve the planner's complete device set in one operation:
+
+```sh
+./devdeck reserve /tmp/device-request.json --result-file /tmp/device-reservation.json --json
+# Run normal tests with the concrete connection values in device-reservation.json.
+./devdeck renew /tmp/device-reservation.json --ttl 60
+./devdeck release /tmp/device-reservation.json
+```
+
+The manifest/result schema, atomic preparation behavior, crash-safe credential file, tagging setup and runner requirements are documented in [device groups for CI and agent work](group-reservations.md). Prefer `--result-file` over stdout redirection: it persists and reuses the credential before dispatch, so unconditional cleanup and safe retry still work after an uncertain response. With this option, stdout intentionally omits the token; the owner-only result file is authoritative.
+
 Prefer private scripts or API clients when command arguments would expose a token in terminal history. CLI output contains a token only when acquiring a reservation. Inventory/status do not expose it.
 
 Other operations:
@@ -146,6 +157,31 @@ Successful response:
 
 Timestamps above illustrate the shape. Actual timestamps are Unix milliseconds. `leaseToken` is required for `remote.input`, capture, renewal, release and pairing. It is unrelated to the display owner label. The API token permits local administration; the lease token proves which particular reservation is being used.
 
+Grouped reservation uses `POST /v1/operations/sessions.reserveGroup`. It accepts the version-1 manifest plus a client-generated random `leaseToken` that the client has already persisted privately:
+
+```json
+{
+  "version": 1,
+  "groupId": "repo/run/attempt/job",
+  "owner": "CI",
+  "reason": "Selected regression suites",
+  "ttlMinutes": 240,
+  "leaseToken": "CLIENT_GENERATED_SECRET",
+  "requests": {
+    "ios": {
+      "selector": {
+        "platform": "Apple",
+        "kind": "virtual",
+        "formFactor": "phone",
+        "tags": ["ci"]
+      }
+    }
+  }
+}
+```
+
+The response contains `groupId`, the same `leaseToken`, timestamps, and a `devices` object keyed by request alias. Each member includes its session ID, configured ID/name, platform/kind, `startedByGroup`, and concrete resolved connection. Use `sessions.renewGroup` or `sessions.releaseGroup` with `{groupId,leaseToken}`. Release is authenticated and idempotent; member release/renew/takeover is rejected so group lifecycle cannot become partial.
+
 To control an already reserved device without taking its reservation, authenticated clients can explicitly call `remote.override` with `deviceId`, the current `sessionId`, their display `owner`, `confirmed:true`, and one key, text string or x/y tap. This preserves the reservation's owner, reason, expiry and any active recording. The override is audited, and inputs remain associated with the existing session and recording according to input logging settings. A changed, closing or expired reservation invalidates the override; capture operations still require the reservation's lease token.
 
 `devices.wake` accepts `{deviceId}` for an unreserved device and creates no session. Any reserved device requires a fresh, explicit user choice after warning that waking could interrupt their work, including when the caller holds its lease. Send `{deviceId, sessionId, confirmed:true}` with the expected active reservation. A changed, closing or expired session rejects that confirmation. Maintenance locks are respected, and the request is checked again when it reaches the device's control queue. New reservations and configuration changes wait until the wake attempt finishes. Wake leaves existing reservations and recordings in place, audits the attempt with its API/Web/CLI/Agent origin and current session, and returns `{deviceId, status:"attempted", method, sessionId?}`. `method` describes the command sent; it does not confirm device power state.
@@ -159,6 +195,8 @@ To control an already reserved device without taking its reservation, authentica
 | `config.get`, `config.save`                                              | Configuration and revision; save requires the last read revision                                           |
 | `sessions.reserve`                                                       | One exclusive session and secret credential                                                                |
 | `sessions.renew`, `sessions.release`                                     | Current session state; repeated release is idempotent                                                      |
+| `sessions.reserveGroup`                                                  | Complete criteria-selected set, ready concrete connections, or all-member rollback                         |
+| `sessions.renewGroup`, `sessions.releaseGroup`                           | Shared group expiry; authenticated whole-group cleanup and cold-start restoration                          |
 | `sessions.takeover`                                                      | Finalize existing session, then acquire with a reason and `confirmed:true`                                 |
 | `devices.bulk`                                                           | Per-device lock/unlock/restart success or failure                                                          |
 | `devices.wake`                                                           | Platform wake attempt without reserving; reserved devices require their current `sessionId` and `confirmed:true` |
@@ -190,7 +228,7 @@ File, clean-original and log routes display inline by default. Append `?download
 
 Machine routes require authentication except static UI files, public `/v1/machine` identity, the one-use ticket exchange and the code-plus-signed-token pairing exchange. Portal grants authenticate machine API requests; `/v1/hub/pairing-code`, `/v1/hub/unpair` and browser-ticket creation require a native token over loopback. Every route accessed through the Tailscale origin requires an allowed user identity from Serve. Browser mutation requests also require `X-Device-Deck: local`. Unexpected hosts and origins outside the exact configured allow lists are rejected. Allowed portal origins receive CORS responses for scoped bearer requests. No API token is embedded in the public website or local JS bundle.
 
-Errors use an HTTP status and `{error,message,details?}`. Common codes are `no-match`, `ambiguous-match`, `device-reserved`, `source-reserved`, `device-locked`, `invalid-lease`, `stale-lease`, `config-conflict`, `unsupported-capability`, `capture-failed`, and `cleanup-required`. A failed bulk member appears in that member's result rather than pretending the whole selection succeeded.
+Errors use an HTTP status and `{error,message,details?}`. Common codes are `no-match`, `group-no-match`, `ambiguous-match`, `device-reserved`, `source-reserved`, `device-locked`, `invalid-lease`, `stale-lease`, `config-conflict`, `unsupported-capability`, `capture-failed`, and `cleanup-required`. `group-no-match` details include each request alias, selector, matching configured devices and their availability reason. A failed bulk member appears in that member's result rather than pretending the whole selection succeeded.
 
 ## Live video and touch operations
 
@@ -240,7 +278,7 @@ Launch the packaged stdio server using Node 24. Diagnostics go to stderr and pro
 }
 ```
 
-Omit the environment override to use the default Application Support directory. Start the daemon separately. MCP tool names replace operation dots with underscores, for example `sessions_reserve`, `remote_input` and `recordings_stop`.
+Omit the environment override to use the default Application Support directory. Start the daemon separately. MCP tool names replace operation dots with underscores, for example `sessions_reserve`, `sessions_reserveGroup`, `remote_input` and `recordings_stop`.
 
 1. Call `inventory`, then `sessions_reserve` with one selector, owner and reason.
 2. Retain its session ID and lease token. Send them to `remote_input` or `captures_screenshot`.

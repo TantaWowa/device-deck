@@ -2,6 +2,8 @@
 
 Registered Apple iOS/tvOS simulators and Android AVDs have **Launch sim** and **Close sim** actions directly in the web Devices list. Launch boots the configured virtual device and waits for readiness. Close shuts down only that virtual device.
 
+CI and agent orchestration should use a [reservation group](group-reservations.md) rather than launching first and reserving later. The daemon atomically claims the whole device/source set, then uses an internal credential-owned lifecycle path to start its stopped virtual members. Public `devices.simulator` continues to reject reserved devices, preventing an unrelated caller from changing a session's simulator state.
+
 In `devdeck tui`, select **Devices**, select a simulator, and press **O**. The same action appears in the item's **Enter** menu. The list shows stopped, launching, running, and closing states. Closing requires confirmation.
 
 If you hold a reservation, the confirmation offers to end your session and save its recording before closing. A session owned by another client must be explicitly managed and ended first. The daemon rejects launch or close while any reservation for that simulator remains active or closing, and blocks new reservations while its state is changing.

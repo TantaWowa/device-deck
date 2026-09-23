@@ -4,6 +4,8 @@ Version 0.5.0-beta.1 adds simulator launch/close controls, a Mac application and
 
 A local Mac workspace for connected TV devices and simulators. The daemon owns reservations, remote input, capture processes and files. The web app, CLI, terminal UI and MCP use the same authenticated operations.
 
+CI and coding agents can reserve a criteria-selected device set as one group, cold-start its virtual devices, consume concrete serials/UDIDs with existing test runners, and restore the group on release or expiry. See [device groups for CI and agent work](docs/group-reservations.md).
+
 The public website includes a separate simulated demo. It never connects to the local daemon. The local app has no sample devices and needs no account login.
 
 ## Install the Mac application

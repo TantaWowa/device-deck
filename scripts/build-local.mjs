@@ -42,6 +42,7 @@ await bundle({
     devdeck: "apps/cli/src/index.ts",
     tui: "apps/tui/src/index.ts",
     mcp: "packages/mcp/src/index.ts",
+    client: "packages/core/src/client-public.ts",
   },
   outdir: "build",
   bundle: true,
@@ -67,7 +68,7 @@ await vite({
   },
 });
 await rename("build/web/local.html", "build/web/index.html");
-for (const name of ["daemon", "devdeck", "tui", "mcp"]) {
+for (const name of ["daemon", "devdeck", "tui", "mcp", "client"]) {
   const output = await readFile(`build/${name}.mjs`, "utf8");
   if (/LocalLicenseManager|local-license\.ts|DEVICE_DECK_MOCK_PRO|KEYGEN_ADMIN_TOKEN/.test(output)) throw new Error(`Development or operator code leaked into ${name}.`);
 }
