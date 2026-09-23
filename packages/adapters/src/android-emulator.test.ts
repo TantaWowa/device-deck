@@ -165,7 +165,7 @@ test("externally started emulators wait for display readiness and cache proof on
   await assert.rejects(f.emulator.resolve(device), /still booting/);
 });
 
-test("Android launch addresses an exact AVD, reconciles its new serial, and never controls the emulator occupying its old serial", async () => {
+test("group-owned Android launch is noninteractive, reconciles its new serial, and never controls the emulator occupying its old serial", async () => {
   const f = fixture([
     {
       serial: "emulator-5554",
@@ -196,6 +196,9 @@ test("Android launch addresses an exact AVD, reconciles its new serial, and neve
       args: [
         "-avd",
         "TV_API_35",
+        "-crash-report-mode",
+        "disabled",
+        "-no-metrics",
         "-prop",
         `qemu.devdeck_launch=${ownership?.marker}`,
       ],
@@ -228,6 +231,18 @@ test("Android launch addresses an exact AVD, reconciles its new serial, and neve
     [["-P", "5038", "-s", "emulator-5560", "emu", "kill"]],
   );
   assert.equal(f.state.entries[0].name, "Pixel_35");
+});
+
+test("ordinary Android launches preserve interactive emulator arguments", async () => {
+  const f = fixture();
+  await f.emulator.control(device, "launch");
+  assert.deepEqual(f.launches, [
+    {
+      binary: "/sdk/emulator/emulator",
+      args: ["-avd", "TV_API_35"],
+      port: 5038,
+    },
+  ]);
 });
 
 test("Android launch waits for its newly spawned AVD identity to become readable", async () => {

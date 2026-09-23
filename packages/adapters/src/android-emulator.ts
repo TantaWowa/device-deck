@@ -532,6 +532,9 @@ export class AndroidEmulators {
           c.avdName,
           ...(launchOwnership
             ? [
+                "-crash-report-mode",
+                "disabled",
+                "-no-metrics",
                 "-prop",
                 `${launchProperty}=${launchOwnership.marker}`,
               ]
