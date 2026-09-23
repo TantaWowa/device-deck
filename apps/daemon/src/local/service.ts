@@ -566,7 +566,8 @@ export class DeckService {
                   `Reservation group member ${member.alias} is no longer ready: ${inspected.healthDetail}`,
                   409,
                 );
-              const resolved = await this.adapters.verifyIdentity(inspected);
+              const resolved = member.binding ??
+                await this.adapters.verifyIdentity(inspected);
               return [
                 member.alias,
                 {
@@ -833,6 +834,19 @@ export class DeckService {
             )
           )
             return undefined;
+          for (const result of prepared) {
+            const { alias, device } = (
+              result as PromiseFulfilledResult<any>
+            ).value;
+            const member = current.members.find((item) => item.alias === alias)!;
+            member.binding = {
+              id: device.id,
+              name: device.name,
+              platform: device.platform,
+              kind: device.kind,
+              connection: device.connection,
+            };
+          }
           current.state = "active";
           this.store.putGroup(current);
           return current;
