@@ -4,6 +4,7 @@ import {
   configSchema,
   deviceSchema,
   type DeviceConfig,
+  type SimulatorLaunchOwnership,
 } from "../../core/src/local/types";
 import { AndroidEmulators } from "./android-emulator";
 import { Adapters } from "./index";
@@ -31,6 +32,7 @@ type Entry = {
   displayReady?: boolean;
   bootAnimation?: boolean;
   bootId?: string;
+  launchMarker?: string;
 };
 function fixture(initial: Entry[] = []) {
   const state = {
@@ -40,9 +42,14 @@ function fixture(initial: Entry[] = []) {
     autoBoot: true,
     deferLaunchIdentity: false,
     sleeps: 0,
+    processes: [] as { pid: number; command: string }[],
+    onSignal: undefined as
+      | ((pid: number, signal: NodeJS.Signals) => void)
+      | undefined,
   };
   const calls: { command: string; args: string[] }[] = [],
-    launches: { binary: string; args: string[]; port: number }[] = [];
+    launches: { binary: string; args: string[]; port: number }[] = [],
+    signals: { pid: number; signal: NodeJS.Signals }[] = [];
   const config = configSchema.parse({
     schemaVersion: 1,
     settings: { folder: "/tmp/captures" },
@@ -54,7 +61,11 @@ function fixture(initial: Entry[] = []) {
   const execute: typeof run = async (command, args) => {
     calls.push({ command, args });
     let output: string;
-    if (args[0] === "-list-avds") output = state.names.join("\n") + "\n";
+    if (command === "/bin/ps")
+      output = state.processes
+        .map((process) => `${process.pid} ${process.command}`)
+        .join("\n");
+    else if (args[0] === "-list-avds") output = state.names.join("\n") + "\n";
     else if (args[2] === "devices")
       output =
         "List of devices attached\nphysical-usb\tdevice\n" +
@@ -75,6 +86,10 @@ function fixture(initial: Entry[] = []) {
         args.slice(4).join(" ") === "shell getprop ro.boot.qemu.avd_name"
       ) {
         output = entry.bootName || "";
+      } else if (
+        args.slice(4).join(" ") === "shell getprop qemu.devdeck_launch"
+      ) {
+        output = entry.launchMarker || "";
       } else if (args.slice(4).join(" ") === "shell getprop sys.boot_completed")
         output = entry.booted ? "1\n" : "\n";
       else if (args.slice(4).join(" ") === "shell getprop init.svc.bootanim")
@@ -98,12 +113,19 @@ function fixture(initial: Entry[] = []) {
     async (binary) => binary.startsWith("/sdk/"),
     (binary, args, port) => {
       launches.push({ binary, args, port });
+      state.processes.push({
+        pid: 4123,
+        command: `/sdk/emulator/qemu-system -avd ${args[1]} ${args.slice(2).join(" ")}`,
+      });
       if (!state.launchError)
         state.entries.push({
           serial: "emulator-5560",
           state: "device",
           name: state.deferLaunchIdentity ? undefined : args[1],
           booted: state.autoBoot,
+          launchMarker: args
+            .find((argument) => argument.startsWith("qemu.devdeck_launch="))
+            ?.split("=")[1],
         });
       return () => state.launchError;
     },
@@ -112,8 +134,17 @@ function fixture(initial: Entry[] = []) {
       if (state.deferLaunchIdentity && state.sleeps === 1)
         state.entries.at(-1)!.name = "TV_API_35";
     },
+    (pid, signal) => {
+      signals.push({ pid, signal });
+      if (state.onSignal) state.onSignal(pid, signal);
+      else
+        state.processes = state.processes.filter(
+          (process) => process.pid !== pid,
+        );
+      return true;
+    },
   );
-  return { emulator, state, calls, launches, config, execute };
+  return { emulator, state, calls, launches, signals, config, execute };
 }
 
 test("externally started emulators wait for display readiness and cache proof only for the same boot UUID", async () => {
@@ -144,12 +175,14 @@ test("Android launch addresses an exact AVD, reconciles its new serial, and neve
     },
   ]);
   assert.equal((await f.emulator.inspect(device)).state, "shutdown");
-  let ownershipRecorded = false;
-  const launched = await f.emulator.control(device, "launch", async () => {
+  let ownership: SimulatorLaunchOwnership | undefined;
+  const launched = await f.emulator.control(device, "launch", async (owned) => {
     assert.equal(f.launches.length, 0);
-    ownershipRecorded = true;
+    ownership = owned;
   });
-  assert.equal(ownershipRecorded, true);
+  assert.equal(ownership?.type, "android-emulator");
+  assert.equal(ownership?.avdName, "TV_API_35");
+  assert.match(ownership?.marker || "", /^[a-f0-9]{32}$/);
   assert.deepEqual(launched, {
     deviceId: device.id,
     action: "launch",
@@ -160,7 +193,12 @@ test("Android launch addresses an exact AVD, reconciles its new serial, and neve
   assert.deepEqual(f.launches, [
     {
       binary: "/sdk/emulator/emulator",
-      args: ["-avd", "TV_API_35"],
+      args: [
+        "-avd",
+        "TV_API_35",
+        "-prop",
+        `qemu.devdeck_launch=${ownership?.marker}`,
+      ],
       port: 5038,
     },
   ]);
@@ -200,6 +238,199 @@ test("Android launch waits for its newly spawned AVD identity to become readable
   assert.equal(launched.serial, "emulator-5560");
   assert.equal(f.state.sleeps, 1);
   assert.equal(f.launches.length, 1);
+});
+
+test("group-owned Android launch cleanup uses its durable marker when ADB identity is unavailable", async () => {
+  const f = fixture();
+  let ownership: SimulatorLaunchOwnership | undefined;
+  await f.emulator.control(device, "launch", async (owned) => {
+    ownership = owned;
+  });
+  assert(ownership);
+  f.state.entries = [
+    { serial: "emulator-5554", state: "offline" },
+  ];
+  f.state.processes.push({
+    pid: 4999,
+    command: "/sdk/emulator/qemu-system -avd TV_API_35",
+  });
+
+  const closed = await f.emulator.control(
+    device,
+    "close",
+    undefined,
+    ownership,
+  );
+  assert.deepEqual(closed, {
+    deviceId: device.id,
+    action: "close",
+    state: "shutdown",
+    changed: true,
+  });
+  assert.deepEqual(f.signals, [{ pid: 4123, signal: "SIGTERM" }]);
+  assert.deepEqual(
+    f.state.processes.map((process) => process.pid),
+    [4999],
+    "an unmarked emulator using the same AVD name is never stopped",
+  );
+  assert(
+    !f.calls.some((call) => call.args.includes("kill")),
+    "offline ADB is not used for owned fallback cleanup",
+  );
+});
+
+test("group-owned Android cleanup verifies the live ADB transport marker before graceful close", async () => {
+  const f = fixture();
+  let ownership: SimulatorLaunchOwnership | undefined;
+  await f.emulator.control(device, "launch", async (owned) => {
+    ownership = owned;
+  });
+  assert(ownership);
+  const closed = await f.emulator.control(
+    device,
+    "close",
+    undefined,
+    ownership,
+  );
+  assert.equal(closed.changed, true);
+  assert.deepEqual(
+    f.calls
+      .filter((call) => call.args.includes("qemu.devdeck_launch"))
+      .map((call) => call.args),
+    [[
+      "-P",
+      "5038",
+      "-s",
+      "emulator-5560",
+      "shell",
+      "getprop",
+      "qemu.devdeck_launch",
+    ]],
+  );
+  assert.deepEqual(
+    f.calls.filter((call) => call.args.includes("kill")).map((call) => call.args),
+    [["-P", "5038", "-s", "emulator-5560", "emu", "kill"]],
+  );
+  assert.deepEqual(f.signals, []);
+});
+
+test("group-owned cleanup never closes an online same-AVD replacement without its marker", async () => {
+  const f = fixture([
+    {
+      serial: "emulator-5554",
+      state: "device",
+      name: "TV_API_35",
+      booted: true,
+    },
+  ]);
+  f.state.processes = [{
+    pid: 4999,
+    command: "/sdk/emulator/qemu-system -avd TV_API_35",
+  }];
+  const ownership: SimulatorLaunchOwnership = {
+    type: "android-emulator",
+    avdName: "TV_API_35",
+    marker: "c".repeat(32),
+  };
+  await assert.rejects(
+    f.emulator.control(device, "close", undefined, ownership),
+    (error) =>
+      (error as { code?: string }).code === "emulator-ownership-missing",
+  );
+  assert.deepEqual(f.signals, []);
+  assert(
+    !f.calls.some((call) => call.args.includes("kill")),
+    "a replacement AVD is never addressed by graceful close",
+  );
+  assert.deepEqual(f.state.processes.map((process) => process.pid), [4999]);
+});
+
+test("group-owned cleanup refuses an unidentified emulator without the exact launch marker", async () => {
+  const f = fixture([
+    { serial: "emulator-5554", state: "offline" },
+  ]);
+  f.state.processes = [{
+    pid: 4999,
+    command: "/sdk/emulator/qemu-system -avd TV_API_35",
+  }];
+  const ownership: SimulatorLaunchOwnership = {
+    type: "android-emulator",
+    avdName: "TV_API_35",
+    marker: "a".repeat(32),
+  };
+  await assert.rejects(
+    f.emulator.control(device, "close", undefined, ownership),
+    (error) =>
+      (error as { code?: string }).code === "emulator-ownership-missing",
+  );
+  assert.deepEqual(f.signals, []);
+  assert.deepEqual(f.state.processes.map((process) => process.pid), [4999]);
+});
+
+test("group-owned cleanup refuses duplicate processes carrying the same launch marker", async () => {
+  const f = fixture([
+    { serial: "emulator-5554", state: "offline" },
+  ]);
+  const ownership: SimulatorLaunchOwnership = {
+    type: "android-emulator",
+    avdName: "TV_API_35",
+    marker: "b".repeat(32),
+  };
+  const command = `/sdk/emulator/qemu-system -avd TV_API_35 -prop qemu.devdeck_launch=${ownership.marker}`;
+  f.state.processes = [
+    { pid: 4998, command },
+    { pid: 4999, command },
+  ];
+  await assert.rejects(
+    f.emulator.control(device, "close", undefined, ownership),
+    (error) =>
+      (error as { code?: string }).code === "ambiguous-owned-emulator",
+  );
+  assert.deepEqual(f.signals, []);
+});
+
+test("group-owned cleanup revalidates the marked PID before forced termination", async () => {
+  const f = fixture([
+    { serial: "emulator-5554", state: "offline" },
+  ]);
+  const ownership: SimulatorLaunchOwnership = {
+    type: "android-emulator",
+    avdName: "TV_API_35",
+    marker: "f".repeat(32),
+  };
+  const ownedCommand = `/sdk/emulator/qemu-system -avd TV_API_35 -prop qemu.devdeck_launch=${ownership.marker}`;
+  f.state.processes = [{ pid: 4123, command: ownedCommand }];
+  f.state.onSignal = (pid, signal) => {
+    if (signal === "SIGTERM") {
+      assert.equal(pid, 4123);
+      f.state.processes = [
+        {
+          pid: 4123,
+          command: "/usr/bin/unrelated-process --important",
+        },
+        { pid: 4999, command: ownedCommand },
+      ];
+    } else {
+      f.state.processes = f.state.processes.filter(
+        (process) => process.pid !== pid,
+      );
+    }
+  };
+
+  const closed = await f.emulator.control(
+    device,
+    "close",
+    undefined,
+    ownership,
+  );
+  assert.equal(closed.changed, true);
+  assert.deepEqual(f.signals, [
+    { pid: 4123, signal: "SIGTERM" },
+    { pid: 4999, signal: "SIGKILL" },
+  ]);
+  assert.deepEqual(f.state.processes, [
+    { pid: 4123, command: "/usr/bin/unrelated-process --important" },
+  ]);
 });
 
 test("legacy emulator serials can learn their exact AVD and close, but cannot launch an unknown AVD", async () => {
