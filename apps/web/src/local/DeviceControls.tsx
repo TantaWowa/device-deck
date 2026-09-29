@@ -27,6 +27,7 @@ export function DeviceControls({
   setOptionsOpen,
   onCapture,
   remoteAvailable = true,
+  suspended = false,
 }: {
   device: Device;
   data: Snapshot;
@@ -39,6 +40,7 @@ export function DeviceControls({
   setOptionsOpen: (open: boolean) => void;
   onCapture?: (artifact: Artifact) => void;
   remoteAvailable?: boolean;
+  suspended?: boolean;
 }) {
   const [busy, setBusy] = useState(false),
     [waking, setWaking] = useState(false),
@@ -91,6 +93,7 @@ export function DeviceControls({
     busy,
     confirm,
     optionsOpen,
+    suspended,
     onLease,
     refresh,
     setOptionsOpen,
@@ -109,6 +112,7 @@ export function DeviceControls({
     busy,
     confirm,
     optionsOpen,
+    suspended,
     onLease,
     refresh,
     setOptionsOpen,
@@ -127,6 +131,9 @@ export function DeviceControls({
       input.current.lease = null;
     };
   }, [device.id]);
+  useLayoutEffect(() => {
+    if (suspended) input.current.generation++;
+  }, [suspended]);
   useLayoutEffect(() => {
     if (needsControlChoice) setOptionsOpen(true);
   }, [session?.id, needsControlChoice]);
@@ -150,7 +157,7 @@ export function DeviceControls({
   };
   const run = async <T,>(fn: () => Promise<T>, rethrow = false): Promise<T | false> => {
     // Management actions supersede queued keys and wait for dispatched input.
-    input.current.generation++;
+    const generation = ++input.current.generation;
     input.current.lease = null;
     latest.current.busy = true;
     setBusy(true);
@@ -164,7 +171,7 @@ export function DeviceControls({
       return result;
     } catch (e) {
       setError((e as Error).message);
-      setOptionsOpen(true);
+      if (input.current.mounted && input.current.generation === generation) setOptionsOpen(true);
       await refresh();
       if (rethrow) throw e;
       return false;
@@ -220,7 +227,10 @@ export function DeviceControls({
       if (!result) throw new Error("Could not capture the screenshot.");
       return result;
     }).then(() => setNotice("Screenshot copied to this computer’s clipboard and saved in Captures."))
-      .catch((error: Error) => { setError(error.message); setOptionsOpen(true); });
+      .catch((error: Error) => {
+        setError(error.message);
+        if (input.current.mounted && !latest.current.suspended) setOptionsOpen(true);
+      });
   };
   const send = (payload: { key?: string; text?: string; wake?: true }) => {
     const queue = input.current;
@@ -240,7 +250,7 @@ export function DeviceControls({
     const task = queue.tail.then(async () => {
       if (!current()) return false;
       const state = latest.current;
-      if (state.busy || state.confirm || state.optionsOpen) return false;
+      if (state.busy || state.confirm || state.optionsOpen || state.suspended) return false;
       try {
         if (payload.wake) {
           if (state.device.locked)
@@ -319,7 +329,7 @@ export function DeviceControls({
         // Reservation may have awaited the network while inventory or the
         // window changed. Check the latest state before dispatching this key.
         const beforeSend = latest.current;
-        if (beforeSend.busy || beforeSend.confirm || beforeSend.optionsOpen)
+        if (beforeSend.busy || beforeSend.confirm || beforeSend.optionsOpen || beforeSend.suspended)
           return false;
         if (!beforeSend.device.online || beforeSend.device.locked)
           throw new Error(
@@ -718,10 +728,11 @@ export function DeviceControls({
       {remoteAvailable && <RemoteControl
         key={device.id}
         device={device}
-        enabled={enabled && !confirm && !optionsOpen}
+        enabled={enabled && !confirm && !optionsOpen && !suspended}
+        compact
         busy={busy || waking}
         wakeEnabled={
-          controlAllowed && supportsWake(device) && !confirm && !optionsOpen
+          controlAllowed && supportsWake(device) && !confirm && !optionsOpen && !suspended
         }
         wake={wake}
         sendKey={(key) => send({ key })}

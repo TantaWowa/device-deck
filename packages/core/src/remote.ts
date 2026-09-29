@@ -121,20 +121,60 @@ export const remoteProfiles = [
   "Fire TV",
   "Android TV",
   "Apple TV",
-  "Samsung",
-  "LG",
+  "Device",
 ] as const;
 export type RemoteProfile = (typeof remoteProfiles)[number];
 export function remoteProfile(d: DeviceConfig): RemoteProfile {
-  const name = `${d.name} ${d.model}`;
-  if (/fire|amazon/i.test(name)) return "Fire TV";
-  if (/samsung/i.test(name)) return "Samsung";
-  if (/\blg\b|webos/i.test(name)) return "LG";
-  return d.platform === "Roku"
-    ? "Roku"
-    : d.platform === "Apple"
-      ? "Apple TV"
-      : "Android TV";
+  // Device names are editable labels. They must not turn a Roku connected to a
+  // Samsung display into a Samsung remote, or change a key's meaning.
+  switch (d.connection.type) {
+    case "roku": return "Roku";
+    case "apple-tv": return "Apple TV";
+    case "simulator": return d.connection.os === "tvos" ? "Apple TV" : "Device";
+    case "apple-device": return deviceInputMode(d) === "remote" ? "Apple TV" : "Device";
+    case "adb":
+      return /\b(?:AFT[A-Z0-9]+|fire[ -]?tv|amazon)\b/i.test(d.model.replaceAll("_", " "))
+        ? "Fire TV" : "Android TV";
+    default: return "Device";
+  }
+}
+export type RemoteButton = { key: string; label: string };
+/** Visible keys are selected by transport; aliases do not become duplicate
+ * buttons. This also keeps simulator remotes honest about their smaller set. */
+export function remoteLayout(d: DeviceConfig): {
+  profile: RemoteProfile;
+  navigation: RemoteButton[];
+  top: RemoteButton[];
+  media: RemoteButton[];
+  tools: RemoteButton[];
+} {
+  const profile = remoteProfile(d);
+  const supported = (buttons: RemoteButton[]) =>
+    deviceInputMode(d) === "remote" ? buttons.filter(({ key }) => supportsRemoteKey(d, key)) : [];
+  const apple = d.connection.type === "apple-tv";
+  return {
+    profile,
+    navigation: supported([
+      { key: "Up", label: "Up" }, { key: "Left", label: "Left" },
+      { key: "OK", label: "OK" }, { key: "Right", label: "Right" },
+      { key: "Down", label: "Down" },
+    ]),
+    top: supported([
+      { key: "Back", label: "Back" }, { key: "Home", label: "Home" },
+      ...(d.connection.type === "adb" ? [{ key: "Special", label: "Menu" }] : []),
+    ]),
+    media: supported([
+      { key: "Rewind", label: apple ? "Skip back" : "Rewind" },
+      { key: "Play", label: "Play / pause" },
+      { key: "FastForward", label: apple ? "Skip forward" : "Fast forward" },
+    ]),
+    tools: supported([
+      ...(!apple ? [{ key: "Replay", label: "Replay" }] : []),
+      ...(d.connection.type === "roku" ? [{ key: "Special", label: "Options" }] : []),
+      { key: "VolumeDown", label: "Volume down" },
+      { key: "VolumeUp", label: "Volume up" },
+    ]),
+  };
 }
 export function supportsRemoteKey(d: DeviceConfig, key: string) {
   switch (d.connection.type) {

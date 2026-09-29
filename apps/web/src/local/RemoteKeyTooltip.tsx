@@ -19,7 +19,7 @@ export const remoteShortcuts: Record<string, string> = {
 export type RemoteTooltip = {
   element: HTMLButtonElement;
   label: string;
-  shortcut: string;
+  shortcut?: string;
   unavailable: boolean;
 };
 
@@ -96,7 +96,7 @@ export function RemoteKeyTooltip({
       }}
     >
       <span>{tooltip.label}</span>
-      <kbd>{tooltip.shortcut}</kbd>
+      {tooltip.shortcut && <kbd>{tooltip.shortcut}</kbd>}
       {tooltip.unavailable && <small>Unavailable with this connection</small>}
     </div>,
     host,

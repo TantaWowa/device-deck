@@ -93,19 +93,6 @@
   display: grid;
   gap: 12px;
 }
-.remote-style-picker {
-  display: flex !important;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  font-size: 12px;
-  margin: 0 !important;
-}
-.remote-style-picker select {
-  width: auto !important;
-  font-size: 12px;
-  padding: 6px 10px !important;
-}
 .remote-handset {
   --remote-accent: #8c54dd;
   width: 234px;
@@ -120,6 +107,8 @@
     inset -2px -2px 3px #0008,
     0 8px 18px #14291b20;
   color: white;
+  display: flex;
+  flex-direction: column;
 }
 .remote-brand {
   display: flex;
@@ -189,12 +178,13 @@
 }
 .remote-top {
   display: flex;
-  justify-content: space-between;
-  padding: 0 8px;
+  justify-content: center;
+  gap: 8px;
 }
 .remote-top button {
-  width: 55px;
-  border-radius: 50%;
+  flex: 1;
+  min-width: 0;
+  border-radius: 12px;
 }
 .remote-ring {
   margin: 18px auto;
@@ -246,18 +236,39 @@
 }
 .remote-media {
   display: grid;
-  grid-template-columns: repeat(6, 1fr);
-  gap: 10px 7px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
 }
 .remote-media button {
-  grid-column: span 2;
   min-height: 49px;
 }
-.remote-media button:nth-child(4) {
-  grid-column: 2/4;
+.remote-media button:only-child {
+  grid-column: 2;
 }
-.remote-media button:nth-child(5) {
-  grid-column: 4/6;
+.remote-tools {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
+  margin-top: 9px;
+}
+.remote-tools button {
+  min-width: 0;
+}
+.remote-tools button:only-child {
+  grid-column: 2;
+}
+.remote-roku .remote-ring {
+  border-radius: 18px;
+  background: transparent;
+  box-shadow: none;
+}
+.remote-roku .remote-ring button {
+  border-radius: 10px;
+  background: #8050c2;
+}
+.remote-roku .remote-ring .remote-ok {
+  background: #6b3ba9;
+  border-color: #bb93f0;
 }
 .play-pause {
   display: flex;
@@ -274,6 +285,20 @@
 .remote-fire-tv .remote-ring {
   border: 2px solid #92979d;
 }
+.remote-fire-tv .remote-ring,
+.remote-android-tv .remote-ring,
+.remote-apple-tv .remote-ring {
+  order: 1;
+  margin-top: 0;
+}
+.remote-fire-tv .remote-top,
+.remote-android-tv .remote-top,
+.remote-apple-tv .remote-top {
+  order: 2;
+  margin-bottom: 10px;
+}
+.remote-media { order: 3; }
+.remote-tools { order: 4; }
 .remote-android-tv {
   --remote-accent: #3b8069;
 }
@@ -293,21 +318,6 @@
 .remote-apple-tv .remote-ring .remote-ok {
   color: #fff;
 }
-.remote-samsung {
-  --remote-accent: #4b84b8;
-  border-radius: 22px;
-}
-.remote-lg {
-  --remote-accent: #b22f59;
-  border-radius: 75px 75px 38px 38px;
-}
-.remote-style-note {
-  font-size: 9px;
-  color: #c4c9cf;
-  text-align: center;
-  line-height: 1.5;
-  margin: 14px 0 0;
-}
 .remote-text {
   display: flex;
   gap: 7px;
@@ -318,6 +328,32 @@
 }
 .remote-text button {
   flex-shrink: 0;
+}
+.remote-text button > span {
+  display: none;
+}
+.remote-text-panel {
+  display: grid;
+  gap: 8px;
+}
+.remote-text-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  width: 100%;
+}
+.remote-text-toggle[aria-expanded="true"] > svg:last-child {
+  transform: rotate(180deg);
+}
+.remote-unavailable {
+  margin: 0;
+  padding: 9px;
+  border-radius: 7px;
+  background: #edf2f8;
+  color: #42556e;
+  font-size: 12px;
+  line-height: 1.5;
 }
 .keyboard-toggle {
   width: 100%;

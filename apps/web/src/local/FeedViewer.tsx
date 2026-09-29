@@ -7,13 +7,14 @@ import { deviceFormFactor } from "../../../../packages/core/src/device-form-fact
 import { DeviceTypeFilter } from "./DeviceTypeFilter";
 import "./feed-workspace.css";
 
-export function FeedViewer({ sources, devices, renderActions, renderPreview, launchSimulator, request }: {
+export function FeedViewer({ sources, devices, renderActions, renderPreview, launchSimulator, request, controllingDeviceId }: {
   sources: Source[];
   devices: Device[];
   renderActions: (source: Source) => React.ReactNode;
   renderPreview?: (source: Source) => React.ReactNode;
   launchSimulator: (device: Device) => Promise<Snapshot>;
   request?: { deviceIds: string[] } | null;
+  controllingDeviceId?: string;
 }) {
   const query = new URLSearchParams(location.search);
   const cards = sources.filter((source) => source.kind === "usb" || Boolean(source.deviceId));
@@ -181,7 +182,8 @@ export function FeedViewer({ sources, devices, renderActions, renderPreview, lau
         const device = deviceFor(source);
         const booting = launching === device?.id || Boolean(device && deviceIsBooting(device));
         const stopping = device?.simulatorState === "stopping";
-        return <section key={source.id} data-feed-source={source.id} className={`feed-tile ${current?.id === source.id ? "active" : ""}`}>
+        return <section key={source.id} data-feed-source={source.id} data-controlling={Boolean(device && device.id === controllingDeviceId)} className={`feed-tile ${current?.id === source.id ? "active" : ""}`}>
+          {device && device.id === controllingDeviceId && <span className="feed-control-target">Remote target</span>}
           <button className="feed-title" onClick={() => { setActive(source.id); setLayout("single"); }} title="Open this feed"><strong>{source.name}</strong><span className={booting ? "feed-booting-label" : ""}>{booting ? `${device?.name || source.name} · Booting…` : device?.name || (source.kind === "usb" ? "USB capture" : "Device screen")}</span></button>
           {source.status === "unknown" ? <div className="feed-offline" role="status"><LoaderCircle className="simulator-spinner" size={24} /><span>Checking capture input…</span></div> : booting || stopping || source.status === "missing" ? <div className={`feed-offline${booting ? " feed-booting" : ""}`} role="status">{booting && <LoaderCircle className="simulator-spinner" size={24} />}<span>{booting ? `${device?.name || source.name} is booting. Waiting for its screen…` : stopping ? `${device?.name} is stopping…` : device && supportsSimulatorLifecycle(device) && !device.online ? `${device.name} is stopped.` : "Input unavailable. Connect the device to resume."}</span>{device && canLaunchSimulator(device) && !device.online && !booting && !stopping && <button type="button" className="primary" disabled={Boolean(launching) || device.locked || device.simulatorState === "unavailable"} onClick={() => void launch(device)}><Play size={15} />Launch & show feed</button>}</div> : renderPreview ? renderPreview(source) : <CapturePreview name={source.name} endpoint={source.kind === "usb" ? `/v1/source-preview/${encodeURIComponent(source.id)}` : `/v1/preview/${encodeURIComponent(source.deviceId!)}`} />}
           {renderActions(source)}

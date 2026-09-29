@@ -1,125 +1,21 @@
 .remote-component button,
-.remote-component input,
-.remote-component select {
+.remote-component input {
   touch-action: manipulation;
 }
-.remote-component.remote-compact:not(.remote-compact-options-open) .remote-style-picker,
-.remote-component.remote-compact:not(.remote-compact-options-open) .keyboard-toggle,
-.remote-component.remote-compact:not(.remote-compact-options-open) .remote-key-help {
-  display: none !important;
+.remote-component.remote-compact .remote-key-help {
+  display: none;
 }
-.remote-compact-options-toggle {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  min-height: 44px;
-  border: 1px solid #d9e2d0;
-  border-radius: 8px;
-  background: #f2f5eb;
-  color: #678151;
-  font-size: 11px;
-}
-@media (max-width: 640px) {
-  .floating-remote.anchored-remote[data-mobile-sheet="true"] {
-    position: fixed !important;
-    inset: auto 0 0 !important;
-    width: 100% !important;
-    min-width: 0 !important;
-    max-width: none !important;
-    height: auto !important;
-    min-height: 0 !important;
-    max-height: 86dvh !important;
-    border-radius: 20px 20px 0 0 !important;
-    resize: none !important;
-    padding-bottom: env(safe-area-inset-bottom);
+@media (pointer: coarse) {
+  .remote-component .remote-top button,
+  .remote-component .remote-media button,
+  .remote-component .remote-tools button,
+  .remote-component .keyboard-toggle,
+  .remote-component .remote-text-toggle,
+  .remote-component .remote-text button {
+    min-height: 44px;
   }
-  .floating-remote[data-mobile-sheet="true"] .floating-remote-bar {
-    min-height: 54px;
-    cursor: default;
-    padding-inline: 12px;
-  }
-  .floating-remote[data-mobile-sheet="true"] .floating-remote-bar > svg:first-child { display: none; }
-  .floating-remote[data-mobile-sheet="true"] .floating-remote-bar button {
-    min-width: 48px;
-    min-height: 48px;
-  }
-  .floating-remote[data-mobile-sheet="true"] .floating-remote-body {
-    max-height: calc(86dvh - 60px - env(safe-area-inset-bottom));
-    overflow-y: auto;
-    overscroll-behavior: contain;
-    padding: 12px 16px;
-  }
-  .floating-remote[data-mobile-sheet="true"] .remote-handset {
-    width: min(100%, 370px) !important;
-    display: grid;
-    grid-template-columns: 168px minmax(0, 1fr);
-    gap: 8px;
-    padding: 10px !important;
-  }
-  .floating-remote[data-mobile-sheet="true"] .remote-ring {
-    grid-column: 1;
-    grid-row: 1 / 3;
-    width: 168px !important;
-    height: 168px !important;
-    grid-template-rows: repeat(3, 48px) !important;
-    grid-template-columns: repeat(3, 48px) !important;
-    padding: 10px !important;
-    margin: auto !important;
-  }
-  .floating-remote[data-mobile-sheet="true"] .remote-top {
-    display: grid !important;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    padding: 0 !important;
-    gap: 3px !important;
-  }
-  .floating-remote[data-mobile-sheet="true"] .remote-media {
-    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
-    gap: 5px !important;
-  }
-  .floating-remote[data-mobile-sheet="true"] .remote-media button {
-    grid-column: auto !important;
-  }
-  .floating-remote[data-mobile-sheet="true"] .remote-top button,
-  .floating-remote[data-mobile-sheet="true"] .remote-media button {
-    min-height: 48px !important;
-    min-width: 48px !important;
-    width: 100% !important;
-    padding: 6px !important;
-  }
-  .floating-remote[data-mobile-sheet="true"] input,
-  .floating-remote[data-mobile-sheet="true"] select {
-    min-height: 48px;
-    font-size: 16px !important;
-  }
-  .floating-remote[data-mobile-sheet="true"] .remote-text button {
-    width: 48px;
-    min-height: 48px;
-  }
-  .floating-remote[data-mobile-sheet="true"] .keyboard-toggle {
-    min-height: 48px;
-    white-space: normal;
-  }
-  .floating-remote[data-mobile-sheet="true"] .control-session button,
-  .floating-remote[data-mobile-sheet="true"] .control-capture button {
-    min-height: 48px;
-  }
-}
-@media (max-width: 389px) {
-  .floating-remote[data-mobile-sheet="true"] .remote-top,
-  .floating-remote[data-mobile-sheet="true"] .remote-media {
-    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
-  }
-}
-@media (max-width: 350px) {
-  .floating-remote[data-mobile-sheet="true"] .remote-handset { grid-template-columns: 1fr; }
-  .floating-remote[data-mobile-sheet="true"] .remote-top { grid-area: 1 / 1; }
-  .floating-remote[data-mobile-sheet="true"] .remote-ring {
-    grid-area: 2 / 1;
-  }
-  .floating-remote[data-mobile-sheet="true"] .remote-media { grid-area: 3 / 1; }
-  .floating-remote[data-mobile-sheet="true"] .remote-top,
-  .floating-remote[data-mobile-sheet="true"] .remote-media {
-    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  .remote-component .remote-text input {
+    min-height: 44px;
+    font-size: 16px;
   }
 }

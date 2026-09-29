@@ -17,14 +17,15 @@ import {
   Menu,
   Delete,
   Sun,
+  Volume1,
+  Volume2,
 } from "lucide-react";
 import type { Device } from "../../../../packages/core/src/local/types";
 import {
-  remoteProfile,
-  remoteProfiles,
+  remoteLayout,
   supportsRemoteKey,
+  supportsWake,
   wakeDescription,
-  type RemoteProfile,
 } from "../../../../packages/core/src/remote";
 import { useRemoteKeyboard } from "./use-remote-keyboard";
 import {
@@ -34,6 +35,23 @@ import {
 } from "./RemoteKeyTooltip";
 import "./remote-feedback.css";
 import "./mobile-remote.css";
+
+const keyIcons: Record<string, React.ReactNode> = {
+  Up: <ChevronUp />,
+  Down: <ChevronDown />,
+  Left: <ChevronLeft />,
+  Right: <ChevronRight />,
+  OK: <strong>OK</strong>,
+  Back: <CornerUpLeft size={20} />,
+  Home: <Home size={20} />,
+  Rewind: <Rewind size={19} />,
+  FastForward: <FastForward size={19} />,
+  Play: <span className="play-pause"><Play size={16} /><Pause size={14} /></span>,
+  Replay: <RotateCcw size={19} />,
+  Backspace: <Delete size={19} />,
+  VolumeDown: <Volume1 size={19} />,
+  VolumeUp: <Volume2 size={19} />,
+};
 
 export function RemoteControl({
   device,
@@ -58,28 +76,31 @@ export function RemoteControl({
 }) {
   const deviceKey = preferenceScope ? `${preferenceScope}:${device.id}` : device.id;
   const [text, setText] = useState("");
-  const [optionsOpen, setOptionsOpen] = useState(false);
+  const [textOpen, setTextOpen] = useState(false);
+  const [textSending, setTextSending] = useState(false);
   const element = useRef<HTMLElement>(null);
+  const textInput = useRef<HTMLInputElement>(null);
   const tooltipId = useId();
+  const textPanelId = useId();
   const [tooltip, setTooltip] = useState<RemoteTooltip | null>(null);
-  const [profile, setProfile] = useState<RemoteProfile>(() => {
-    try {
-      const saved = localStorage.getItem(`deck-remote-style-${deviceKey}`);
-      return remoteProfiles.find((p) => p === saved) || remoteProfile(device);
-    } catch { return remoteProfile(device); }
-  });
+  const layout = remoteLayout(device);
+  const { profile } = layout;
   const currentDevice = useRef(deviceKey);
   currentDevice.current = deviceKey;
   useEffect(() => {
     setText("");
     setTooltip(null);
-    setOptionsOpen(false);
-    try {
-      const saved = localStorage.getItem(`deck-remote-style-${deviceKey}`);
-      setProfile(remoteProfiles.find((p) => p === saved) || remoteProfile(device));
-    } catch { setProfile(remoteProfile(device)); }
+    setTextOpen(false);
+    setTextSending(false);
   }, [deviceKey]);
+  useEffect(() => {
+    if (textOpen) textInput.current?.focus({ preventScroll: true });
+  }, [textOpen]);
   const canKey = enabled && device.capabilities.includes("key");
+  const hasKeys = layout.navigation.length > 0;
+  const hasText = device.capabilities.includes("text");
+  const hasDelete = hasKeys && supportsRemoteKey(device, "Backspace");
+  const canWake = hasKeys && supportsWake(device);
   useEffect(() => {
     const dismiss = (event: KeyboardEvent) => {
       if (event.key === "Escape") setTooltip(null);
@@ -106,7 +127,7 @@ export function RemoteControl({
     setTooltip({
       element: button,
       label: button.getAttribute("aria-label") || "",
-      shortcut: remoteShortcuts[button.dataset.remoteKey || ""],
+      shortcut: remoteShortcuts[button.dataset.remoteKey || ""] || "",
       unavailable:
         !canKey || !supportsRemoteKey(device, button.dataset.remoteKey || ""),
     });
@@ -114,11 +135,11 @@ export function RemoteControl({
   const button = (
     key: string,
     label: string,
-    icon: React.ReactNode,
     className = "",
   ) => (
     <button
       type="button"
+      key={key}
       className={className}
       aria-label={label}
       data-remote-key={key}
@@ -145,7 +166,7 @@ export function RemoteControl({
         pressKey(key);
       }}
     >
-      {icon}
+      {key === "Special" ? profile === "Roku" ? <Asterisk size={21} /> : <Menu size={21} /> : keyIcons[key]}
       <span>{label}</span>
     </button>
   );
@@ -153,7 +174,9 @@ export function RemoteControl({
     <section
       ref={element}
       tabIndex={-1}
-      className={`remote-component ${compact ? "remote-compact" : ""} ${optionsOpen ? "remote-compact-options-open" : ""}`}
+      className={`remote-component ${compact ? "remote-compact" : ""}`}
+      aria-label={`${profile} remote controls for ${device.name}`}
+      data-remote-profile={profile}
       data-keyboard-remote={keyboard}
       onPointerOverCapture={(event) => {
         if (event.pointerType !== "touch") showTooltip(event.target);
@@ -169,22 +192,7 @@ export function RemoteControl({
       onBlurCapture={() => setTooltip(null)}
     >
       {tooltip && <RemoteKeyTooltip id={tooltipId} tooltip={tooltip} />}
-      <label className="remote-style-picker">
-        Remote style
-        <select
-          value={profile}
-          onChange={(e) => {
-            const p = e.target.value as RemoteProfile;
-            setProfile(p);
-            try { localStorage.setItem(`deck-remote-style-${deviceKey}`, p); } catch {}
-          }}
-        >
-          {remoteProfiles.map((p) => (
-            <option key={p}>{p}</option>
-          ))}
-        </select>
-      </label>
-      <div
+      {hasKeys && <div
         className={`remote-handset remote-${profile.toLowerCase().replaceAll(" ", "-")}`}
       >
         <div className="remote-brand">
@@ -193,9 +201,17 @@ export function RemoteControl({
           <small>{device.name}</small>
         </div>
         <div className="remote-top">
-          {button("Back", "Back", <CornerUpLeft size={20} />)}
-          {button("Home", "Home", <Home size={20} />)}
-          <button
+          {layout.top.map(({ key, label }) => button(key, label))}
+        </div>
+        <div className="remote-ring">
+          {layout.navigation.map(({ key, label }) => button(key, label, `remote-${key.toLowerCase()}`))}
+        </div>
+        <div className="remote-media">
+          {layout.media.map(({ key, label }) => button(key, label))}
+        </div>
+        <div className="remote-tools">
+          {layout.tools.map(({ key, label }) => button(key, label))}
+          {canWake && <button
             type="button"
             aria-label="Wake device"
             data-remote-action="wake"
@@ -205,85 +221,57 @@ export function RemoteControl({
           >
             <Sun size={20} />
             <span>Wake</span>
-          </button>
+          </button>}
         </div>
-        <div className="remote-ring">
-          {button("Up", "Up", <ChevronUp />, "remote-up")}
-          {button("Left", "Left", <ChevronLeft />, "remote-left")}
-          {button("OK", "OK", <strong>OK</strong>, "remote-ok")}
-          {button("Right", "Right", <ChevronRight />, "remote-right")}
-          {button("Down", "Down", <ChevronDown />, "remote-down")}
-        </div>
-        <div className="remote-media">
-          {button(
-            "Rewind",
-            profile === "Apple TV" ? "Skip back" : "Rewind",
-            <Rewind size={19} />,
-          )}
-          {button(
-            "Play",
-            "Play / pause",
-            <span className="play-pause">
-              <Play size={16} />
-              <Pause size={14} />
-            </span>,
-          )}
-          {button(
-            "FastForward",
-            profile === "Apple TV" ? "Skip forward" : "Fast forward",
-            <FastForward size={19} />,
-          )}
-          {button("Replay", "Replay", <RotateCcw size={19} />)}
-          {button(
-            "Special",
-            profile === "Roku" ? "Special / options" : "Special / menu",
-            profile === "Roku" ? <Asterisk size={21} /> : <Menu size={21} />,
-          )}
-          {button("Backspace", "Delete character", <Delete size={19} />)}
-        </div>
-        {["Samsung", "LG"].includes(profile) && (
-          <p className="remote-style-note">
-            Visual style only. Keys use the configured {device.connection.type}{" "}
-            connection.
-          </p>
-        )}
-      </div>
-      <button
+      </div>}
+      {hasKeys && <button
         type="button"
         className={`keyboard-toggle ${keyboard ? "primary" : ""}`}
         aria-pressed={keyboard}
+        aria-label={keyboard ? "Keyboard active · Esc to release" : "Use keyboard"}
+        title={keyboard ? `Keyboard controls ${device.name}. Press Escape to release.` : `Use keyboard to control ${device.name}`}
         disabled={!canKey}
         onClick={toggleKeyboard}
       >
         <Keyboard size={17} />
         {keyboard
-          ? "Keyboard locked · Esc to release"
-          : "Keyboard unlocked · Click to lock"}
-      </button>
+          ? compact ? "Keyboard on" : "Keyboard active · Esc to release"
+          : "Use keyboard"}
+      </button>}
       {keyboard && (
         <p className="remote-key-help" role="status">
-          Arrows / Enter · B back · H home · Space play · R rewind · F forward ·
-          P replay · S special · Backspace delete. Text goes through the field
-          below.
+          Arrows / Enter · B back · H home · Space play. Hover a control for its
+          shortcut. Use Text entry to type on the device.
         </p>
       )}
-      <form
+      {(hasText || hasDelete) && <div className="remote-text-panel">
+        {compact && <button type="button" className="remote-text-toggle" data-remote-action="text" aria-expanded={textOpen} aria-controls={textPanelId} onClick={() => setTextOpen((open) => !open)}><Keyboard size={15} />Text entry<ChevronDown size={14} /></button>}
+        {(!compact || textOpen) && <form
+        id={textPanelId}
         className="remote-text"
         onSubmit={async (e) => {
           e.preventDefault();
           if (
             !text ||
             !enabled ||
-            busy ||
-            !device.capabilities.includes("text")
+            busy || textSending ||
+            !hasText
           )
             return;
           const targetDevice = deviceKey;
-          const result = await sendText(text);
-          if (result !== false && currentDevice.current === targetDevice) setText("");
+          const sentText = text;
+          setTextSending(true);
+          try {
+            const result = await sendText(sentText);
+            if (result !== false && currentDevice.current === targetDevice)
+              setText((current) => current === sentText ? "" : current);
+          } finally {
+            if (currentDevice.current === targetDevice) setTextSending(false);
+          }
         }}
       >
-        <input
+        {hasText && <input
+          ref={textInput}
           aria-label={`Text for ${device.name}`}
           placeholder="Type text to send…"
           maxLength={4096}
@@ -294,23 +282,28 @@ export function RemoteControl({
           enterKeyHint="send"
           value={text}
           onChange={(e) => setText(e.target.value)}
-          disabled={!enabled || !device.capabilities.includes("text")}
-        />
-        <button
+          disabled={!enabled}
+        />}
+        {hasText && <button
+          type="submit"
+          data-remote-action="send-text"
           disabled={
-            !enabled || !text || busy || !device.capabilities.includes("text")
+            !enabled || !text || busy || textSending
           }
           aria-label="Send text"
         >
           <Send size={17} />
-        </button>
-      </form>
-      {compact && <button type="button" className="remote-compact-options-toggle" aria-expanded={optionsOpen} onClick={() => setOptionsOpen((value) => !value)}><Menu size={16} />{optionsOpen ? "Hide remote options" : "Style & keyboard options"}</button>}
-      {!device.capabilities.includes("key") && (
-        <p className="remote-key-help">
-          Remote input needs a connected control adapter. Edit the device to
-          configure Roku, Fire TV / Android ADB, or Apple TV. Samsung and LG
-          control adapters are not available yet.
+        </button>}
+        {hasDelete && button("Backspace", "Delete character")}
+      </form>}
+      </div>}
+      {(!hasKeys || !device.capabilities.includes("key")) && (
+        <p className="remote-unavailable" role="status">
+          {!hasKeys
+            ? "View only. Configure a Roku, Android / Fire TV, or Apple TV control connection to use a remote."
+            : !device.online
+              ? "Device offline. Reconnect it or try Wake to use the remote."
+              : "Remote input is unavailable. Check this device’s control connection."}
         </p>
       )}
     </section>

@@ -231,6 +231,9 @@ export function useRemoteKeyboard({
       const next = !keyboardRef.current && current.current.enabled;
       manuallyReleased.current = !next;
       setActive(next);
+      // The toggle keeps native Enter/Space activation. Move focus onto the
+      // control surface so arrows work immediately after explicitly enabling it.
+      if (next) element.current?.focus({ preventScroll: true });
     },
   };
 }

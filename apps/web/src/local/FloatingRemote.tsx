@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { GripVertical, Menu, X } from "lucide-react";
+import { GripVertical, Menu, Minus, Plus, X } from "lucide-react";
 import { clampPopup } from "../../../../packages/ui/src/popup-position";
 import { useAnchoredPopup, type PopupAnchor } from "./anchored-popup";
 import "./anchored-popup.css";
@@ -12,6 +12,10 @@ export function FloatingRemote({
   requestKey,
   anchor,
   onClose,
+  targets,
+  targetId,
+  onTargetChange,
+  onMinimize,
   children,
 }: {
   title: string;
@@ -20,21 +24,21 @@ export function FloatingRemote({
   anchor?: PopupAnchor | null;
   initialMenu?: boolean;
   onClose: () => void;
+  targets?: { id: string; name: string }[];
+  targetId?: string;
+  onTargetChange?: (id: string) => void;
+  onMinimize?: () => void;
   children: (
     menu: boolean,
     setMenu: (open: boolean) => void,
+    minimized: boolean,
   ) => React.ReactNode;
 }) {
-  const [mobile, setMobile] = useState(() => matchMedia("(max-width: 640px)").matches);
-  useEffect(() => {
-    const query = matchMedia("(max-width: 640px)");
-    const changed = () => setMobile(query.matches);
-    query.addEventListener("change", changed);
-    return () => query.removeEventListener("change", changed);
-  }, []);
   const saved = useRef<{
     width?: number;
     height?: number;
+    x?: number;
+    y?: number;
   }>({});
   const loaded = useRef(false);
   if (!loaded.current) {
@@ -46,18 +50,23 @@ export function FloatingRemote({
     loaded.current = true;
   }
   const [size, setSize] = useState(() => ({
-    width: Math.max(260, Math.min(520, Number(saved.current.width) || 300)),
+    width: Math.max(232, Math.min(520, Number(saved.current.width) || 248)),
     height: Math.max(
       275,
-      Math.min(innerHeight, Number(saved.current.height) || 302),
+      Math.min(innerHeight, Number(saved.current.height) || 460),
     ),
   }));
   const [menu, setMenu] = useState(initialMenu);
+  const [minimized, setMinimized] = useState(false);
   const previousRequest = useRef(requestKey);
   const { panel, host, position, setPosition, detach } = useAnchoredPopup({
     anchor,
     requestKey,
     fallbackSize: size,
+    preservePosition: true,
+    initialPosition: Number.isFinite(saved.current.x) && Number.isFinite(saved.current.y)
+      ? { x: saved.current.x!, y: saved.current.y! }
+      : undefined,
   });
   const drag = useRef<{
     x: number;
@@ -96,17 +105,18 @@ export function FloatingRemote({
     if (previousRequest.current === requestKey) return;
     previousRequest.current = requestKey;
     setMenu(initialMenu);
+    setMinimized(false);
   }, [initialMenu, requestKey]);
   useEffect(() => {
     try {
       localStorage.setItem(
         `deck-remote-position-${storageKey}`,
-        JSON.stringify(size),
+        JSON.stringify({ ...size, ...position }),
       );
     } catch {}
-  }, [size, storageKey]);
+  }, [size, position, storageKey]);
   useEffect(() => {
-    if (mobile) return;
+    if (minimized) return;
     const observer = new ResizeObserver(() => {
       if (!panel.current) return;
       const { width, height } = panel.current.getBoundingClientRect();
@@ -118,26 +128,24 @@ export function FloatingRemote({
     });
     if (panel.current) observer.observe(panel.current);
     return () => observer.disconnect();
-  }, [host, mobile]);
+  }, [host, minimized]);
   return createPortal(
     <div
       ref={panel}
       role="region"
       tabIndex={-1}
       aria-label={`Remote for ${title}`}
-      className={`floating-remote anchored-remote ${menu ? "options-open" : ""}`}
-      data-mobile-sheet={mobile}
+      className={`floating-remote anchored-remote ${menu ? "options-open" : ""} ${minimized ? "remote-minimized" : ""}`}
       style={{
         left: position.x,
         top: position.y,
         width: size.width,
-        height: size.height,
+        height: minimized ? "auto" : size.height,
       }}
     >
       <header
         className="floating-remote-bar"
         onPointerDown={(e) => {
-          if (mobile) return;
           if ((e.target as HTMLElement).closest("button")) return;
           e.preventDefault();
           detach();
@@ -179,9 +187,22 @@ export function FloatingRemote({
         <button
           type="button"
           data-remote-action
+          aria-label={minimized ? "Restore remote" : "Minimize remote"}
+          aria-expanded={!minimized}
+          onClick={() => {
+            detach();
+            if (!minimized) onMinimize?.();
+            setMinimized((value) => !value);
+          }}
+        >
+          {minimized ? <Plus size={17} /> : <Minus size={17} />}
+        </button>
+        <button
+          type="button"
+          data-remote-action
           aria-label="Remote menu"
           aria-expanded={menu}
-          onClick={() => setMenu((v) => !v)}
+          onClick={() => { setMinimized(false); setMenu((v) => !v); }}
         >
           <Menu size={17} />
         </button>
@@ -189,7 +210,15 @@ export function FloatingRemote({
           <X size={17} />
         </button>
       </header>
-      <div className="floating-remote-body">{children(menu, setMenu)}</div>
+      <div hidden={minimized} className="floating-remote-target">
+        {targets && targets.length > 1 && onTargetChange ? <label>
+          <span>Controlling</span>
+          <select aria-label="Remote target" data-remote-action value={targetId} onChange={(event) => onTargetChange(event.target.value)}>
+            {targets.map((target) => <option key={target.id} value={target.id}>{target.name}</option>)}
+          </select>
+        </label> : <span>Controlling {title}</span>}
+      </div>
+      <div hidden={minimized} className="floating-remote-body">{children(menu, setMenu, minimized)}</div>
     </div>,
     host,
   );

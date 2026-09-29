@@ -1,9 +1,10 @@
 .floating-remote.anchored-remote {
-  min-width: min(260px, calc(100vw - 16px));
+  min-width: min(232px, calc(100vw - 16px));
   min-height: min(275px, calc(100vh - 16px));
   max-width: min(520px, calc(100vw - 16px));
   max-height: calc(100vh - 16px);
 }
+.floating-remote.anchored-remote.remote-minimized { min-height: 0; }
 
 .anchored-popover {
   position: fixed;
