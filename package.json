@@ -12,6 +12,7 @@
   },
   "scripts": {
     "qa:connection-screen": "node scripts/qa-connection-screen.mjs",
+    "qa:navigation": "node scripts/qa-navigation.mjs",
     "qa:live-video": "node scripts/qa-live-video.mjs",
     "qa:ios-production": "node scripts/qa-ios-native-production.mjs",
     "qa:device-types": "node scripts/qa-device-types.mjs",

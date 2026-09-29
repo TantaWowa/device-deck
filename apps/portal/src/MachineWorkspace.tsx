@@ -17,6 +17,7 @@ import { CaptureLibrary } from "../../web/src/local/CaptureLibrary";
 import { CaptureToasts, copyImageToClipboard, useCaptureFeedback } from "../../web/src/local/capture-feedback";
 import { connectionMessage, ControlGate, needsStandalone } from "./model";
 import type { CloudClient } from "./cloud";
+import type { PortalMachineView } from "../../../packages/core/src/browser-navigation";
 import "./touch-workspace.css";
 
 type Transport = ReturnType<typeof createMachineTransport>;
@@ -32,8 +33,14 @@ function MachinePreview({ transport, route, label, lease, controlDevice, inputEn
   return <LivePreview key={deviceId || sourceId} name={label} sourceId={sourceId} deviceId={deviceId} operation={transport.operation} getSnapshot={getSnapshot} controlLease={lease} controlDevice={controlDevice} inputEnabled={inputEnabled} active={active} onConnectionStateChange={(state) => { if (state === "error" || state === "disconnected") onControlLost?.(); }} />;
 }
 
-export function MachineWorkspace({ machine, cloud, owner, leases, onBack }: {
-  machine: MachineRecord; cloud: CloudClient; owner: string; leases: LeaseMemory; onBack: () => void;
+export function MachineWorkspace({ machine, cloud, owner, leases, navigation, onNavigate, onBack }: {
+  machine: MachineRecord;
+  cloud: CloudClient;
+  owner: string;
+  leases: LeaseMemory;
+  navigation: { view: PortalMachineView; captureId: string | null };
+  onNavigate: (navigation: { view: PortalMachineView; captureId: string | null }) => void;
+  onBack: () => void;
 }) {
   const transport = useMemo(() => createMachineTransport({
     endpoint: machine.endpoint, expectedMachineId: machine.id, expectedPublicKey: machine.publicKey,
@@ -44,7 +51,7 @@ export function MachineWorkspace({ machine, cloud, owner, leases, onBack }: {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [refreshing, setRefreshing] = useState(false);
-  const [tab, setTab] = useState<"feeds" | "devices" | "captures">("feeds");
+  const [tab, setTab] = useState<PortalMachineView>(navigation.view);
   const [remoteId, setRemoteId] = useState<string>();
   const [remoteRequest, setRemoteRequest] = useState<{ anchor: PopupAnchor }>();
   const [touchSessions, setTouchSessions] = useState<Record<string, string>>({});
@@ -57,7 +64,7 @@ export function MachineWorkspace({ machine, cloud, owner, leases, onBack }: {
   const [revealingDevice, setRevealingDevice] = useState<string>();
   const [launchingDevice, setLaunchingDevice] = useState<string>();
   const [sessionOwner, setSessionOwner] = useState(owner);
-  const [capturePreviewId, setCapturePreviewId] = useState<string | null>(null);
+  const [capturePreviewId, setCapturePreviewId] = useState<string | null>(navigation.captureId);
   const [busy, setBusy] = useState(false);
   const gate = useRef(new ControlGate());
   const alive = useRef(true);
@@ -65,6 +72,23 @@ export function MachineWorkspace({ machine, cloud, owner, leases, onBack }: {
   const feedPicker = useRef<HTMLDivElement>(null);
   const standalone = needsStandalone(machine.endpoint, location.protocol);
   const captureFeedback = useCaptureFeedback(snapshot?.artifacts);
+  const navigateTab = (view: PortalMachineView) => {
+    setTab(view);
+    setCapturePreviewId(null);
+    onNavigate({ view, captureId: null });
+  };
+  const navigateCapture = (captureId: string | null) => {
+    setTab("captures");
+    setCapturePreviewId(captureId);
+    onNavigate({ view: "captures", captureId });
+  };
+  useEffect(() => {
+    setTab(navigation.view);
+    setCapturePreviewId(navigation.captureId);
+    setRemoteId(undefined);
+    setRemoteRequest(undefined);
+    setFeedPickerOpen(false);
+  }, [navigation.view, navigation.captureId]);
   const getCaptureBlob = useCallback((item: Artifact, variant: "file" | "clean" | "log" = "file", signal?: AbortSignal) =>
     transport.getBlob(`/v1/artifacts/${encodeURIComponent(item.id)}/${variant}`, signal), [transport]);
   const getCaptureThumbnail = useCallback((item: Artifact, signal?: AbortSignal) =>
@@ -255,7 +279,7 @@ export function MachineWorkspace({ machine, cloud, owner, leases, onBack }: {
     try {
       await transport.operation("devices.simulator", { deviceId: target.id, action: "launch" }, signal);
       if (!current()) return false;
-      setRevealingDevice(target.id); setTab("feeds"); setFeedPickerOpen(false);
+      setRevealingDevice(target.id); navigateTab("feeds"); setFeedPickerOpen(false);
       setNotice(`${target.name} started. Connecting its feed…`);
       await refresh();
       return false;
@@ -287,11 +311,11 @@ export function MachineWorkspace({ machine, cloud, owner, leases, onBack }: {
   const query = feedSearch.trim().toLocaleLowerCase();
   const listedFeeds = feeds.filter((feed) => matchesType(feed.device) && (feedPickerMode !== "simulators" || Boolean(feed.device && canLaunchSimulator(feed.device))) && `${feed.source.name} ${feed.device?.name || ""}`.toLocaleLowerCase().includes(query));
   const unboundSimulators = simulators.filter((simulator) => matchesType(simulator) && !feeds.some((feed) => feed.device?.id === simulator.id) && simulator.name.toLocaleLowerCase().includes(query));
-  const showFeed = (id: string) => { setSelectedFeeds((ids) => [...new Set([...(ids ?? chosenFeeds), id])]); setTab("feeds"); setFeedPickerOpen(false); };
+  const showFeed = (id: string) => { setSelectedFeeds((ids) => [...new Set([...(ids ?? chosenFeeds), id])]); navigateTab("feeds"); setFeedPickerOpen(false); };
   const openDeviceFeed = (target: Device) => {
     setFormFactor("");
     const feed = feeds.find((item) => item.device?.id === target.id);
-    setTab("feeds");
+    navigateTab("feeds");
     if (feed) showFeed(feed.source.id);
     else if (!target.online && !isTransitioning(target) && canLaunchSimulator(target)) void launchFeed(target);
     else { setRevealingDevice(target.id); setNotice(isBooting(target) ? `${target.name} is booting. Its feed will appear when ready.` : `${target.name} has no capture feed. Configure a capture input on the host Mac.`); }
@@ -320,7 +344,7 @@ export function MachineWorkspace({ machine, cloud, owner, leases, onBack }: {
       <div className="workspace-status"><span className={`status-dot ${error ? "warn" : snapshot ? "good" : ""}`} />{error ? "Connection interrupted" : snapshot ? "Connected directly from this browser" : "Connecting to machine…"}{updatedAt && <span>Last checked {time(updatedAt)}</span>}</div>
       {snapshot?.inventoryObservation?.stale && <p className="notice" role="status">{snapshot.inventoryObservation.observedAt === null ? "Checking device availability…" : `Device status last checked ${time(snapshot.inventoryObservation.observedAt)}.`} {snapshot.inventoryObservation.error || (snapshot.inventoryObservation.refreshing ? "Refreshing…" : "Status refreshes while this page is visible.")}</p>}
       {error && <div className="notice error" role="alert">{error}<a href={`${machine.endpoint}/`} target="_blank" rel="noreferrer">Open machine address <ExternalLink size={14} /></a></div>}
-      <nav className="workspace-tabs" aria-label="Machine views">{([['feeds', Grid2X2, 'Feeds', feeds.length], ['devices', Tv, 'Devices', snapshot?.devices.length], ['captures', Camera, 'Captures', snapshot?.artifacts.filter((item) => !item.deletedAt && !item.purgedAt).length]] as const).map(([key, Icon, label, count]) => <button key={key} aria-current={tab === key ? "page" : undefined} onClick={() => setTab(key)}><Icon size={18} />{label}<span>{count ?? "—"}</span></button>)}</nav>
+      <nav className="workspace-tabs" aria-label="Machine views">{([['feeds', Grid2X2, 'Feeds', feeds.length], ['devices', Tv, 'Devices', snapshot?.devices.length], ['captures', Camera, 'Captures', snapshot?.artifacts.filter((item) => !item.deletedAt && !item.purgedAt).length]] as const).map(([key, Icon, label, count]) => <button key={key} aria-current={tab === key ? "page" : undefined} onClick={() => navigateTab(key)}><Icon size={18} />{label}<span>{count ?? "—"}</span></button>)}</nav>
       {booting.length > 0 && <p className="notice portal-booting-status" role="status"><LoaderCircle className="spin" size={17} />Booting: {booting.map((target) => target.name).join(", ")}. Controls become available when the device is ready.</p>}
       {!snapshot && !error && <div className="empty-panel" role="status"><LoaderCircle className="spin" size={32} /><p>Loading devices and feeds…</p></div>}
       {tab === "feeds" && snapshot && <>
@@ -380,7 +404,7 @@ export function MachineWorkspace({ machine, cloud, owner, leases, onBack }: {
         getBlob={getCaptureBlob}
         getThumbnail={getCaptureThumbnail}
         openArtifactId={capturePreviewId}
-        onOpenArtifact={setCapturePreviewId}
+        onOpenArtifact={navigateCapture}
         onChange={refresh}
         onOpenFolder={() => transport.operation("captures.openFolder", {}, AbortSignal.timeout(15_000))}
       />}
@@ -417,6 +441,6 @@ export function MachineWorkspace({ machine, cloud, owner, leases, onBack }: {
       <RemoteControl key={device.id} preferenceScope={machine.id} device={device} enabled={Boolean(canControl && !menu)} busy={busy} sendKey={(key) => remoteInput({ key })} sendText={(text) => remoteInput({ text })} wakeEnabled={!menu && !device.locked && !error} wake={wake} />
       {notice && <p className="control-notice" role="status">{notice === "Command sent." && <Check size={16} />}{notice}</p>}
     </>}</FloatingRemote>}
-    <CaptureToasts toasts={captureFeedback.toasts} dismiss={captureFeedback.dismiss} onOpen={(id) => { selectRemote(); setTab("captures"); setCapturePreviewId(id); }} />
+    <CaptureToasts toasts={captureFeedback.toasts} dismiss={captureFeedback.dismiss} onOpen={(id) => { selectRemote(); navigateCapture(id); }} />
   </div>;
 }

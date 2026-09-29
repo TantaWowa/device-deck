@@ -3,6 +3,11 @@ import { createRoot } from "react-dom/client";
 import { onAuthStateChanged, signOut, type Auth, type User } from "firebase/auth";
 import { ArrowRight, Download, ExternalLink, LogOut, Monitor, MoreHorizontal, Plus, Radio, RefreshCw, Search, Settings2, Trash2, WifiOff, X } from "lucide-react";
 import { grantSchema, machinesResponseSchema, type MachineRecord } from "../../../packages/core/src/hub";
+import {
+  portalNavigationUrl,
+  readPortalNavigation,
+  type PortalNavigation,
+} from "../../../packages/core/src/browser-navigation";
 import { createMachineTransport } from "../../../packages/machine-client/src";
 import { AuthView } from "./AuthView";
 import { MachineDialog } from "./MachineDialog";
@@ -85,7 +90,7 @@ function Account({ user, onLogout, install }: { user: User; onLogout: () => Prom
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [query, setQuery] = useState("");
-  const [selected, setSelected] = useState<string>(() => new URLSearchParams(location.hash.slice(1)).get("machine") || "");
+  const [navigation, setNavigation] = useState<PortalNavigation>(() => readPortalNavigation(location.hash));
   const [edit, setEdit] = useState<MachineRecord | "new">();
   const [remove, setRemove] = useState<MachineRecord>();
   const [online, setOnline] = useState(navigator.onLine);
@@ -93,6 +98,13 @@ function Account({ user, onLogout, install }: { user: User; onLogout: () => Prom
   const lifetime = useRef(new AbortController());
   const leases = useRef<LeaseMemory>(new Map());
   const loadId = useRef(0);
+  const navigate = (next: PortalNavigation, replace = false) => {
+    const url = portalNavigationUrl(location.pathname, location.search, next);
+    const current = `${location.pathname}${location.search}${location.hash}`;
+    if (url !== current) history[replace ? "replaceState" : "pushState"](null, "", url);
+    setNavigation(next);
+  };
+  const selected = navigation.machineId;
   const refresh = async () => {
     const id = ++loadId.current;
     setLoading(true); setError("");
@@ -101,7 +113,8 @@ function Account({ user, onLogout, install }: { user: User; onLogout: () => Prom
       if (lifetime.current.signal.aborted || id !== loadId.current) return;
       setMachines(result.machines); setCached(false);
       setSavedAt(writeMachineCache(localStorage, user.uid, result.machines));
-      if (selected && !result.machines.some((machine) => machine.id === selected)) setSelected("");
+      if (selected && !result.machines.some((machine) => machine.id === selected))
+        navigate({ machineId: "", view: "feeds", captureId: null }, true);
     } catch (failure) {
       if (!lifetime.current.signal.aborted && id === loadId.current) { setError(connectionMessage(failure)); setCached(true); }
     } finally { if (!lifetime.current.signal.aborted && id === loadId.current) setLoading(false); }
@@ -109,11 +122,13 @@ function Account({ user, onLogout, install }: { user: User; onLogout: () => Prom
   useEffect(() => {
     void refresh();
     const changed = () => setOnline(navigator.onLine);
+    const restore = () => setNavigation(readPortalNavigation(location.hash));
     window.addEventListener("online", changed); window.addEventListener("offline", changed);
-    return () => { lifetime.current.abort(); leases.current.clear(); window.removeEventListener("online", changed); window.removeEventListener("offline", changed); };
+    window.addEventListener("popstate", restore);
+    return () => { lifetime.current.abort(); leases.current.clear(); window.removeEventListener("online", changed); window.removeEventListener("offline", changed); window.removeEventListener("popstate", restore); };
   }, []);
   useEffect(() => { if (online && !loading && cached) void refresh(); }, [online]);
-  const choose = (id: string) => { setSelected(id); history.replaceState(null, "", `${location.pathname}${id ? `#machine=${encodeURIComponent(id)}` : ""}`); };
+  const choose = (id: string) => navigate({ machineId: id, view: "feeds", captureId: null });
   const logout = async () => {
     setLeaving(true); lifetime.current.abort(); leases.current.clear(); clearMachineCache(localStorage, user.uid);
     history.replaceState(null, "", location.pathname);
@@ -126,7 +141,7 @@ function Account({ user, onLogout, install }: { user: User; onLogout: () => Prom
     <header className="portal-header"><a href="/app/" className="brand" onClick={(event) => { event.preventDefault(); choose(""); }}><span className="brand-icon"><Monitor size={22} /></span>Device Deck<span className="brand-tag">CONNECT</span></a><nav aria-label="Account"><span className="account-label">{user.displayName || user.email || "Your account"}</span>{install && <button className="icon-button" title="Install Device Deck" aria-label="Install Device Deck" onClick={() => void install.prompt()}><Download size={18} /></button>}<button className="secondary logout-button" aria-label="Sign out" onClick={() => void logout()}><LogOut size={17} /><span>Sign out</span></button></nav></header>
     {!online && <div className="network-banner" role="status"><WifiOff size={17} />Your browser is offline. Saved machines may be out of date. Controls require a live connection.</div>}
     <main className="portal-main">
-      {active ? <MachineWorkspace key={`${active.id}:${active.endpoint}:${active.updatedAt}`} machine={active} cloud={cloud} owner={user.displayName || user.email || "Device Deck user"} leases={leases.current} onBack={() => choose("")} /> : <>
+      {active ? <MachineWorkspace key={`${active.id}:${active.endpoint}:${active.updatedAt}`} machine={active} cloud={cloud} owner={user.displayName || user.email || "Device Deck user"} leases={leases.current} navigation={{ view: navigation.view, captureId: navigation.captureId }} onNavigate={(next) => navigate({ machineId: active.id, ...next })} onBack={() => choose("")} /> : <>
         <div className="dashboard-heading"><div><span className="eyebrow">YOUR WORKSPACE</span><h1>Your machines<span className="count-badge">{machines.length}</span></h1><p>Live feeds and familiar controls. Wherever you work.</p></div><button className="primary" onClick={() => setEdit("new")} disabled={!online}><Plus size={19} />Add machine</button></div>
         <div className="dashboard-toolbar"><label className="search-field"><Search size={18} /><input aria-label="Search machines" placeholder="Find a machine…" value={query} onChange={(event) => setQuery(event.target.value)} /></label><button className="secondary" aria-label="Refresh machines" disabled={loading || !online} onClick={() => void refresh()}><RefreshCw size={16} className={loading ? "spin" : ""} /><span>Refresh</span></button></div>
         {cached && savedAt && <div className="notice" role="status"><strong>Saved list · last updated {new Date(savedAt).toLocaleString()}</strong><span>These are saved account details. Machine availability has not been checked.</span></div>}

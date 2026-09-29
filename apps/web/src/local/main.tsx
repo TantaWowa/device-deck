@@ -15,6 +15,12 @@ import { deviceEditorMetadata } from "../../../../packages/core/src/device-edito
 import { registerDiscoveredDevices } from "../../../../packages/core/src/discovery";
 import { supportsWake, deviceInputMode } from "../../../../packages/core/src/remote";
 import { deviceFormFactor } from "../../../../packages/core/src/device-form-factor";
+import {
+  dashboardNavigationUrl,
+  readDashboardNavigation,
+  type DashboardNavigation,
+  type DashboardView,
+} from "../../../../packages/core/src/browser-navigation";
 import { DeviceTypeFilter } from "./DeviceTypeFilter";
 import {
   deviceConnectionLabel,
@@ -79,15 +85,6 @@ import "./style.css";
 import "./remote-control.css";
 import "./floating-remote.css";
 type Lease = { session: Session; leaseToken: string };
-type Tab =
-  | "Feeds"
-  | "Capture Cards"
-  | "Devices"
-  | "Captures"
-  | "History"
-  | "Reports"
-  | "Settings"
-  | "License";
 const time = (value: number) => new Date(value).toLocaleString();
 const duration = (ms: number) =>
   `${Math.floor(ms / 60000)}m ${Math.floor(ms / 1000) % 60}s`;
@@ -173,6 +170,7 @@ function DeviceFilterGroup({
   );
 }
 function App() {
+  const initialNavigation = useRef(readDashboardNavigation(location.search)).current;
   const [feedRequest, setFeedRequest] = useState<{ deviceIds: string[] } | null>(null);
   const [control, setControl] = useState<{
     deviceId: string;
@@ -199,11 +197,7 @@ function App() {
     [error, setError] = useState(""),
     [notice, setNotice] = useState(""),
     [busy, setBusy] = useState(false),
-    [tab, setTab] = useState<Tab>(() =>
-      new URLSearchParams(location.search).get("view") === "feeds"
-        ? "Feeds"
-        : "Devices",
-    );
+    [tab, setTab] = useState<DashboardView>(initialNavigation.view);
   const refreshCards = useInventoryPolling(async (signal, manual) => {
     setCardsLoading(true);
     try {
@@ -225,8 +219,8 @@ function App() {
       visibility: "",
     }),
     [selected, setSelected] = useState<string[]>([]),
-    [viewing, setViewing] = useState<string[]>([]),
-    [target, setTarget] = useState(""),
+    [viewing, setViewing] = useState<string[]>(initialNavigation.deviceIds),
+    [target, setTarget] = useState(initialNavigation.deviceIds[0] || ""),
     [hover, setHover] = useState("");
   const [deviceSort, setDeviceSort] = useState<DeviceSort>({
     column: "device",
@@ -260,7 +254,7 @@ function App() {
     [reason, setReason] = useState(""),
     [owner, setOwner] = useState("You");
   const [overlay, setOverlay] = useState(true);
-  const [openArtifactId, setOpenArtifactId] = useState<string | null>(null);
+  const [openArtifactId, setOpenArtifactId] = useState<string | null>(initialNavigation.captureId);
   const captureFeedback = useCaptureFeedback(data?.artifacts);
   const bootstrapped = useRef(false);
   const bootstrapFailed = useRef(false);
@@ -337,17 +331,47 @@ function App() {
   };
   const saveConfig = async (config: Config, revision = data!.configRevision) =>
     action("config.save", { config, revision }, "Configuration saved.");
+  const applyNavigation = (navigation: DashboardNavigation) => {
+    setControl(null);
+    setIdentify(null);
+    setTab(navigation.view);
+    setViewing(navigation.deviceIds);
+    setTarget(navigation.deviceIds[0] || "");
+    setOpenArtifactId(navigation.captureId);
+    setHover("");
+    setFeedRequest(null);
+    setError("");
+    window.scrollTo(0, 0);
+  };
+  const navigate = (navigation: DashboardNavigation) => {
+    const url = dashboardNavigationUrl(
+      location.pathname,
+      location.search,
+      location.hash,
+      navigation,
+    );
+    const current = `${location.pathname}${location.search}${location.hash}`;
+    if (url !== current) history.pushState(null, "", url);
+    applyNavigation(navigation);
+  };
+  const showView = (view: DashboardView) =>
+    navigate({ view, deviceIds: [], captureId: null });
+  const showCapture = (captureId: string | null) =>
+    navigate({ view: "Captures", deviceIds: [], captureId });
+  useEffect(() => {
+    const restore = () => applyNavigation(readDashboardNavigation(location.search));
+    window.addEventListener("popstate", restore);
+    return () => window.removeEventListener("popstate", restore);
+  }, []);
   const openDeviceFeeds = (ids: string[]) => {
-    setControl(null); setIdentify(null); setViewing([]); setHover(""); setTab("Feeds");
+    showView("Feeds");
     setFeedRequest({ deviceIds: ids });
   };
   const openViewer = (ids: string[]) => {
     if (data?.devices.some((device) => ids.includes(device.id) && deviceInputMode(device) === "touch")) {
       openDeviceFeeds(ids); return;
     }
-    setViewing(ids);
-    setTarget(ids[0] || "");
-    setHover("");
+    navigate({ view: "Devices", deviceIds: ids, captureId: null });
   };
   if (!data)
     return <ConnectionScreen error={connectionError || error} />;
@@ -555,7 +579,7 @@ function App() {
     />
   );
   const tailscaleConnection = data.config.tailscale?.origin === location.origin;
-  const menu: { name: Tab; icon: ReactNode }[] = [
+  const menu: { name: DashboardView; icon: ReactNode }[] = [
     { name: "Devices", icon: <Monitor size={18} /> },
     { name: "Feeds", icon: <Columns2 size={18} /> },
     { name: "Capture Cards", icon: <Usb size={18} /> },
@@ -575,10 +599,7 @@ function App() {
             <button
               key={item.name}
               className={tab === item.name ? "active" : ""}
-              onClick={() => {
-                setTab(item.name);
-                setViewing([]);
-              }}
+              onClick={() => showView(item.name)}
             >
               {item.icon}
               {item.name}
@@ -609,10 +630,7 @@ function App() {
         {data.license && tab !== "License" && (
           <LicenseReminder
             status={data.license}
-            open={() => {
-              setTab("License");
-              setViewing([]);
-            }}
+            open={() => showView("License")}
           />
         )}
         {connectionError && (
@@ -1110,7 +1128,7 @@ function App() {
           <>
             <div className="live-heading">
               <div>
-                <button className="live-back" onClick={() => setViewing([])}>
+                <button className="live-back" onClick={() => showView("Devices")}>
                   <ArrowLeft size={16} />
                   All devices
                 </button>
@@ -1183,7 +1201,7 @@ function App() {
             fileUrl={fileUrl}
             thumbnailUrl={captureThumbnailUrl}
             openArtifactId={openArtifactId}
-            onOpenArtifact={setOpenArtifactId}
+            onOpenArtifact={showCapture}
             onChange={refresh}
           />
         )}
@@ -1279,7 +1297,6 @@ function App() {
             viewMany={openDeviceFeeds}
             refresh={() => void refreshCards(true)}
             view={(id) => {
-              setTab("Devices");
               openViewer([id]);
             }}
             assign={async (card, id) => {
@@ -1566,7 +1583,7 @@ function App() {
       )}
       <CaptureToasts
         {...captureFeedback}
-        onOpen={(id) => { setControl(null); setViewing([]); setTab("Captures"); setOpenArtifactId(id); }}
+        onOpen={showCapture}
       />
     </div>
   );
