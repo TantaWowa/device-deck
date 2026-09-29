@@ -17,22 +17,31 @@ export function useAnchoredPopup({
   anchor,
   requestKey,
   fallbackSize,
+  initialPosition,
+  preservePosition = false,
 }: {
   anchor?: PopupAnchor | null;
   requestKey: object;
   fallbackSize: PopupSize;
+  initialPosition?: PopupPosition;
+  preservePosition?: boolean;
 }) {
   const panel = useRef<HTMLDivElement>(null);
-  const detached = useRef(false);
+  const detached = useRef(Boolean(initialPosition));
+  const previousRequest = useRef(requestKey);
   const lastRect = useRef(anchor?.rect);
   const [host, setHost] = useState<Element>(
     document.fullscreenElement || document.body,
   );
-  const [position, setPosition] = useState<PopupPosition>({ x: 8, y: 8 });
+  const [position, setPosition] = useState<PopupPosition>(initialPosition || { x: 8, y: 8 });
   useLayoutEffect(() => {
-    detached.current = false;
+    if (previousRequest.current !== requestKey) {
+      detached.current = preservePosition;
+      previousRequest.current = requestKey;
+    }
+    if (!preservePosition) detached.current = false;
     lastRect.current = anchor?.rect;
-  }, [anchor, requestKey]);
+  }, [anchor, requestKey, preservePosition]);
   const fit = useCallback(() => {
     const element = panel.current;
     const size = {

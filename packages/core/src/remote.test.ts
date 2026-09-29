@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { validateConfig } from "../../config/src";
-import { deviceInputMode, phoneHardwareButtons, remoteProfile, supportsRemoteKey, supportsWake } from "./remote";
+import { deviceInputMode, phoneHardwareButtons, remoteLayout, remoteProfile, supportsRemoteKey, supportsWake } from "./remote";
 import type { DeviceConfig } from "./local/types";
 const device: DeviceConfig = {
   id: "fire",
@@ -56,8 +56,11 @@ test("devicectl Apple TVs retain remote classification from metadata or a legacy
   assert.equal(deviceInputMode({ ...namedLikeTv, model: "" }), "touch");
   assert.equal(supportsRemoteKey({ ...apple, inputMode: "remote" }, "Home"), false, "device class does not grant a missing Companion input transport");
 });
-test("remote appearance never grants input to a capture-only connection", () => {
-  assert.equal(remoteProfile(device), "Fire TV");
+test("capture-only names never advertise a functional platform remote", () => {
+  assert.equal(remoteProfile(device), "Device");
+  assert.deepEqual(remoteLayout({ ...device, inputMode: "remote" }), {
+    profile: "Device", navigation: [], top: [], media: [], tools: [],
+  });
   assert.equal(supportsRemoteKey(device, "Home"), false);
   assert.equal(
     supportsRemoteKey(
@@ -83,6 +86,73 @@ test("remote appearance never grants input to a capture-only connection", () => 
     ),
     false,
   );
+});
+test("remote layout and labels follow the control transport rather than an edited name or platform", () => {
+  const roku: DeviceConfig = {
+    ...device, name: "Samsung display with Apple TV", model: "Amazon Fire TV", platform: "Apple",
+    connection: { type: "roku", host: "192.0.2.1", serial: "roku-test" },
+  };
+  const apple: DeviceConfig = {
+    ...roku, name: "LG Roku", platform: "Roku",
+    connection: { type: "apple-tv", host: "192.0.2.2", identifier: "apple-test" },
+  };
+  assert.equal(remoteProfile(roku), "Roku");
+  assert.equal(remoteProfile(apple), "Apple TV");
+  assert.equal(remoteLayout(roku).media.find(({ key }) => key === "Rewind")?.label, "Rewind");
+  assert.equal(remoteLayout(apple).media.find(({ key }) => key === "Rewind")?.label, "Skip back");
+  assert.equal(remoteLayout(apple).media.find(({ key }) => key === "FastForward")?.label, "Skip forward");
+  assert.ok(remoteLayout(roku).tools.some(({ key, label }) => key === "Special" && label === "Options"));
+  assert.ok(remoteLayout(roku).tools.some(({ key }) => key === "Replay"));
+  assert.deepEqual(remoteLayout(apple).tools.map(({ key }) => key), ["VolumeDown", "VolumeUp"]);
+});
+test("ADB Fire TV identification uses hardware metadata and keeps Android menu semantics", () => {
+  const android: DeviceConfig = {
+    ...device, inputMode: "remote", name: "Fire TV room", platform: "Android", model: "SHIELD Android TV",
+    connection: { type: "adb", serial: "android-test", port: 5037 },
+  };
+  assert.equal(remoteProfile(android), "Android TV", "the device name cannot override known hardware");
+  for (const model of ["AFTMM", "AFTT", "Amazon Fire TV", "Fire_TV_Stick"])
+    assert.equal(remoteProfile({ ...android, name: "Lounge", model }), "Fire TV", model);
+  for (const model of ["SHIELD Android TV", "Fire tablet", "", "Xiaomi TV"])
+    assert.equal(remoteProfile({ ...android, model }), "Android TV", model);
+  assert.deepEqual(remoteLayout(android).top, [
+    { key: "Back", label: "Back" }, { key: "Home", label: "Home" }, { key: "Special", label: "Menu" },
+  ]);
+  assert.equal(remoteLayout(android).media[0].label, "Rewind");
+});
+test("TV simulator and capture-only Apple hardware do not inherit Companion buttons", () => {
+  const simulator: DeviceConfig = {
+    ...device, connection: { type: "simulator", udid: "test-tv", os: "tvos" },
+  };
+  const layout = remoteLayout(simulator);
+  assert.equal(layout.profile, "Apple TV");
+  assert.deepEqual(layout.media, [{ key: "Play", label: "Play / pause" }]);
+  assert.deepEqual(layout.tools, []);
+  assert.equal(layout.navigation.length, 5);
+  assert.deepEqual(layout.top, [{ key: "Back", label: "Back" }, { key: "Home", label: "Home" }]);
+  const unpaired: DeviceConfig = {
+    ...device, inputMode: "remote", model: "AppleTV14,1", connection: { type: "apple-device", udid: "tv" },
+  };
+  assert.equal(remoteLayout(unpaired).profile, "Apple TV");
+  assert.deepEqual(remoteLayout(unpaired).navigation, []);
+  assert.deepEqual(remoteLayout({ ...simulator, connection: { type: "simulator", os: "ios", udid: "phone" } }).navigation, []);
+});
+test("every displayed remote key is supported and appears only once", () => {
+  const connections: DeviceConfig["connection"][] = [
+    { type: "roku", host: "192.0.2.1", serial: "test" },
+    { type: "adb", serial: "android-test", port: 5037 },
+    { type: "apple-tv", host: "192.0.2.2", identifier: "apple-test" },
+    { type: "simulator", udid: "test-tv", os: "tvos" },
+    { type: "capture" },
+  ];
+  for (const connection of connections) {
+    const target: DeviceConfig = { ...device, inputMode: "remote", connection };
+    const { navigation, top, media, tools } = remoteLayout(target);
+    const keys = [...navigation, ...top, ...media, ...tools].map(({ key }) => key);
+    assert.equal(new Set(keys).size, keys.length, `${connection.type} has no duplicate commands`);
+    for (const key of keys) assert.ok(supportsRemoteKey(target, key), `${connection.type} supports ${key}`);
+    assert.ok(!keys.includes("Power") && !keys.includes("Voice"), "layouts do not advertise unimplemented remote actions");
+  }
 });
 test("wake availability follows the configured transport even for an offline device", () => {
   const connections: DeviceConfig["connection"][] = [

@@ -67,6 +67,7 @@ export function MachineWorkspace({ machine, cloud, owner, leases, navigation, on
   const [capturePreviewId, setCapturePreviewId] = useState<string | null>(navigation.captureId);
   const [busy, setBusy] = useState(false);
   const gate = useRef(new ControlGate());
+  const remoteGeneration = useRef(0);
   const alive = useRef(true);
   const touchGeneration = useRef(0);
   const feedPicker = useRef<HTMLDivElement>(null);
@@ -85,6 +86,7 @@ export function MachineWorkspace({ machine, cloud, owner, leases, navigation, on
   useEffect(() => {
     setTab(navigation.view);
     setCapturePreviewId(navigation.captureId);
+    remoteGeneration.current++;
     setRemoteId(undefined);
     setRemoteRequest(undefined);
     setFeedPickerOpen(false);
@@ -140,8 +142,10 @@ export function MachineWorkspace({ machine, cloud, owner, leases, navigation, on
     };
   }, [transport]);
   const selectRemote = (id?: string, trigger?: HTMLElement) => {
-    gate.current.cancel(); setBusy(false); setNotice(""); setRemoteId(id);
-    setRemoteRequest(id && trigger ? { anchor: popupAnchor(trigger) } : undefined);
+    // Finish already-requested captures/reservations so their results and lease
+    // credentials survive retargeting; discard only the pending remote input.
+    remoteGeneration.current++; setNotice(""); setRemoteId(id);
+    setRemoteRequest(id && (trigger || remoteRequest) ? { anchor: trigger ? popupAnchor(trigger) : remoteRequest!.anchor } : undefined);
   };
   useEffect(() => {
     if (!feedPickerOpen) return;
@@ -192,11 +196,14 @@ export function MachineWorkspace({ machine, cloud, owner, leases, navigation, on
     if (!device) throw new Error("Select a device first.");
     return withDeviceLease(device, signal, current);
   };
-  const remoteInput = (input: { key?: string; text?: string }) => command(async (signal, current) => {
-    const lease = await withLease(signal, current);
-    if (!current()) return false;
-    return transport.operation("remote.input", { ...lease, ...input }, signal);
-  });
+  const remoteInput = (input: { key?: string; text?: string }) => {
+    const generation = remoteGeneration.current;
+    return command(async (signal, current) => {
+      const lease = await withLease(signal, current);
+      if (!current() || generation !== remoteGeneration.current) return false;
+      return transport.operation("remote.input", { ...lease, ...input }, signal);
+    });
+  };
   const capture = (operation: "captures.screenshot" | "recordings.start" | "recordings.stop", target = device) => command(async (signal, current) => {
     if (!target) return false;
     const lease = await withDeviceLease(target, signal, current);
@@ -376,7 +383,8 @@ export function MachineWorkspace({ machine, cloud, owner, leases, navigation, on
           const touchDevice = Boolean(feedDevice && deviceInputMode(feedDevice) === "touch");
           const ready = Boolean(feedDevice?.online && !isTransitioning(feedDevice) && !feedDevice.locked && !error);
           const activeRecording = snapshot.recordings.some((item) => item.deviceId === feedDevice?.id);
-          return <article className="feed-card" data-feed-source={source.id} key={source.id}>
+          return <article className="feed-card" data-feed-source={source.id} data-controlling={Boolean(feedDevice && feedDevice.id === remoteId)} key={source.id}>
+            {feedDevice && feedDevice.id === remoteId && <span className="portal-remote-target">Remote target</span>}
             {feedDevice && (isTransitioning(feedDevice) || launchingDevice === feedDevice.id) ? <div className="portal-feed-booting" role="status"><LoaderCircle className="spin" size={28} /><strong>{feedDevice.simulatorState === "stopping" ? "Stopping…" : "Booting…"}</strong><span>{feedDevice.name} · {feedDevice.healthDetail}</span></div> : source.status === "unknown" ? <div className="portal-feed-booting" role="status"><LoaderCircle className="spin" size={28} /><strong>Checking capture input…</strong></div> : source.status === "missing" ? <div className="portal-feed-booting" role="status"><Monitor size={28} /><strong>{feedDevice?.simulatorState === "shutdown" ? "Stopped" : feedDevice && !feedDevice.online ? "Device offline" : "Input unavailable"}</strong><span>{feedDevice?.healthDetail || "Connect this capture input to resume."}</span>{feedDevice && canLaunchSimulator(feedDevice) && !feedDevice.online && <button className="primary" disabled={busy || feedDevice.locked || feedDevice.simulatorState === "unavailable" || Boolean(error)} onClick={() => void launchFeed(feedDevice)}><Play size={15} />Launch &amp; show feed</button>}</div> : <MachinePreview transport={transport} route={mediaControl && feedDevice ? `/v1/preview/${encodeURIComponent(feedDevice.id)}` : route} label={source.name} active={source.kind === "usb" || Boolean(feedDevice?.online)} lease={mediaControl ? lease : null} controlDevice={mediaControl ? feedDevice : undefined} inputEnabled={enabled && !busy && !remoteId} onControlLost={() => { touchGeneration.current++; if (feedDevice) { setTouchSessions((sessions) => { const next = { ...sessions }; delete next[feedDevice.id]; return next; }); setMediaSessions((sessions) => { const next = { ...sessions }; delete next[feedDevice.id]; return next; }); } }} />}
             <footer><div><strong>{source.name}</strong><span>{feedDevice?.name || "Unassigned input"}</span></div>{feedDevice && deviceInputMode(feedDevice) === "remote" && <button className="secondary" onClick={(event) => selectRemote(feedDevice.id, event.currentTarget)}><Radio size={16} />Remote</button>}</footer>
             {feedDevice && touchDevice && <div className="portal-feed-control" aria-label={`Touch controls for ${feedDevice.name}`}><span>{reserved ? `Reserved by ${session!.owner}. Enabling touch requires taking over their session.` : enabled ? "Touch enabled · Your reservation" : ours ? "Touch off · Your reservation remains active" : "View only · Enabling touch reserves this device for 15 minutes."}</span>
@@ -410,14 +418,18 @@ export function MachineWorkspace({ machine, cloud, owner, leases, navigation, on
       />}
     </>}
     {device && remoteRequest && <FloatingRemote
-      key={`${machine.id}:${device.id}`}
-      storageKey={`${machine.id}:${device.id}`}
+      key={machine.id}
+      storageKey={`${machine.id}:workspace`}
       requestKey={remoteRequest}
       anchor={remoteRequest.anchor}
       title={device.name}
+      targets={snapshot?.devices.filter((item) => deviceInputMode(item) === "remote")}
+      targetId={device.id}
+      onTargetChange={(id) => selectRemote(id)}
+      onMinimize={() => { remoteGeneration.current++; }}
       initialMenu={Boolean(occupied || device.locked || !device.online || error)}
       onClose={() => selectRemote()}
-    >{(menu) => <>
+    >{(menu, _setMenu, minimized) => <>
       {menu && <div className="remote-options">
         {error && <p className="control-warning" role="alert">{error}</p>}
         <div className="control-session">
@@ -438,7 +450,7 @@ export function MachineWorkspace({ machine, cloud, owner, leases, navigation, on
           <small>Closing the popup keeps your session and recording running. Captures are saved in the library.</small>
         </div>
       </div>}
-      <RemoteControl key={device.id} preferenceScope={machine.id} device={device} enabled={Boolean(canControl && !menu)} busy={busy} sendKey={(key) => remoteInput({ key })} sendText={(text) => remoteInput({ text })} wakeEnabled={!menu && !device.locked && !error} wake={wake} />
+      <RemoteControl key={device.id} compact preferenceScope={machine.id} device={device} enabled={Boolean(canControl && !menu && !minimized)} busy={busy} sendKey={(key) => remoteInput({ key })} sendText={(text) => remoteInput({ text })} wakeEnabled={!menu && !minimized && !device.locked && !error} wake={wake} />
       {notice && <p className="control-notice" role="status">{notice === "Command sent." && <Check size={16} />}{notice}</p>}
     </>}</FloatingRemote>}
     <CaptureToasts toasts={captureFeedback.toasts} dismiss={captureFeedback.dismiss} onOpen={(id) => { selectRemote(); navigateCapture(id); }} />

@@ -14,14 +14,22 @@ import { DiscoveryDevices } from "./DiscoveryDevices";
 import { deviceEditorMetadata } from "../../../../packages/core/src/device-editor";
 import { registerDiscoveredDevices } from "../../../../packages/core/src/discovery";
 import { supportsWake, deviceInputMode } from "../../../../packages/core/src/remote";
-import { deviceFormFactor } from "../../../../packages/core/src/device-form-factor";
+import {
+  emptyDeviceFilters,
+  filterTableDevices,
+  hasDeviceFilters,
+  readDeviceFilters,
+  readDeviceSort,
+  saveDeviceFilters,
+  toggleVisibleDeviceSelection,
+} from "../../../../packages/core/src/device-filters";
 import {
   dashboardNavigationUrl,
   readDashboardNavigation,
   type DashboardNavigation,
   type DashboardView,
 } from "../../../../packages/core/src/browser-navigation";
-import { DeviceTypeFilter } from "./DeviceTypeFilter";
+import { DeviceFilters } from "./DeviceFilters";
 import {
   deviceConnectionLabel,
   deviceAvailabilityLabel,
@@ -57,7 +65,6 @@ import {
   BarChart3,
   Settings,
   Plus,
-  Search,
   ArrowLeft,
   RefreshCw,
   Terminal,
@@ -136,39 +143,9 @@ function Preview({
     />
   );
 }
-function DeviceFilterGroup({
-  label,
-  ariaLabel,
-  value,
-  options,
-  onChange,
-}: {
-  label: string;
-  ariaLabel: string;
-  value: string;
-  options: readonly (readonly [string, string, number?])[];
-  onChange: (value: string) => void;
-}) {
-  return (
-    <div className="device-filter-group" role="group" aria-label={ariaLabel}>
-      <span className="device-filter-label">{label}</span>
-      <div className="device-filter-buttons">
-        {options.map(([option, text, count]) => (
-          <button
-            key={option}
-            type="button"
-            className={`filter-${option.toLowerCase() || "all"}`}
-            aria-pressed={value === option}
-            onClick={() => onChange(value === option ? "" : option)}
-          >
-            {text}
-            {count !== undefined && <span>{count}</span>}
-          </button>
-        ))}
-      </div>
-    </div>
-  );
-}
+const deviceFilterStorageKey = "device-deck:devices:filters:v1";
+const deviceSortStorageKey = "device-deck:devices:sort:v1";
+
 function App() {
   const initialNavigation = useRef(readDashboardNavigation(location.search)).current;
   const [feedRequest, setFeedRequest] = useState<{ deviceIds: string[] } | null>(null);
@@ -209,23 +186,24 @@ function App() {
       if (!signal.aborted) setCardsLoading(false);
     }
   }, { enabled: tab === "Capture Cards" && Boolean(data), intervalMs: 10_000, identity: data?.configRevision });
-  const [filter, setFilter] = useState({
-      search: "",
-      platform: "",
-      health: "",
-      reservation: "",
-      kind: "",
-      formFactor: "",
-      visibility: "",
+  const [filter, setFilter] = useState(() => {
+      try { return readDeviceFilters(JSON.parse(localStorage.getItem(deviceFilterStorageKey) || "null")); }
+      catch { return emptyDeviceFilters(); }
     }),
     [selected, setSelected] = useState<string[]>([]),
     [viewing, setViewing] = useState<string[]>(initialNavigation.deviceIds),
     [target, setTarget] = useState(initialNavigation.deviceIds[0] || ""),
     [hover, setHover] = useState("");
-  const [deviceSort, setDeviceSort] = useState<DeviceSort>({
-    column: "device",
-    direction: "ascending",
+  const [deviceSort, setDeviceSort] = useState<DeviceSort>(() => {
+    try { return readDeviceSort(JSON.parse(localStorage.getItem(deviceSortStorageKey) || "null")); }
+    catch { return readDeviceSort(null); }
   });
+  useEffect(() => {
+    try { localStorage.setItem(deviceFilterStorageKey, JSON.stringify(saveDeviceFilters(filter))); } catch {}
+  }, [filter]);
+  useEffect(() => {
+    try { localStorage.setItem(deviceSortStorageKey, JSON.stringify(deviceSort)); } catch {}
+  }, [deviceSort]);
   const [leases, setLeases] = useState<Record<string, Lease>>(() => {
     try {
       return JSON.parse(localStorage.getItem("deck-local-leases") || "{}");
@@ -375,22 +353,7 @@ function App() {
   };
   if (!data)
     return <ConnectionScreen error={connectionError || error} />;
-  const filteredDevices = data.devices.filter(
-    (d) =>
-      (!filter.search ||
-        d.name.toLowerCase().includes(filter.search.trim().toLowerCase())) &&
-      (!filter.platform || d.platform === filter.platform) &&
-      (!filter.health || (filter.health === "online" ? d.online : !d.online)) &&
-      (!filter.kind || d.kind === filter.kind) &&
-      (!filter.formFactor || deviceFormFactor(d) === filter.formFactor) &&
-      (!filter.visibility || d.visibility === filter.visibility) &&
-      (!filter.reservation ||
-        (filter.reservation === "locked"
-          ? d.locked
-          : filter.reservation === "reserved"
-            ? !!activeSession(d.id)
-            : !activeSession(d.id) && !d.locked && d.online)),
-  );
+  const filteredDevices = filterTableDevices(data.devices, filter, data.sessions);
   const chosen = data.devices.find((d) => d.id === target);
   const sources: SourceConfig[] = [
     ...data.config.sources,
@@ -418,6 +381,11 @@ function App() {
     sources,
     data.sessions,
   );
+  const visibleSelectedCount = devices.filter((device) => selected.includes(device.id)).length;
+  const hiddenSelectedCount = selected.length - visibleSelectedCount;
+  const savedViewName = data.config.savedViews.find((view) =>
+    JSON.stringify(saveDeviceFilters(readDeviceFilters(view.filters))) === JSON.stringify(saveDeviceFilters(filter)),
+  )?.name || "";
   const sortHeader = (column: DeviceSortColumn, label: string) => {
     const active = deviceSort.column === column;
     const direction = active ? deviceSort.direction : "none";
@@ -559,6 +527,7 @@ function App() {
     intent: FeedAction,
     optionsOpen: boolean,
     setOptionsOpen: (open: boolean) => void,
+    suspended = false,
   ) => (
     <DeviceControls
       onCapture={captureFeedback.completed}
@@ -576,6 +545,7 @@ function App() {
       initialAction={intent}
       optionsOpen={optionsOpen}
       setOptionsOpen={setOptionsOpen}
+      suspended={suspended}
     />
   );
   const tailscaleConnection = data.config.tailscale?.origin === location.origin;
@@ -661,6 +631,7 @@ function App() {
         )}
         {tab === "Feeds" && (
           <FeedViewer
+            controllingDeviceId={control && data.devices.some((d) => d.id === control.deviceId && deviceInputMode(d) === "remote") ? control.deviceId : undefined}
             request={feedRequest}
             sources={data.sources}
             devices={data.devices}
@@ -760,126 +731,20 @@ function App() {
               </span>
             </div>
             <div className="live-panel">
-              <div className="live-filters device-table-filters">
-                <div className="device-filter-primary">
-                  <DeviceFilterGroup
-                    label="Platform"
-                    ariaLabel="Filter platform"
-                    value={filter.platform}
-                    options={[
-                      ["", "All platforms"],
-                      ["Apple", "Apple"],
-                      ["Roku", "Roku"],
-                      ["Android", "Android"],
-                      ["Other", "Other"],
-                    ].map(([value, label]) => [
-                      value,
-                      label,
-                      data.devices.filter((d) => !value || d.platform === value)
-                        .length,
-                    ])}
-                    onChange={(platform) =>
-                      setFilter((prev) => ({ ...prev, platform }))
-                    }
-                  />
-                  <DeviceFilterGroup
-                    label="Environment"
-                    ariaLabel="Filter device environment"
-                    value={filter.kind}
-                    options={[
-                      ["", "All environments"],
-                      ["virtual", "Sim"],
-                      ["physical", "Real"],
-                    ]}
-                    onChange={(kind) =>
-                      setFilter((prev) => ({ ...prev, kind }))
-                    }
-                  />
-                  <DeviceTypeFilter value={filter.formFactor} onChange={(formFactor) => setFilter((prev) => ({ ...prev, formFactor }))} />
-                  <label className="live-search device-name-search">
-                    <Search size={16} aria-hidden="true" />
-                    <input
-                      type="search"
-                      aria-label="Search devices"
-                      placeholder="Search by name…"
-                      value={filter.search}
-                      onChange={(e) =>
-                        setFilter({ ...filter, search: e.target.value })
-                      }
-                    />
-                  </label>
-                </div>
-                <div className="device-filter-secondary">
-                  <DeviceFilterGroup
-                    label="Connection"
-                    ariaLabel="Filter connection"
-                    value={filter.health}
-                    options={[
-                      ["", "All"],
-                      ["online", "Online"],
-                      ["offline", "Offline"],
-                    ]}
-                    onChange={(health) =>
-                      setFilter((prev) => ({ ...prev, health }))
-                    }
-                  />
-                  <DeviceFilterGroup
-                    label="Availability"
-                    ariaLabel="Filter availability"
-                    value={filter.reservation}
-                    options={[
-                      ["", "All"],
-                      ["free", "Available"],
-                      ["reserved", "Reserved"],
-                      ["locked", "Locked"],
-                    ]}
-                    onChange={(reservation) =>
-                      setFilter((prev) => ({ ...prev, reservation }))
-                    }
-                  />
-                  <DeviceFilterGroup
-                    label="Visibility"
-                    ariaLabel="Filter visibility"
-                    value={filter.visibility}
-                    options={[
-                      ["", "All"],
-                      ["local", "Local"],
-                      ["shared", "Shared"],
-                    ]}
-                    onChange={(visibility) =>
-                      setFilter((prev) => ({ ...prev, visibility }))
-                    }
-                  />
-                  <button
-                    className="device-filter-reset"
-                    onClick={() =>
-                      setFilter({
-                        search: "",
-                        platform: "",
-                        health: "",
-                        reservation: "",
-                        kind: "",
-                        formFactor: "",
-                        visibility: "",
-                      })
-                    }
-                  >
-                    Reset
-                  </button>
-                </div>
-              </div>
+              <DeviceFilters value={filter} onChange={setFilter} devices={data.devices} sessions={data.sessions} />
               <div className="live-subtoolbar">
-                <span>
+                <span aria-live="polite">
                   {devices.length} of {data.devices.length} devices
                 </span>
                 <div className="live-actions">
                   <select
                     aria-label="Saved view"
+                    value={savedViewName}
                     onChange={(e) => {
                       const view = data.config.savedViews.find(
                         (v) => v.name === e.target.value,
                       );
-                      if (view) setFilter({ ...filter, formFactor: "", ...view.filters });
+                      if (view) setFilter(readDeviceFilters(view.filters));
                     }}
                   >
                     <option value="">Saved views</option>
@@ -898,7 +763,7 @@ function App() {
                               ...data.config.savedViews.filter(
                                 (v) => v.name !== name,
                               ),
-                              { name, filters: filter },
+                              { name, filters: saveDeviceFilters(filter) },
                             ],
                           }),
                         );
@@ -908,7 +773,8 @@ function App() {
                   </button>
                   {selected.length > 0 && (
                     <>
-                      <span>{selected.length} selected</span>
+                      <span className="device-selection-summary" aria-live="polite">{selected.length} selected{hiddenSelectedCount > 0 && <span className="device-selection-hidden">· {hiddenSelectedCount} hidden by filters</span>}</span>
+                      <button type="button" onClick={() => setSelected([])}>Clear selection</button>
                       <button onClick={() => openViewer(selected)}>
                         <Columns2 size={16} />
                         View selected
@@ -940,10 +806,12 @@ function App() {
                             devices.length > 0 &&
                             devices.every((d) => selected.includes(d.id))
                           }
+                          ref={(element) => {
+                            if (element) element.indeterminate = visibleSelectedCount > 0 && visibleSelectedCount < devices.length;
+                          }}
+                          disabled={!devices.length}
                           onChange={(e) =>
-                            setSelected(
-                              e.target.checked ? devices.map((d) => d.id) : [],
-                            )
+                            setSelected((current) => toggleVisibleDeviceSelection(current, devices.map((device) => device.id), e.target.checked))
                           }
                         />
                       </th>
@@ -1114,10 +982,8 @@ function App() {
                         ? "No matching devices"
                         : "Connect your first device"}
                     </h2>
-                    <p>
-                      Discover a connected target, give it a friendly name and
-                      choose its capture input.
-                    </p>
+                    <p>{data.devices.length ? "Try another search or clear the filters to see all devices." : "Discover a connected target, give it a friendly name and choose its capture input."}</p>
+                    {data.devices.length > 0 && hasDeviceFilters(filter) && <button type="button" onClick={() => setFilter(emptyDeviceFilters())}>Clear all filters</button>}
                   </div>
                 )}
               </div>
@@ -1354,23 +1220,26 @@ function App() {
         </AnchoredPopover>
       ) : (
         <FloatingRemote
-          key={control.deviceId}
-          storageKey={control.deviceId}
+          storageKey="local-workspace"
           requestKey={control}
           anchor={control.anchor}
           title={data.devices.find((d) => d.id === control.deviceId)!.name}
+          targets={data.devices.filter((d) => deviceInputMode(d) === "remote")}
+          targetId={control.deviceId}
+          onTargetChange={(deviceId) => setControl({ ...control, deviceId, action: "remote" })}
           initialMenu={
             control.action !== "remote" ||
             Boolean(activeSession(control.deviceId))
           }
           onClose={() => setControl(null)}
         >
-          {(menu, setMenu) =>
+          {(menu, setMenu, minimized) =>
             controls(
               data.devices.find((d) => d.id === control.deviceId)!,
               control.action,
               menu,
               setMenu,
+              minimized,
             )
           }
         </FloatingRemote>
@@ -1503,6 +1372,7 @@ function App() {
               Reserved devices are skipped. Maintenance locks are separate from
               reservations.
             </p>
+            <p className="device-maintenance-targets"><strong>{selected.length} selected:</strong> {selected.map((id) => data.devices.find((device) => device.id === id)?.name || id).join(", ")}{hiddenSelectedCount > 0 && <> · {hiddenSelectedCount} hidden by filters</>}</p>
             <label>
               Reason
               <input

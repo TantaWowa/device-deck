@@ -1,3 +1,5 @@
 /* Shared with the machine dashboard; keep after the portal page styles. */
 @import "../../web/src/local/remote-control.css";
 @import "../../web/src/local/floating-remote.css";
+.feed-card[data-controlling="true"] { position: relative; outline: 2px solid #507dd0; outline-offset: -2px; }
+.portal-remote-target { position: absolute; z-index: 2; top: 8px; right: 8px; padding: 3px 7px; border-radius: 5px; color: #fff; background: #215bc4; font-size: 11px; pointer-events: none; }

@@ -54,3 +54,20 @@
 .feed-touch-unavailable, .feed-touch-session-kept { width: 100%; margin: 0; color: #718198; font-size: 11px; line-height: 1.5; }
 .feed-offline.feed-booting { color: #b8cef0; }
 .feed-title .feed-booting-label { color: #9c6514; font-weight: 600; }
+.feed-tile[data-controlling="true"] {
+  position: relative;
+  outline: 2px solid #507dd0;
+  outline-offset: -2px;
+}
+.feed-control-target {
+  position: absolute;
+  z-index: 2;
+  top: 48px;
+  right: 8px;
+  padding: 3px 7px;
+  border-radius: 5px;
+  background: #215bc4;
+  color: #fff;
+  font-size: 11px;
+  pointer-events: none;
+}
