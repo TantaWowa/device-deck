@@ -878,18 +878,19 @@ export class Adapters {
           "-p",
         ])
       ).stdout;
-    if (d.connection.type === "simulator")
-      return (
-        await run("xcrun", [
-          "simctl",
-          "io",
-          d.connection.udid,
-          "screenshot",
-          "--type=png",
-          ...(d.connection.os === "tvos" ? ["--display=external"] : []),
-          "-",
-        ])
-      ).stdout;
+    if (d.connection.type === "simulator") {
+      const directory = await mkdtemp(path.join(os.tmpdir(), "device-deck-screen-"));
+      const file = path.join(directory, "screen.png");
+      try {
+        await this.execute("xcrun", [
+          "simctl", "io", d.connection.udid, "screenshot", "--type=png",
+          ...(d.connection.os === "tvos" ? ["--display=external"] : []), file,
+        ]);
+        return await readFile(file);
+      } finally {
+        await rm(directory, { recursive: true, force: true });
+      }
+    }
     fail(
       "unsupported-capability",
       "Configure a USB capture input for this device.",
