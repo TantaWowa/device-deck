@@ -56,3 +56,34 @@ test("Android discovery uses the account's server for new AVDs and retains expli
     });
   }
 });
+
+test("forced discovery sees an AVD created immediately after discovery while concurrent reads share work", async () => {
+  let avds = "";
+  let listings = 0;
+  const config = configSchema.parse({ schemaVersion: 1, settings: { folder: "/tmp/captures" },
+    tools: { adb: "/usr/bin/true", emulator: "/usr/bin/true", python: "/usr/bin/true" } });
+  const execute: typeof run = async (_command, args) => {
+    let output = "[]";
+    if (args[0] === "-P") output = "List of devices attached\n";
+    else if (args[0] === "-list-avds") { listings++; output = avds; }
+    else if (args[0] === "simctl") output = '{"devices":{}}';
+    else if (args[0] === "devicectl") {
+      await writeFile(args[args.indexOf("--json-output") + 1], '{"result":{"devices":[]}}');
+      output = "";
+    }
+    return { stdout: Buffer.from(output), stderr: "" };
+  };
+  const adapters = new Adapters(() => config, execute, () => 1000);
+  Object.defineProperty(adapters, "scanRoku", { value: async () => [] });
+  try {
+    assert.equal((await adapters.discover()).devices.length, 0);
+    avds = "new_ci_avd\n";
+    assert.equal((await adapters.discover()).devices.length, 0);
+    const results = await Promise.all([adapters.discover(true), adapters.discover(true)]);
+    assert.equal(listings, 2);
+    for (const result of results) {
+      assert.deepEqual(result.diagnostics, []);
+      assert(result.devices.some((device) => device.connection.type === "adb" && device.connection.avdName === "new_ci_avd"));
+    }
+  } finally { await adapters.close(); }
+});

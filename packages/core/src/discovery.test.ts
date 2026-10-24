@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   registerDiscoveredDevices,
+  staleVirtualDevices,
   isDeviceConfigured,
   registrationIssue,
 } from "./discovery";
@@ -224,4 +225,15 @@ test("unverified wireless ADB and stale selections cannot produce a partial conf
     /no longer in discovery/,
   );
   assert.equal(current.devices.length, 0);
+});
+
+test("stale cleanup tolerates unrelated discovery errors only when no removal is needed", () => {
+  const current = empty();
+  current.devices = [device("present")];
+  const found = { ...discovery([device("present")]), diagnostics: ["Apple TV: No module named pyatv"] };
+  assert.deepEqual(staleVirtualDevices(current, found), []);
+  current.devices.push(device("missing"));
+  assert.throws(() => staleVirtualDevices(current, found), /Cannot unregister stale/);
+  assert.deepEqual(staleVirtualDevices(current, { ...found, diagnostics: [] }).map((device) => device.id), ["missing"]);
+  assert.equal(current.devices.length, 2);
 });

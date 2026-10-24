@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { staleVirtualDevices } from "../../../packages/core/src/discovery";
 import { resolveReportRange } from "../../../packages/core/src/reports";
 import { parseArgs } from "node:util";
 import { readFile } from "node:fs/promises";
@@ -363,10 +364,8 @@ try {
       const config = structuredClone(current.config);
       let removed: DeviceConfig[];
       if (v["stale-virtual"]) {
-        const found: { devices: DeviceConfig[]; diagnostics: string[] } = await callOperation("discover", { refresh: true });
-        if (found.diagnostics.length) throw new DeckError("discovery-incomplete", "Cannot unregister stale devices while discovery reports errors.", 409, { diagnostics: found.diagnostics });
-        const present = new Set(found.devices.map((d) => d.id));
-        removed = config.devices.filter((d: DeviceConfig) => d.kind === "virtual" && !present.has(d.id));
+        const found = await callOperation("discover", { refresh: true });
+        removed = staleVirtualDevices(config, found);
       } else if (v.device) {
         const wanted = String(v.device).toLowerCase();
         removed = config.devices.filter((d: DeviceConfig) => [d.id.toLowerCase(), d.name.toLowerCase()].includes(wanted));

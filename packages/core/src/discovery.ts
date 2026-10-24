@@ -1,5 +1,6 @@
 import {
   deviceSchema,
+  DeckError,
   type Config,
   type DeviceConfig,
   type SourceConfig,
@@ -96,4 +97,12 @@ export function registerDiscoveredDevices(
     added.push(device);
   }
   return { config, added };
+}
+
+export function staleVirtualDevices(current: Config, discovery: DiscoveredDevices) {
+  const present = new Set(discovery.devices.map((device) => device.id));
+  const missing = current.devices.filter((device) => device.kind === "virtual" && !present.has(device.id));
+  if (missing.length && discovery.diagnostics.length)
+    throw new DeckError("discovery-incomplete", "Cannot unregister stale devices while discovery reports errors.", 409, { diagnostics: discovery.diagnostics });
+  return missing;
 }

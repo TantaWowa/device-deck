@@ -63,7 +63,6 @@ export class Adapters {
   private discoveryPending?: Promise<Discovery>;
   private discoveryResult?: Discovery;
   private discoveryAt = -Infinity;
-  private discoveryStarted = -Infinity;
   private discoveryCounters = { requests: 0, hits: 0, shared: 0, starts: 0 };
   private inputModes = new Map<string, "touch" | "remote">();
   constructor(private getConfig: () => Config, private execute = run, private now: () => number = Date.now) {
@@ -115,12 +114,11 @@ export class Adapters {
   async discover(force = false): Promise<Discovery> {
     this.discoveryCounters.requests++;
     if (this.discoveryPending) { this.discoveryCounters.shared++; return structuredClone(await this.discoveryPending); }
-    if (this.discoveryResult && (this.now() - this.discoveryStarted < 5000 || (!force && this.now() - this.discoveryAt < 30_000))) {
+    if (this.discoveryResult && !force && this.now() - this.discoveryAt < 30_000) {
       this.discoveryCounters.hits++;
       return structuredClone(this.discoveryResult);
     }
     this.discoveryCounters.starts++;
-    this.discoveryStarted = this.now();
     const signal = AbortSignal.timeout(30_000);
     const execute: typeof run = (command, args, timeout, options) => this.probes.run(command, args, timeout, { ...options, signal });
     this.discoveryPending = this.discoverNow(force, execute).then((result) => {
