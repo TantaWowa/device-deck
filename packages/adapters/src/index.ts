@@ -318,18 +318,21 @@ export class Adapters {
             "--quiet",
           ]);
           const data = JSON.parse(await readFile(file, "utf8"));
-          for (const d of data.result?.devices || [])
+          for (const d of data.result?.devices || []) {
+            const hardware = d.properties?.hardware || d.hardwareProperties;
+            if (hardware?.reality === "simulated" || d.visibilityClass === "simulators") continue;
             devices.push({
               id: uid("apple", d.identifier),
-              name: d.deviceProperties?.name || "Apple device",
-              model: d.hardwareProperties?.marketingName || d.hardwareProperties?.productType || "",
-              inputMode: appleHardwareInputMode(d.hardwareProperties),
+              name: d.properties?.state?.name || d.deviceProperties?.name || "Apple device",
+              model: hardware?.marketingName || hardware?.productType || "",
+              inputMode: appleHardwareInputMode(hardware),
               platform: "Apple",
               kind: "physical",
               visibility: "local",
               connection: { type: "apple-device", udid: d.identifier },
               captureSourceId: null,
             });
+          }
         } finally {
           await rm(dir, { recursive: true, force: true });
         }
