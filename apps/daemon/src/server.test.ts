@@ -1,6 +1,7 @@
 import test from "node:test";
 import { licensedManager } from "../../../tests/licensing";
 import { LocalDevelopmentLicense } from "../../../scripts/local-license";
+import { LicenseManager } from "../../../packages/licensing/src";
 import assert from "node:assert/strict";
 import http from "node:http";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -133,7 +134,7 @@ async function setup(
     undefined,
     adapters,
     capture,
-    licensed?.manager,
+    licensed?.manager ?? new LicenseManager(dir),
     groupReadiness,
   );
   await deck.init();

@@ -49,8 +49,10 @@ try {
   assert.equal(inventory.sessions.filter((session) => session.state !== "closed").length, 0);
   assert.equal(inventory.recordings.length, 0);
   assert.equal(inventory.mode, "local");
-  assert.equal(inventory.license.tier, "free");
-  assert.equal(inventory.license.state, "free");
+  assert.equal(inventory.license.tier, "enterprise");
+  assert.equal(inventory.license.state, "active");
+  assert.equal(inventory.license.maxSessions, null);
+  assert.match(inventory.license.message, /^Monetization disabled\./);
   assert.equal(inventory.license.configured, true);
   const endpoint = JSON.parse(await readFile(path.join(directory, "endpoint.json"), "utf8"));
   const response = await fetch(`http://127.0.0.1:${endpoint.port}/`);
@@ -67,9 +69,24 @@ try {
     try { await exec("/bin/sh", [script, "package", "/", payload]); break; }
     catch (error) { if (i === 29) throw error; await new Promise((resolve) => setTimeout(resolve, 100)); }
   }
+  env.DEVICE_DECK_HEADLESS = "1";
   assert.equal(await readFile(path.join(directory, "config.json"), "utf8"), before);
+  const licensedConfig = JSON.stringify({ ...JSON.parse(before), monetization: { enabled: true } }, null, 2) + "\n";
+  await writeFile(path.join(directory, "config.json"), licensedConfig);
+  await command(["start"]);
+  started = true;
+  const headlessHealth = JSON.parse((await command(["status", "--json"])).stdout);
+  const headlessProcess = await exec("/bin/ps", ["-p", String(headlessHealth.pid), "-o", "comm="]);
+  assert.equal(headlessProcess.stdout.trim(), path.join(app, "Contents/Resources/runtime/bin/node"));
+  const headlessInventory = JSON.parse((await command(["call", "inventory", "{}"])) .stdout);
+  assert.equal(headlessInventory.license.tier, "free");
+  assert.equal(headlessInventory.license.state, "free");
+  assert.equal(headlessInventory.license.configured, true);
+  await command(["stop"]);
+  started = false;
+  assert.equal(await readFile(path.join(directory, "config.json"), "utf8"), licensedConfig);
   console.log(JSON.stringify({ application: app, version: distribution.version, mode: distribution.mode,
-    signing: distribution.signing, media: distribution.media, checks: [...(values.package ? ["installer checksum, signed payload and preflight contents"] : []), "relocatable Mach-O closure", "CLI with no Node on PATH", "LaunchServices app-owned daemon", "isolated real Free inventory with configured Keygen trust", "bundled web assets", "upgrade refuses running app", "clean shutdown preserves config"] }, null, 2));
+    signing: distribution.signing, media: distribution.media, checks: [...(values.package ? ["installer checksum, signed payload and preflight contents"] : []), "relocatable Mach-O closure", "CLI with no Node on PATH", "LaunchServices app-owned daemon", "monetization disabled by default", "bundled web assets", "headless bundled runtime with config-enabled Keygen Free entitlement", "upgrade refuses running app", "clean shutdown preserves config"] }, null, 2));
 } finally {
   if (started) await command(["stop"]).catch(() => {});
   await rm(directory, { recursive: true, force: true });

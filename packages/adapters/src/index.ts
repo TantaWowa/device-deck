@@ -1,5 +1,5 @@
 import { ANDROID_GESTURES, startScrcpy } from "./scrcpy";
-import { androidBootReady, androidFeatures, avdInputMode } from "./android-state";
+import { androidAdbPort, androidBootReady, androidFeatures, avdInputMode, avdProfile } from "./android-state";
 import { IOS_GESTURES, startIdbInteractive } from "./interactive";
 import type { InteractiveSource, VideoProfile } from "../../core/src/live";
 import { androidKeys, rokuKeys, hidKeys, iosHardwareKeys, deviceInputMode } from "../../core/src/remote";
@@ -143,10 +143,11 @@ export class Adapters {
     };
     await Promise.all([
       safe("Android", async () => {
+        const defaultPort = androidAdbPort();
         if (!(await available(this.tool("adb")))) return;
         for (const port of [
           ...new Set([
-            5037,
+            defaultPort,
             ...this.getConfig().devices.flatMap((d) =>
               d.connection.type === "adb" ? [d.connection.port] : [],
             ),
@@ -193,10 +194,12 @@ export class Adapters {
             if (devices.some((d) => d.id === id)) continue;
             const features = state === "device" ? (await execute(this.tool("adb"), ["-P", String(port), "-s", serial, "shell", "pm", "list", "features"], 5000).catch(() => ({ stdout: Buffer.from("") }))).stdout.toString() : "";
             const inputMode = /^feature:/m.test(features) ? androidFeatures(features).inputMode : avdName ? await avdInputMode(avdName) : undefined;
+            const profile = avdName ? await avdProfile(avdName) : {};
             devices.push({
               id,
               name: model,
-              model,
+              model: profile.model || model,
+              ...(profile.runtime ? { runtime: profile.runtime } : {}),
               ...(inputMode ? { inputMode } : {}),
               platform: "Android",
               kind: serial.startsWith("emulator-") ? "virtual" : "physical",
@@ -227,7 +230,7 @@ export class Adapters {
               const configuredPort =
                 configured?.connection.type === "adb"
                   ? configured.connection.port
-                  : 5037;
+                  : defaultPort;
               if (
                 configuredPort !== port ||
                 devices.some(
@@ -239,10 +242,12 @@ export class Adapters {
                 continue;
               const id = uid("avd", avdName),
                 nativeId = `native-${id}`;
+              const profile = await avdProfile(avdName);
               devices.push({
                 id,
                 name: avdName,
-                model: "Android virtual device",
+                model: profile.model || "Android virtual device",
+                ...(profile.runtime ? { runtime: profile.runtime } : {}),
                 inputMode: configured?.inputMode || await avdInputMode(avdName) || "touch",
                 platform: "Android",
                 kind: "virtual",
@@ -275,13 +280,14 @@ export class Adapters {
         const data = JSON.parse(result.stdout.toString());
         for (const [runtime, list] of Object.entries(data.devices || {})) {
           if (!/iOS|tvOS/.test(runtime)) continue;
-          for (const d of list as { udid: string; name: string }[]) {
+          for (const d of list as { udid: string; name: string; deviceTypeIdentifier?: string }[]) {
             const id = uid("sim", d.udid),
               sourceId = `native-${id}`;
             devices.push({
               id,
               name: d.name,
-              model: runtime.split(".").at(-1) || "",
+              model: d.deviceTypeIdentifier?.split(".").at(-1) || runtime.split(".").at(-1) || "",
+              runtime: runtime.split(".").at(-1) || "",
               platform: "Apple",
               kind: "virtual",
               visibility: "local",

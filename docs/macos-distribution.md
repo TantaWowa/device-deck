@@ -51,6 +51,16 @@ If your development deck is already using the default port, stop it before openi
 
 The app owns the daemon as the signed-in user. The package installer is the only component requiring administrator privileges. Closing the web tab leaves the daemon available. **Quit Device Deck** from its menu bar refuses active reservations or recordings; finish those first. The CLI `devdeck stop` is an explicit request to stop and finalize the service. **Check for updates** in the menu bar reports an available version; `devdeck update download` retrieves its verified installer without installing it over an active app.
 
+## CI account startup
+
+For simulator/emulator automation without a GUI login, set
+`DEVICE_DECK_HEADLESS=1` before calling the installed `devdeck start`. This starts
+the bundled Node daemon directly as the invoking account. Keep its
+`DEVICE_DECK_HOME`, AVD home and ADB server separate from desktop users. Use the
+existing account’s runner startup script to start it; `devdeck install` remains
+the desktop login-service path. Headless mode does not provide the app’s Camera
+permission attribution and is intended for virtual-device automation.
+
 ## Optional platform dependencies
 
 | Capability | Setup |
