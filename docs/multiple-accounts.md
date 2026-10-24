@@ -29,7 +29,8 @@ authenticated browser access. Bare localhost URLs may require authentication.
 
 For non-GUI runner startup, set `DEVICE_DECK_HEADLESS=1` and invoke the packaged
 `Device Deck.app/Contents/MacOS/devdeck start`. This uses the bundled Node runtime
-without LaunchServices. It proves virtual-device operation, not USB capture
+without LaunchServices. Android launches in this mode use software rendering
+and no emulator window, so the runner needs no GUI login. This does not grant USB capture
 permissions or camera attribution under a headless account.
 
 For Android, give CI a separate `ANDROID_ADB_SERVER_PORT` and private

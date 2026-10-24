@@ -530,6 +530,8 @@ export class AndroidEmulators {
         [
           "-avd",
           c.avdName,
+          ...(process.env.DEVICE_DECK_HEADLESS === "1"
+            ? ["-no-window", "-gpu", "software", "-feature", "-Vulkan"] : []),
           ...(launchOwnership
             ? [
                 "-crash-report-mode",
