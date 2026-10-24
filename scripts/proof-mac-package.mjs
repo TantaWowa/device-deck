@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import { parseArgs } from "node:util";
@@ -9,14 +9,14 @@ import { digest, preinstall, verifyMachOClosure, walk } from "./distribution/pac
 
 const { values } = parseArgs({ options: { app: { type: "string" }, package: { type: "string" } } });
 if (!values.app) throw new Error("Use --app PATH/Device Deck.app; this proof never installs into /Applications.");
-const app = path.resolve(values.app), cli = path.join(app, "Contents/MacOS/devdeck");
+const app = await realpath(values.app), cli = path.join(app, "Contents/MacOS/devdeck");
 if (app === "/Applications/Device Deck.app") throw new Error("Use the staged app, not an installed application.");
 const directory = await mkdtemp(path.join(os.tmpdir(), "deck-packaged-proof-"));
 const env = { HOME: os.homedir(), USER: process.env.USER, TMPDIR: process.env.TMPDIR || os.tmpdir(),
   PATH: "/usr/bin:/bin", DEVICE_DECK_HOME: directory, DEVICE_DECK_PORT: "0" };
 const exec = promisify(execFile);
 const command = (args) => exec(cli, args, { env, timeout: 90000, maxBuffer: 4 * 1024 * 1024 });
-let started = false;
+let started = false, passed = false;
 try {
   const distribution = JSON.parse(await readFile(path.join(app, "Contents/Resources/distribution.json"), "utf8"));
   if (values.package) {
@@ -87,7 +87,9 @@ try {
   assert.equal(await readFile(path.join(directory, "config.json"), "utf8"), licensedConfig);
   console.log(JSON.stringify({ application: app, version: distribution.version, mode: distribution.mode,
     signing: distribution.signing, media: distribution.media, checks: [...(values.package ? ["installer checksum, signed payload and preflight contents"] : []), "relocatable Mach-O closure", "CLI with no Node on PATH", "LaunchServices app-owned daemon", "monetization disabled by default", "bundled web assets", "headless bundled runtime with config-enabled Keygen Free entitlement", "upgrade refuses running app", "clean shutdown preserves config"] }, null, 2));
+  passed = true;
 } finally {
   if (started) await command(["stop"]).catch(() => {});
-  await rm(directory, { recursive: true, force: true });
+  if (passed) await rm(directory, { recursive: true, force: true });
+  else console.error(`Package proof evidence retained: ${directory}`);
 }
