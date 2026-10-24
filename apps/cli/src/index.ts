@@ -31,6 +31,7 @@ import path from "node:path";
 import { lifecycle } from "./lifecycle";
 import { tailscaleCommand, tailscaleBrowserUrl } from "./tailscale";
 import { networkCommand, pairCommand } from "./network";
+import { discoverRegistration } from "./registration";
 import { pick, parseSelector } from "./selection";
 import { selectFeeds, feedQuery } from "./feeds";
 import { readGroupCredential, readReservationManifest, releaseGroupCredential, reservationCommandOutput, prepareGroupCredential } from "./reservation-files";
@@ -335,13 +336,7 @@ try {
     else if (command === "register") {
       const wanted = { udid: v.udid ? String(v.udid).toLowerCase() : undefined, avd: v.avd ? String(v.avd) : undefined, serial: v.serial ? String(v.serial) : undefined };
       if (!wanted.udid && !wanted.avd && !wanted.serial) throw new DeckError("arguments", "Supply --udid, --avd or --serial.", 400);
-      const found: { devices: DeviceConfig[]; sources: { id: string; name: string; kind: string; deviceId?: string }[]; diagnostics: string[] } =
-        await callOperation("discover", { refresh: true });
-      const match = found.devices.find((d) =>
-        (wanted.udid && (d.connection.type === "simulator" || d.connection.type === "apple-device") && d.connection.udid.toLowerCase() === wanted.udid) ||
-        (wanted.avd && d.connection.type === "adb" && d.connection.avdName === wanted.avd) ||
-        (wanted.serial && d.connection.type === "adb" && d.connection.serial === wanted.serial));
-      if (!match) throw new DeckError("no-match", "Discovery found no device with that identifier.", 404, { diagnostics: found.diagnostics });
+      const { found, match } = await discoverRegistration(wanted);
       const current = await callOperation("config.get");
       const config = structuredClone(current.config);
       const tags = typeof v.tags === "string" ? v.tags.split(",").map((tag) => tag.trim()).filter(Boolean) : [];
