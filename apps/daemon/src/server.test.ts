@@ -77,6 +77,7 @@ class TestAdapters extends Adapters {
 }
 class TestCapture extends CaptureEngine {
   verifiedDevice?: DeviceConfig;
+  localPath?: string;
   previewed: string[] = [];
   async preview(_device: DeviceConfig | null, source: { id: string }) {
     this.previewed.push(source.id);
@@ -99,6 +100,7 @@ class TestCapture extends CaptureEngine {
     return {
       id,
       device: this.verifiedDevice,
+      localPath: this.localPath,
       deviceId: d.id,
       path: file,
       startedAt: Date.now(),
@@ -2058,6 +2060,7 @@ test("Android reservations persist the verified AVD and reject registered aliase
 test("recorder recovery stores the capture engine's verified AVD target instead of its unresolved configuration", async () => {
   const { deck, capture, cleanup } = await setup();
   try {
+    capture.localPath = "/tmp/device-deck-recording-fixture/recording.mp4";
     capture.verifiedDevice = {
       ...deck.config.config.devices[0],
       connection: {
@@ -2074,6 +2077,7 @@ test("recorder recovery stores the capture engine's verified AVD target instead 
     };
     await deck.execute("recordings.start", lease);
     assert.deepEqual(deck.store.workers()[0].device, capture.verifiedDevice);
+    assert.equal(deck.store.workers()[0].localPath, capture.localPath);
     capture.resolveStop = () => {};
     await deck.execute("sessions.release", lease);
     assert.equal(deck.store.workers().length, 0);

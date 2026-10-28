@@ -26,3 +26,37 @@ devdeck call devices.simulator '{"deviceId":"YOUR_CONFIGURED_SIMULATOR_ID","acti
 ```
 
 The MCP tool is `devices_simulator`. Successful responses include `deviceId`, `action`, `state` (`booted` or `shutdown`) and `changed`; Android launch also returns its resolved `serial`. Repeating launch does not reboot an already running virtual device, and repeating close on a stopped device succeeds without another shutdown. Apple launch also attempts to bring its Simulator window forward. If only that presentation step fails, the successful response includes a `warning`; simulator lifecycle and readiness remain successful.
+
+## Capture while the Mac is locked
+
+A macOS desktop-control failure does not establish that simulator capture or input
+is unavailable. Keep the existing reservation and try the device transport first:
+Device Deck screenshots and recordings, `idb` accessibility/input, and `simctl io`
+operate on the simulator rather than its macOS window. Do not ask for an unlock
+solely because desktop automation cannot inspect Simulator or QuickTime.
+
+Simulator recordings are written to a private temporary directory, then copied to
+the configured capture library after the recorder exits. This accommodates
+CoreSimulator destinations that reject direct writes, including external-volume
+capture directories. Startup failure removes the temporary directory; daemon
+restart recovery stops the owned recorder and preserves its finalized recording
+without replacing an existing capture. Interrupted captures remain labelled as such.
+
+For an older installation that fails with `NSCocoaErrorDomain 513`, test a unique
+file under the account's temporary directory before diagnosing a locked desktop.
+Use the reserved UDID: `xcrun simctl io UDID screenshot /tmp/UNIQUE.png` or
+`xcrun simctl io UDID recordVideo --codec=h264 /tmp/UNIQUE.mp4`. Add
+`--display=external` for tvOS. Stop video with SIGINT, wait for finalization, then
+copy the file to the evidence directory. Never overwrite an existing capture.
+
+Validate the saved media with `ffprobe`; extract a frame with
+`ffmpeg -i recording.mp4 -frames:v 1 frame.png` and inspect it directly. A successful
+command or a nonempty file alone does not establish usable visual evidence.
+Static native recordings can emit few frames; inspect their decoded content.
+Opening QuickTime is unnecessary for this verification.
+
+Lock state, login state, simulator readiness, input capability and capture-folder
+permissions are separate observations. The owning macOS account still needs its
+supported logged-in simulator environment. If a direct operation fails, retain
+its exact command/error, try a supported alternative, and report only the blocked
+journey. Do not bypass authentication, switch accounts or unlock the Mac automatically.
