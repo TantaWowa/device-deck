@@ -1,6 +1,7 @@
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, stat, rm, readFile } from "node:fs/promises";
+import { mkdir, stat, rm, readFile, copyFile, rmdir } from "node:fs/promises";
+import { constants } from "node:fs";
 import { performance } from "node:perf_hooks";
 import {
   ConfigStore,
@@ -1908,6 +1909,7 @@ export class DeckService {
         device: handle.device || d,
         remotePid: handle.remotePid,
         remotePath: handle.remotePath,
+        localPath: handle.localPath,
       });
       const limit = Math.min(
         this.config.config.settings.maxRecordingMinutes * 60000,
@@ -2223,7 +2225,7 @@ export class DeckService {
       worker.device.connection.avdName
     )
       worker.device = await this.adapters.verifyIdentity(worker.device);
-    const needle = worker.remotePath || worker.path;
+    const needle = worker.remotePath || worker.localPath || worker.path;
     if (
       worker.remotePath &&
       !worker.remotePid &&
@@ -2340,6 +2342,17 @@ export class DeckService {
             );
         }
       }
+    }
+    if (worker.localPath && worker.device?.connection.type === "simulator") {
+      try {
+        await copyFile(worker.localPath, worker.path, constants.COPYFILE_EXCL);
+      } catch (error) {
+        if (!["ENOENT", "EEXIST"].includes((error as NodeJS.ErrnoException).code || "")) throw error;
+      }
+      await rm(worker.localPath, { force: true });
+      await rmdir(path.dirname(worker.localPath)).catch((error: NodeJS.ErrnoException) => {
+        if (error.code !== "ENOENT") throw error;
+      });
     }
     this.store.clearWorker(worker.id);
   }

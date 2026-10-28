@@ -1,5 +1,7 @@
 import { EventEmitter } from "node:events";
-import { writeFile, readFile, mkdir, stat, rename, rm } from "node:fs/promises";
+import { writeFile, readFile, mkdir, mkdtemp, copyFile, stat, rename, rm } from "node:fs/promises";
+import { constants } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import type { H264Frame, LiveVideoSource, VideoProfile } from "../../core/src/live";
@@ -30,6 +32,7 @@ export type RecordingHandle = {
   pid?: number;
   remotePid?: string;
   remotePath?: string;
+  localPath?: string;
   ended: Promise<string | undefined>;
   stop: () => Promise<{
     duration: number;
@@ -370,6 +373,7 @@ export class CaptureEngine {
       pid?: number;
       remotePid?: string;
       remotePath?: string;
+      localPath?: string;
     }) => void,
   ): Promise<RecordingHandle> {
     d = await this.adapters.verifyIdentity(d);
@@ -380,7 +384,8 @@ export class CaptureEngine {
     let requestedStop = false,
       interruption: string | undefined,
       remotePid: string | undefined,
-      remotePath: string | undefined;
+      remotePath: string | undefined,
+      localPath: string | undefined;
     let startedAt = Date.now(),
       startedMono = performance.now();
     let sourceStopped: (() => void) | undefined;
@@ -448,6 +453,9 @@ export class CaptureEngine {
         throw e;
       }
     } else if (d.connection.type === "simulator") {
+      const directory = await mkdtemp(path.join(os.tmpdir(), "device-deck-recording-"));
+      const recording = path.join(directory, "recording.mp4");
+      localPath = recording;
       handle = start("xcrun", [
         "simctl",
         "io",
@@ -455,10 +463,25 @@ export class CaptureEngine {
         "recordVideo",
         "--codec=h264",
         ...(d.connection.os === "tvos" ? ["--display=external"] : []),
-        file,
+        recording,
       ]);
-      onWorker?.({ pid: handle.child.pid, device: d });
-      await ready(handle, /Recording started/i, 30000);
+      try {
+        onWorker?.({ pid: handle.child.pid, device: d, localPath });
+        await ready(handle, /Recording started/i, 30000);
+      } catch (error) {
+        await stop(handle);
+        await rm(directory, { recursive: true, force: true });
+        throw error;
+      }
+      finishNative = async () => {
+        try {
+          handle.child.stdin.end();
+          await stop(handle);
+          await copyFile(recording, file, constants.COPYFILE_EXCL);
+        } finally {
+          await rm(directory, { recursive: true, force: true });
+        }
+      };
       startedAt = Date.now();
       startedMono = performance.now();
     } else if (d.connection.type === "adb") {
@@ -563,6 +586,7 @@ export class CaptureEngine {
       pid: handle.child.pid,
       remotePid,
       remotePath,
+      localPath,
       ended,
       stop: () =>
         (final ??= (async () => {
