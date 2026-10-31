@@ -40,6 +40,12 @@ Remote requests must arrive over the local proxy connection for that exact confi
 
 When Tailscale access is enabled, local processes that can reach the loopback listener are trusted. They can impersonate Serve, including processes run by another OS user; this does not provide per-OS-user isolation. This release has no per-device user roles; the separate portal provides an account-owned machine registry. Shared visibility is a label. Enabling Tailscale grants full daemon access to the configured users.
 
+## Physical iOS input
+
+`packages/adapters/src/webdriveragent.ts` owns the physical iPhone/iPad WebDriverAgent protocol and each USB-only `iproxy` child. The optional `apple-device.webDriverAgent` configuration enables this path. `Adapters` resolves the configured Xcode identifier to a physical hardware UDID before starting a forward. The helper remains an external, signed test runner; Device Deck does not sign or install it.
+
+Touch controllers own one WebDriverAgent session and expose completed gestures through the existing `InteractiveSource`, reservation, authorization and `ControlStream` contracts. Shutdown drains an already-dispatched bounded gesture, deletes only that session and stops its owned forward. Screen viewers use separate read-only forwards and the existing shared screenshot-to-H.264 pipeline at up to two frames per second. Physical iOS controllers select that native screen regardless of an assigned HDMI source; native WebDriverAgent recording is unavailable. See [setup and limits](physical-ios.md).
+
 ## Connected Decks
 
 `DeckConnections` owns named outgoing connections and hashed incoming access grants

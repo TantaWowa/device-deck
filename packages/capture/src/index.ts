@@ -7,6 +7,7 @@ import { performance } from "node:perf_hooks";
 import type { H264Frame, LiveVideoSource, VideoProfile } from "../../core/src/live";
 import { encodeLiveImages, type ImageVideoInput } from "./video";
 import { startIosSimulatorVideo } from "./ios-video";
+import { wdaScreenshot } from "../../adapters/src/webdriveragent";
 export { H264Packetizer } from "./h264";
 import {
   type DeviceConfig,
@@ -224,18 +225,27 @@ export class CaptureEngine {
       } catch (e) { await release(true); throw e; }
     }
     if (!d) fail("source-missing", "A native screen needs its configured device.", 404);
+    // Retain one exact USB forward throughout this physical iOS viewer. Reading
+    // images never creates or takes over a WebDriverAgent automation session.
+    const apple = d.connection.type === "apple-device" && d.connection.webDriverAgent
+      ? await this.adapters.startAppleScreen(d) : undefined;
+    const capture = () => apple ? wdaScreenshot(apple) : this.preview(d, s, 0);
     // Native screenshot adapters are a compatibility fallback. Their actual
     // sampling rate remains explicit; they are never advertised as 30fps video.
-    const first = await this.preview(d, s, 0), events = new EventEmitter();
+    let first: Buffer;
+    try { first = await capture(); }
+    catch (error) { await apple?.close(); throw error; }
+    const events = new EventEmitter();
     let closed = false, timer: ReturnType<typeof setTimeout> | undefined;
     const sample = async () => {
       const started = performance.now();
       try {
-        const frame = await this.preview(d, s, 0);
+        const frame = await capture();
         if (!closed) events.emit("frame", frame);
       } catch (e) {
         if (!closed) events.emit("closed", (e as Error).message);
         closed = true;
+        await apple?.close();
       }
       if (!closed) timer = setTimeout(() => { void sample(); }, Math.max(0, 500 - (performance.now() - started)));
     };
@@ -245,12 +255,13 @@ export class CaptureEngine {
       fps: 2,
       onFrame: (listener) => { events.on("frame", listener); return () => { events.off("frame", listener); }; },
       onClose: (listener) => { events.on("closed", listener); return () => { events.off("closed", listener); }; },
-      close: async () => { closed = true; clearTimeout(timer); events.removeAllListeners(); },
+      close: async () => { closed = true; clearTimeout(timer); events.removeAllListeners(); await apple?.close(); },
     };
   }
   async live(d: DeviceConfig | null, s: SourceConfig, profile: VideoProfile = "balanced"): Promise<LiveVideoSource> {
     const nativeIos = s.kind === "native" && d?.connection.type === "simulator" && d.connection.os === "ios";
-    const key = `${s.kind}:${s.uniqueId ?? d?.id ?? s.id}:${profile}${nativeIos ? `:${JSON.stringify(d.connection)}:${this.adapters.tool("idb")}:${this.adapters.tool("ffmpeg")}` : ""}`;
+    const physicalIos = s.kind === "native" && d?.connection.type === "apple-device" && d.connection.webDriverAgent;
+    const key = `${s.kind}:${s.uniqueId ?? d?.id ?? s.id}:${profile}${nativeIos || physicalIos ? `:${JSON.stringify(d!.connection)}:${JSON.stringify(this.adapters.tool(nativeIos ? "idb" : "iproxy"))}:${this.adapters.tool("ffmpeg")}` : ""}`;
     let shared = this.liveStreams.get(key);
     if (!shared) {
       shared = {

@@ -80,3 +80,31 @@ test("discovery excludes devicectl simulator rows while retaining physical devic
     assert.equal(found.devices.find((device) => "udid" in device.connection && device.connection.udid === "sim-modern")?.kind, "virtual");
   } finally { await adapters.close(); }
 });
+
+test("only connected physical iOS devices configured with an available iproxy advertise WDA gestures and native snapshots", async () => {
+  const device = deviceSchema.parse({ id: "phone", name: "Phone", platform: "Apple", kind: "physical", captureSourceId: "screen",
+    connection: { type: "apple-device", udid: "physical", webDriverAgent: {} } });
+  const config = configSchema.parse({ schemaVersion: 1, settings: { folder: "/tmp/captures" }, tools: { iproxy: process.execPath, ffmpeg: process.execPath, ffprobe: process.execPath },
+    devices: [device], sources: [{ id: "screen", name: "iPhone screen", kind: "native", deviceId: device.id }] });
+  let platform = "iOS", connected = true;
+  const execute: typeof run = async (_command, args) => {
+    await writeFile(args[args.indexOf("--json-output") + 1], JSON.stringify({ result: { devices: [{ identifier: "physical",
+      hardwareProperties: { reality: "physical", platform, udid: "00008110-0012345678901234" },
+      connectionProperties: { tunnelState: connected ? "connected" : "disconnected" } }] } }));
+    return { stdout: Buffer.alloc(0), stderr: "" };
+  };
+  const adapters = new Adapters(() => config, execute);
+  try {
+    const phone = await adapters.inspect(device);
+    assert.deepEqual(phone.gestureCapabilities, ["tap", "swipe", "longPress"]);
+    assert.deepEqual(phone.capabilities, ["touch", "preview", "screenshot"]);
+    connected = false;
+    assert.deepEqual((await adapters.inspect(device)).capabilities, []);
+    connected = true; platform = "tvOS";
+    assert.deepEqual((await adapters.inspect(device)).capabilities, []);
+    platform = "iOS"; config.tools.iproxy = "/fixture/missing-iproxy";
+    const missing = await adapters.inspect(device);
+    assert.deepEqual(missing.capabilities, []);
+    assert.match(missing.healthDetail, /needs iproxy/);
+  } finally { await adapters.close(); }
+});

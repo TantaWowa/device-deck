@@ -141,6 +141,7 @@ For scripts, `reserve --json` returns a session ID and secret lease token. Every
 | tvOS simulator                        | idb keys/text | Limited-refresh video from simctl screenshots; native recording | Booted simulator, Xcode; idb client and companion for input |
 | USB capture only                       | No remote input                     | USB preview, screenshot, recording | Stable capture card identity                                 |
 | Physical Apple TV                      | Companion keys and text             | Explicit USB input                 | pyatv and PIN pairing                                        |
+| Physical iPhone / iPad with WebDriverAgent | Tap, swipe and long press over USB | Native snapshots at up to 2 fps; assigned USB capture | Requires a signed helper and iproxy; [setup](docs/physical-ios.md) |
 | Other physical Apple devices           | Discovery only                      | No native adapter                  | No unsupported operation is advertised                       |
 
 Native Android recordings stop at 175 seconds, below screenrecord's 180-second limit. Other sources use the configured limit. Live previews use browser video elements. Android touch includes continuous drag and multitouch when advertised; iOS simulators support completed gestures over native H.264 video. An explicit view-only snapshot fallback is available when video cannot connect. USB preview and recording share one capture-helper stream selected by stable AVFoundation unique ID, never enumeration index. Capture video is silent in this release.

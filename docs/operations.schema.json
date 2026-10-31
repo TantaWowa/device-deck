@@ -115,6 +115,16 @@
             "maximum": 65535,
             "default": 47831
           },
+          "monetization": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": false
+              }
+            },
+            "additionalProperties": false
+          },
           "tailscale": {
             "type": "object",
             "properties": {
@@ -228,6 +238,10 @@
                   "type": "string",
                   "maxLength": 256,
                   "default": ""
+                },
+                "runtime": {
+                  "type": "string",
+                  "maxLength": 256
                 },
                 "tags": {
                   "type": "array",
@@ -389,6 +403,18 @@
                         "udid": {
                           "type": "string",
                           "minLength": 1
+                        },
+                        "webDriverAgent": {
+                          "type": "object",
+                          "properties": {
+                            "port": {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 65535,
+                              "default": 8100
+                            }
+                          },
+                          "additionalProperties": false
                         }
                       },
                       "required": [
@@ -543,6 +569,9 @@
               "idb": {
                 "type": "string"
               },
+              "iproxy": {
+                "type": "string"
+              },
               "python": {
                 "type": "string"
               }
@@ -625,6 +654,16 @@
               "tv",
               "other"
             ]
+          },
+          "model": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "runtime": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
           },
           "tags": {
             "type": "array",
@@ -752,6 +791,16 @@
                     "tv",
                     "other"
                   ]
+                },
+                "model": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                "runtime": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
                 },
                 "tags": {
                   "type": "array",

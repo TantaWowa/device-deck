@@ -4,6 +4,22 @@ import { mkdtemp, readFile, writeFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { ConfigStore, validateConfig } from "./index";
+test("physical iOS native capture requires WebDriverAgent configuration and validates its device port", () => {
+  const device = { id: "iphone", name: "iPhone", platform: "Apple", kind: "physical", connection: { type: "apple-device", udid: "core-device-id" }, captureSourceId: "screen" };
+  const base = { schemaVersion: 1, settings: { folder: "./captures" }, devices: [device], sources: [{ id: "screen", name: "iPhone screen", kind: "native", deviceId: "iphone" }] };
+  assert.throws(() => validateConfig(base), /no native capture adapter/);
+  const configured = { ...base, devices: [{ ...device, connection: { ...device.connection, webDriverAgent: {} } }] };
+  const parsed = validateConfig(configured).devices[0].connection;
+  assert.equal(parsed.type, "apple-device");
+  assert(parsed.type === "apple-device");
+  assert.equal(parsed.webDriverAgent?.port, 8100);
+  for (const port of [0, 65536, 1.5]) assert.throws(() => validateConfig({ ...base,
+    devices: [{ ...device, connection: { ...device.connection, webDriverAgent: { port } } }],
+  }));
+  const legacy = validateConfig({ ...base, devices: [{ ...device, captureSourceId: null }], sources: [] });
+  assert(legacy.devices[0].connection.type === "apple-device");
+  assert.equal(legacy.devices[0].connection.webDriverAgent, undefined);
+});
 test("two concurrent saves with one revision have exactly one winner", async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "deck-config-"));
   const store = new ConfigStore(path.join(dir, "config.json"));

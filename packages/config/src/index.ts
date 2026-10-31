@@ -127,7 +127,8 @@ export function validateConfig(value: unknown) {
         fail("source-conflict", "A native screen belongs to its own device.");
       if (
         s.kind === "native" &&
-        !["adb", "simulator"].includes(d.connection.type)
+        !(["adb", "simulator"].includes(d.connection.type) ||
+          d.connection.type === "apple-device" && d.connection.webDriverAgent)
       )
         fail("invalid-config", "This device has no native capture adapter.");
     }

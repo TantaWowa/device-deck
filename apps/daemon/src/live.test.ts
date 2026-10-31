@@ -100,6 +100,37 @@ test("failed native iOS video startup releases gesture input and reports the fai
   } finally { await peer.close(); await streams.close(); }
 });
 
+test("physical iOS touch uses the phone's native snapshots instead of its assigned HDMI source", { timeout: 10000 }, async () => {
+  const ios: DeviceConfig = { ...device, platform: "Apple", connection: { type: "apple-device", udid: "physical", webDriverAgent: { port: 8100 } } };
+  let videoClosed = 0, inputClosed = 0, gestures = 0;
+  const streams = new LiveStreams({
+    resolve: () => ({ device: ios, source: { id: "hdmi", kind: "usb", name: "External input", uniqueId: "fixture" }, validate() {} }),
+    video: async (target) => {
+      assert.equal(target.source?.kind, "native");
+      assert.equal(target.source?.deviceId, ios.id);
+      return { width: 390, height: 844, fps: 2, onFrame: () => () => {}, onClose: () => () => {}, close: async () => { videoClosed++; } };
+    },
+    interactive: async () => ({ width: 1170, height: 2532, capabilities: ["tap", "swipe", "longPress"],
+      onFrame: () => () => {}, onClose: () => () => {}, close: async () => { inputClosed++; },
+      pointer: async () => { throw new Error("No continuous iOS input"); }, gesture: async () => { gestures++; } }),
+  });
+  const peer = client();
+  try {
+    peer.addTransceiver("video", { direction: "recvonly" });
+    const channel = peer.createDataChannel("control", { ordered: true });
+    await peer.setLocalDescription(await peer.createOffer());
+    const stream = await streams.open({ deviceId: ios.id, offer: peer.localDescription!.sdp, control: true, ...credentials });
+    assert.equal(stream.mode, "snapshots");
+    assert.deepEqual(stream.capabilities, ["tap", "swipe", "longPress"]);
+    await peer.setRemoteDescription({ type: "answer", sdp: stream.answer });
+    await until(() => channel.readyState === "open");
+    channel.send(JSON.stringify({ type: "gesture", gesture: { type: "tap", x: 195, y: 422, width: 390, height: 844 } }));
+    await until(() => gestures === 1);
+    await streams.closeStream(stream);
+    assert.deepEqual([videoClosed, inputClosed], [1, 1]);
+  } finally { await peer.close(); await streams.close(); }
+});
+
 test("real WebRTC data channel sends a drag before up and lease loss cancels contacts", { timeout: 20000 }, async () => {
   const f = fixture(), peer = client();
   try {

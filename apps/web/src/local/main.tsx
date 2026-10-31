@@ -1503,6 +1503,8 @@ function DeviceEditor({
     [os, setOS] = useState(
       device?.connection.type === "simulator" ? device.connection.os : "ios",
     ),
+    [wdaEnabled, setWdaEnabled] = useState(device?.connection.type === "apple-device" && Boolean(device.connection.webDriverAgent)),
+    [wdaPort, setWdaPort] = useState(device?.connection.type === "apple-device" ? device.connection.webDriverAgent?.port || 8100 : 8100),
     [source, setSource] = useState(device?.captureSourceId || ""),
     [visibility, setVisibility] = useState(device?.visibility || "local"),
     [tags, setTags] = useState((device?.tags || []).join(", ")),
@@ -1533,7 +1535,7 @@ function DeviceEditor({
                       ? { type, host: address, identifier: identity }
                       : type === "capture"
                         ? { type: "capture" }
-                        : { type: "apple-device", udid: address };
+                        : { type: "apple-device", udid: address, ...(wdaEnabled ? { webDriverAgent: { port: wdaPort } } : {}) };
             const native: SourceConfig = {
               id: `native-${id}`,
               name: `${name} native screen`,
@@ -1602,7 +1604,7 @@ function DeviceEditor({
             <option value="simulator">Apple simulator · simctl + idb</option>
             <option value="apple-tv">Apple TV · Companion</option>
             <option value="apple-device">
-              Physical Apple · discovery only
+              Physical iPhone / iPad · WebDriverAgent, or Apple discovery
             </option>
           </select>
         </label>
@@ -1676,6 +1678,23 @@ function DeviceEditor({
             </select>
           </label>
         )}
+        {type === "apple-device" && (
+          <>
+            <label>
+              <input type="checkbox" checked={wdaEnabled} onChange={(e) => {
+                setWdaEnabled(e.target.checked);
+                if (e.target.checked && !source) setSource("native");
+                if (!e.target.checked && (source === "native" || sources.some((s) => s.id === source && s.kind === "native"))) setSource("");
+              }} />
+              Enable iPhone / iPad touch with WebDriverAgent
+            </label>
+            <small>Connect by USB, enable Developer Mode and UI Automation, and keep a signed WebDriverAgent helper running on the device. Install libusbmuxd on this Mac. Touch supports taps, swipes and long presses.</small>
+            {wdaEnabled && <label>
+              WebDriverAgent port on device
+              <input type="number" required min={1} max={65535} value={wdaPort} onChange={(e) => setWdaPort(Number(e.target.value))} />
+            </label>}
+          </>
+        )}
         <label>
           Capture input
           <select
@@ -1684,7 +1703,7 @@ function DeviceEditor({
             onChange={(e) => setSource(e.target.value)}
           >
             <option value="">None · remote only</option>
-            {["adb", "simulator"].includes(type) && (
+            {(["adb", "simulator"].includes(type) || type === "apple-device" && wdaEnabled) && (
               <option value="native">Native screen</option>
             )}
             {sources
@@ -1944,7 +1963,7 @@ function SettingsView({
             </label>
             <h2>Adapter executables</h2>
             {(
-              ["adb", "emulator", "ffmpeg", "ffprobe", "idb", "python"] as const
+              ["adb", "emulator", "ffmpeg", "ffprobe", "idb", "iproxy", "python"] as const
             ).map((tool) => (
               <label key={tool}>
                 {tool}

@@ -20,7 +20,8 @@ TV devices use the feed's **Remote** button for directional keys, Home and text.
 | iOS simulator | Native idb H.264 video; up to 30 fps in High detail | Completed tap, swipe and long press through idb |
 | tvOS simulator | Screenshots sampled up to twice per second, then encoded as video | Existing remote keys/text; no touchscreen gestures |
 | Roku or physical Apple TV | Assigned USB capture | Existing remote keys/text; no touchscreen gestures |
-| Other physical Apple device | No native video adapter | No touch adapter |
+| Physical iPhone or iPad with WebDriverAgent | Device screenshots sampled up to twice per second, then encoded as video | Completed tap, swipe and long press over USB |
+| Physical Apple device without WebDriverAgent | Assigned USB capture, if configured | No touch adapter |
 
 The USB path still uses JPEG frames inside the Mac's shared capture pipeline. The Mac encodes those frames once per active quality profile and distributes compressed video to browsers. Each displayed frame no longer needs a separate browser HTTP request. Recordings and still screenshots retain their existing capture paths.
 
@@ -30,7 +31,7 @@ iOS simulators use `idb video-stream` against the exact configured UDID. The Mac
 
 A read-only browser check of the running iPhone simulator delivered 588×1280 video at 15 fps for five seconds on Balanced. A concurrent Low-bandwidth viewer delivered 294×640 at 10 fps while Balanced continued at 15 fps. The command audit recorded no screenshot calls and confirmed both native capture and encoder processes stopped after their last viewer closed. Evidence is saved locally under `outputs/ios-native-video-actual/`; these loopback measurements do not measure cross-machine Tailscale latency.
 
-tvOS retains the label **Limited-refresh video · simulator snapshots**. Its source samples screenshots at up to two frames per second. The separate **Use snapshot preview** recovery option uses individual HTTP images and is view only.
+tvOS and physical iOS WebDriverAgent sources display **Limited-refresh video · device snapshots**. They sample screenshots at up to two frames per second. The separate **Use snapshot preview** recovery option uses individual HTTP images and is view only. See [physical iPhone/iPad setup](physical-ios.md) for signed-helper and USB requirements.
 
 ## Quality and remote access
 
@@ -51,7 +52,7 @@ No public STUN or TURN server is configured. Device Deck does not relay media th
 1. Open the feed and turn on **Enable touch**. This reserves an available device; an existing reservation requires reviewing the warning before enabling or taking over control.
 2. Wait for video and its control connection to become ready.
 3. Touch or click inside the device image. Black borders are not part of the touch surface.
-4. On Android, drag to scroll; a touch-capable browser can send multiple contacts for a pinch. On iOS, tap, swipe, or hold and release to submit a completed gesture.
+4. On Android, drag to scroll; a touch-capable browser can send multiple contacts for a pinch. On iOS simulators and configured physical iPhones/iPads, tap, swipe, or hold and release to submit a completed gesture.
 5. Turn **Enable touch** off to stop input while keeping the reservation and any recording active. Use **End session** to release the reservation and finalize an active recording.
 
 Enabled touch displays a contact ring at each finger or mouse position and a trail while dragging or swiping. Released contacts fade away; cancelled contacts have a crossed marker. These markers show the gesture entered in the browser, while the device video shows its effect. They align with the device image, including letterboxed previews, and disappear when touch is disabled or the feed loses its control connection. If the device rejects input, the reason stays visible after touch stops.
@@ -59,6 +60,8 @@ Enabled touch displays a contact ring at each finger or mouse position and a tra
 Android holds contacts while the pointer remains down. Input uses an ordered, bounded queue; pending moves are coalesced without crossing down/up events. Blur, hidden tabs, pointer cancellation, geometry changes, disconnection and session closure cancel active contacts. Rotation changes the encoded dimensions and invalidates old coordinates.
 
 The idb CLI supports completed gestures here, not an ongoing pointer stream. An iOS gesture begins after release in the browser. A gesture already dispatched to idb is allowed to send its final touch-up before its adapter closes; it cannot be interrupted partway through with the same guarantees as Android. Continuous drag and multitouch are therefore not advertised for iOS. idb's reported screen dimensions convert preview pixels into simulator points, including scaled previews and landscape frames.
+
+Physical iPhones and iPads use a separately installed, signed WebDriverAgent runner and `iproxy`, with the same completed-gesture limitation. Its full-screen dimensions map video coordinates to device points. A touch controller sees the phone's own screenshots, even when a capture card is assigned. Native WebDriverAgent recording is not provided. View-only screenshots never start an automation session.
 
 The daemon checks the reservation and lease before dispatch, and rechecks machine access for live connections. Opening a view-only feed never grants touch control. Touch starts off and must be enabled again after hiding the page, losing the control connection, or losing the reservation. Expired, taken-over or released reservations cannot continue to send input. Hiding or closing a preview stops that viewer; it does not release the reservation or stop an independent recording.
 

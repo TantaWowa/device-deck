@@ -22,7 +22,7 @@ The Android proof found a static-screen edge case where screenrecord writes one 
 
 See [validation](validation.md) for the complete exercised matrix. Physical Roku, Android TV/Fire TV, Apple TV Companion pairing and USB capture-card permissions, disconnects and enumeration changes have not been verified on physical hardware. Two real ffmpeg encoder fixture streams cover USB process coordination, not the AVFoundation hardware path. No existing Tawi/lab device was operated.
 
-Captures are silent. Browser preview refreshes about once per second. Native Android recording is capped at 175 seconds. Other physical Apple devices have discovery only. Input logs describe command dispatch timing. There is no cloud runtime, account login or multi-host coordinator.
+Captures are silent. Browser preview refreshes about once per second. Native Android recording is capped at 175 seconds. Physical iPhones and iPads can use the optional [WebDriverAgent adapter](physical-ios.md) for completed touch gestures and native screen snapshots over USB; other physical Apple devices have discovery only. Input logs describe command dispatch timing. There is no cloud runtime, account login or multi-host coordinator.
 
 ## Reproduce and run
 
