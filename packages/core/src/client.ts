@@ -8,6 +8,14 @@ import {
 } from "./local/types";
 import { dataDirectory } from "./local/paths";
 import { endpointSchema } from "./hub";
+import { deckRoute } from "./decks";
+export const selectedDeck = () => process.env.DEVICE_DECK_TARGET || "local";
+export async function serviceRequest(route: string, init: RequestInit = {}, deck = selectedDeck()) {
+  const ep = await endpoint();
+  const headers = new Headers(init.headers);
+  headers.set("Authorization", `Bearer ${ep.token}`);
+  return fetch(`${ep.url}${deckRoute(route, deck)}`, { ...init, headers, redirect: "error" });
+}
 export async function endpoint() {
   return validateEndpoint(JSON.parse(
     await readFile(path.join(dataDirectory(), "endpoint.json"), "utf8"),
@@ -36,11 +44,12 @@ export async function callOperation(
   args: unknown = {},
   origin = "CLI",
   signal?: AbortSignal,
+  deck = selectedDeck(),
 ) {
   signal?.throwIfAborted();
   const ep = await endpoint();
   signal?.throwIfAborted();
-  const response = await fetch(`${ep.url}/v1/operations/${operation}`, {
+  const response = await fetch(`${ep.url}${deckRoute(`/v1/operations/${operation}`, deck)}`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${ep.token}`,
@@ -110,18 +119,18 @@ export async function renewDeviceGroup(
     signal,
   );
 }
-export async function callService(route: "health" | "inventory") {
-  if (route === "inventory") return callOperation("inventory");
-  const ep = await endpoint();
-  const res = await fetch(`${ep.url}/v1/health`, {
-    headers: { Authorization: `Bearer ${ep.token}` },
+export async function callService(route: "health" | "inventory", deck = selectedDeck()) {
+  if (route === "inventory") return callOperation("inventory", {}, "CLI", undefined, deck);
+  const res = await serviceRequest("/v1/health", {
     signal: AbortSignal.timeout(3000),
     redirect: "error",
-  });
+  }, deck);
   if (!res.ok) throw new Error(`Device Deck returned ${res.status}`);
   return res.json();
 }
 export async function browserUrl(query?: URLSearchParams, address?: string) {
+  query = new URLSearchParams(query);
+  if (selectedDeck() !== "local") query.set("deck", selectedDeck());
   const ep = await endpoint();
   const origin = address ? endpointSchema.parse(address) : ep.url;
   const res = await fetch(`${ep.url}/v1/browser-ticket`, {

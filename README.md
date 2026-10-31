@@ -176,6 +176,12 @@ Captures use a shared local output folder. Renaming changes library metadata whi
 
 ## Remote machines and the web portal
 
+Connect another Mac's Deck to use its capture cards from your local dashboard,
+CLI and MCP. Choose **Device host** in the dashboard, use `--deck ms` in the CLI,
+or pass `deck: "ms"` to an MCP operation. The host retains all reservations and
+capture processes. See [Deck sharing](docs/deck-sharing.md) for connection setup,
+private access credentials, downloads and revocation.
+
 Use `devdeck network enable --host 0.0.0.0 --port 47831` for ordinary IP/port access through your own network. The `/app/` PWA provides Google and email/password login, a private machine list, direct feeds, TV remotes and touchscreen controls. The top of the standalone dashboard shows whether this Mac is paired to a parent account and provides **Open account** when paired. [Remote access and deployment](docs/remote-access.md) explains launch links, pairing, HTTPS and deployment to the existing Firebase project.
 
 ## Workspace

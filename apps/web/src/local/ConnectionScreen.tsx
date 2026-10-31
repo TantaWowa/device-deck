@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { ChevronDown, CircleAlert, LoaderCircle, RefreshCw } from "lucide-react";
 import { Brand } from "../../../../packages/ui/src";
 import "./connection-screen.css";
+import { activeDeck } from "./api";
 
 export function ConnectionScreen({ error }: { error: string }) {
   const [expanded, setExpanded] = useState(Boolean(error));
@@ -19,6 +20,7 @@ export function ConnectionScreen({ error }: { error: string }) {
         </div>
       </div>
       <div className="connection-actions">
+        {activeDeck !== "local" && <a href="/">Return to this Mac</a>}
         {error && <button type="button" className="connection-retry" onClick={() => location.reload()}><RefreshCw size={16} />Try again</button>}
         <button type="button" className="connection-more" aria-expanded={expanded} aria-controls="connection-details" onClick={() => setExpanded((value) => !value)}>
           {expanded ? "Less info" : "More info"}<ChevronDown size={16} aria-hidden="true" />

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { ExternalLink, Link2, RefreshCw } from "lucide-react";
 import { machinePairingStatusSchema, type MachinePairingStatus } from "../../../../packages/core/src/hub";
 import "./account-connection.css";
+import { serviceUrl } from "./api";
 
 /** Status comes from the machine's actual account binding, including over Tailscale. */
 export function AccountConnection() {
@@ -17,7 +18,7 @@ export function AccountConnection() {
       controller = current;
       setRefreshing(true);
       try {
-        const response = await fetch("/v1/hub/status", {
+        const response = await fetch(serviceUrl("/v1/hub/status"), {
           cache: "no-store", signal: AbortSignal.any([current.signal, AbortSignal.timeout(8000)]),
         });
         if (!response.ok) throw new Error("Account status unavailable");

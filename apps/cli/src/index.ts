@@ -38,8 +38,15 @@ import { readGroupCredential, readReservationManifest, releaseGroupCredential, r
 import { checkMacUpdates, compareVersions, downloadMacUpdate } from "../../../packages/installer/src/mac-update";
 import { releaseMode } from "../../../packages/licensing/src/trust";
 import { version } from "../../../packages/core/src/version";
+import { decksCommand, downloadCapture } from "./decks";
+import { deckNameSchema } from "../../../packages/core/src/decks";
 const help = `Device Deck · local Mac device manager
 Usage: devdeck <command> [options]
+
+  decks list|add|remove         Manage remote Deck connections on this Mac
+  decks grant|grants|revoke     Grant or revoke another Deck's access to this Mac
+  --deck NAME                  Use a connected Deck through the local daemon
+  download ID --output FILE     Save a capture from the selected Deck on this Mac
 
   init                         Create a local config file
   start | stop | status | logs  Run and inspect the daemon
@@ -141,6 +148,8 @@ const optionTypes: Record<string, { type: "string" | "boolean" }> =
       "portal",
       "cert",
       "address",
+      "deck",
+      "token-file",
     ].map((k) => [k, { type: "string" }]),
   );
 for (const key of ["json", "help", "clipboard", "yes", "mux", "browser", "version", "tailscale", "revoke", "stale-virtual"])
@@ -151,6 +160,13 @@ try {
     options: optionTypes,
   });
   const command = v.version ? "version" : p[0] === "service" ? (p[1] || "status") : p[0];
+  if (v.deck) process.env.DEVICE_DECK_TARGET = String(v.deck);
+  const targetDeck = process.env.DEVICE_DECK_TARGET;
+  if (targetDeck && targetDeck !== "local") {
+    deckNameSchema.parse(targetDeck);
+    if (["start", "stop", "install", "uninstall", "logs", "init", "network", "pair", "tailscale", "update", "decks"].includes(command || ""))
+      throw new DeckError("arguments", "This command manages the local Mac. Use --deck local or run it on the host Mac.", 400);
+  }
   if (p[0] === "service" && !["start", "stop", "status", "logs", "install", "uninstall"].includes(command)) throw new DeckError("arguments", "Use service start, stop, status, logs, install or uninstall.", 400);
   if (!command || v.help) {
     console.log(help);
@@ -175,7 +191,9 @@ try {
       return String(v.reason);
     };
     let result: unknown;
-    if (command === "version") result = { version, mode: releaseMode, platform: process.platform, arch: process.arch };
+    if (command === "decks") result = await decksCommand(p[1] || "list", p[2], { address: v.address as string | undefined, tokenFile: v["token-file"] as string | undefined, output: v.output as string | undefined });
+    else if (command === "download") result = await downloadCapture(p[1], v.output as string | undefined);
+    else if (command === "version") result = { version, mode: releaseMode, platform: process.platform, arch: process.arch };
     else if (command === "doctor") {
       let metadata: unknown;
       try { metadata = JSON.parse(await readFile(path.join(root, "build/build-metadata.json"), "utf8")); } catch {}
@@ -486,7 +504,7 @@ try {
           }
         }
         if (resultFile)
-          await atomicWrite(resultFile, JSON.stringify(acquired, null, 2) + "\n");
+          await atomicWrite(resultFile, JSON.stringify({ ...acquired, ...(targetDeck && targetDeck !== "local" ? { deck: targetDeck } : {}) }, null, 2) + "\n");
         result = reservationCommandOutput(acquired, resultFile);
       } else {
         const device = await pick(selector, !v.json);

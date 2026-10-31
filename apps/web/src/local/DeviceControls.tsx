@@ -8,7 +8,7 @@ import type {
 } from "../../../../packages/core/src/local/types";
 import { copyImageToClipboard } from "./capture-feedback";
 import { deviceConnectionLabel, deviceAvailabilityLabel } from "../../../../packages/core/src/device-table";
-import { api } from "./api";
+import { api, serviceUrl } from "./api";
 import { RemoteControl } from "./RemoteControl";
 import type { FeedAction } from "./FeedActions";
 import { supportsWake } from "../../../../packages/core/src/remote";
@@ -220,7 +220,7 @@ export function DeviceControls({
         const credentials = owned ? lease : await reserve();
         const artifact = await api<Artifact>("captures.screenshot", { ...credentials, mode, clipboard: false });
         onCapture?.(artifact);
-        const response = await fetch(`/v1/artifacts/${encodeURIComponent(artifact.id)}/file`);
+        const response = await fetch(serviceUrl(`/v1/artifacts/${encodeURIComponent(artifact.id)}/file`));
         if (!response.ok) throw new Error("Screenshot saved, but its image could not be loaded for copying.");
         return response.blob();
       }, true);

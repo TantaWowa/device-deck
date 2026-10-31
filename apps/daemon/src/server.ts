@@ -5,6 +5,8 @@ import path from "node:path";
 import { createReadStream } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
 import { randomBytes, timingSafeEqual } from "node:crypto";
+import { pipeline } from "node:stream/promises";
+import { DeckConnections, assertSharedRoute } from "./decks";
 import { ZodError } from "zod";
 import { DeckService } from "./local/service";
 import { artifactDisposition } from "./local/capture-library";
@@ -21,6 +23,16 @@ const equal = (a: string, b: string) => {
     right = Buffer.from(b);
   return left.length === right.length && timingSafeEqual(left, right);
 };
+async function* responseChunks(response: Response) {
+  const reader = response.body!.getReader();
+  try {
+    for (;;) {
+      const chunk = await reader.read();
+      if (chunk.done) return;
+      yield chunk.value;
+    }
+  } finally { await reader.cancel().catch(() => {}); }
+}
 export function createService(
   deck: DeckService,
   token: string,
@@ -31,10 +43,12 @@ export function createService(
     networkPort?: number;
     authority?: MachineAuthority;
     credentials?: ReturnType<typeof createBrowserCredentials>;
+    decks?: DeckConnections;
   } = {},
 ) {
   const { tickets, browsers } = options.credentials || createBrowserCredentials();
   const authority = options.authority || new MachineAuthority(deck.directory);
+  const connections = options.decks || new DeckConnections(deck.directory);
   const handler: http.RequestListener = async (req, res) => {
     const reply = (status: number, body: unknown) => {
       res.writeHead(status, { "Content-Type": "application/json" });
@@ -120,7 +134,7 @@ export function createService(
     const native = !remote && equal(apiToken, token);
     const localNative = native && local && loopback;
     const session = browsers.get(cookie);
-    const browser = Boolean(remote) || Boolean(session && session.host === req.headers.host && session.expiresAt > Date.now());
+    const browser = !apiToken && (Boolean(remote) || Boolean(session && session.host === req.headers.host && session.expiresAt > Date.now()));
     const json = async () => {
       if (!req.headers["content-type"]?.startsWith("application/json"))
         throw new DeckError("content-type", "Use application/json.", 415);
@@ -183,8 +197,9 @@ export function createService(
         return;
       }
       if (url.pathname.startsWith("/v1/")) {
-        const hub = !native && !browser && apiToken ? await authority.authorizeClaims(apiToken) : undefined;
-        if (!native && !browser && !hub)
+        const peer = !native && !browser && apiToken ? await connections.authorize(apiToken) : false;
+        const hub = !native && !browser && !peer && apiToken ? await authority.authorizeClaims(apiToken) : undefined;
+        if (!native && !browser && !hub && !peer)
           throw new DeckError(
             "unauthorized",
             "Open the dashboard with devdeck ui, or supply the local API token.",
@@ -196,6 +211,42 @@ export function createService(
           req.headers["x-device-deck"] !== "local"
         )
           throw new DeckError("csrf", "Missing local client header.", 403);
+        if (peer) assertSharedRoute(req.method || "GET", url.pathname);
+        if (url.pathname === "/v1/decks" && req.method === "GET") {
+          reply(200, await connections.list());
+          return;
+        }
+        if (["/v1/decks/add", "/v1/decks/remove", "/v1/deck-access/grant", "/v1/deck-access/revoke", "/v1/deck-access/list"].includes(url.pathname) && req.method === "POST") {
+          if (!localNative) throw new DeckError("local-client-required", "Manage Deck connections with the local Device Deck CLI.", 403);
+          const value = await json();
+          if (url.pathname === "/v1/decks/add") reply(200, await connections.add(value, (await authority.metadata()).id));
+          else if (url.pathname === "/v1/decks/remove") reply(200, await connections.remove(value.name));
+          else if (url.pathname === "/v1/deck-access/grant") reply(200, await connections.grant(value.name));
+          else if (url.pathname === "/v1/deck-access/revoke") reply(200, await connections.revoke(value.id));
+          else reply(200, await connections.grants());
+          return;
+        }
+        const delegated = /^\/v1\/decks\/([^/]+)(\/v1\/.*)$/.exec(url.pathname);
+        if (delegated) {
+          if (hub) throw new DeckError("deck-operation-denied", "Connect to each machine directly from the portal.", 403);
+          const controller = new AbortController();
+          res.once("close", () => controller.abort());
+          const body = req.method === "POST" ? JSON.stringify(await json()) : undefined;
+          const upstream = await connections.forward(delegated[1], delegated[2] + url.search, {
+            method: req.method, body, signal: controller.signal,
+            headers: {
+              "Content-Type": "application/json",
+              "X-Device-Deck-Client": browser ? "Web" : req.headers["x-device-deck-client"] === "Agent" ? "Agent" : req.headers["x-device-deck-client"] === "CLI" ? "CLI" : "API",
+              ...(req.headers.range ? { Range: req.headers.range } : {}),
+            },
+          });
+          for (const header of ["content-type", "content-length", "content-range", "content-disposition", "accept-ranges"])
+            if (upstream.headers.has(header)) res.setHeader(header, upstream.headers.get(header)!);
+          res.writeHead(upstream.status);
+          if (upstream.body) await pipeline(responseChunks(upstream), res);
+          else res.end();
+          return;
+        }
         if (req.method === "GET" && url.pathname === "/v1/health") {
           reply(200, {
             status: "ready",
@@ -244,7 +295,7 @@ export function createService(
           if (!Object.hasOwn(operations, operation))
             throw new DeckError("not-found", "Unknown operation.", 404);
           const claimed = req.headers["x-device-deck-client"];
-          const origin: Artifact["origin"] = browser || hub
+          const origin: Artifact["origin"] = browser || hub || (peer && claimed === "Web")
             ? "Web"
             : claimed === "Agent"
               ? "Agent"
@@ -254,17 +305,21 @@ export function createService(
           const value = await json();
           if (operation === "config.save" && !localNative &&
             (JSON.stringify(value.config?.network) !== JSON.stringify(deck.config.config.network) ||
-              JSON.stringify(value.config?.tailscale) !== JSON.stringify(deck.config.config.tailscale)))
+              JSON.stringify(value.config?.tailscale) !== JSON.stringify(deck.config.config.tailscale) ||
+              (peer && (JSON.stringify(value.config?.tools) !== JSON.stringify(deck.config.config.tools) || value.config?.settings?.folder !== deck.config.config.settings.folder))))
             throw new DeckError("local-client-required", "Change network and portal trust settings with the local Device Deck CLI.", 403);
           // A caller can delay uploading its body. Check the same hub credential
           // again after that wait so expiry or local revocation prevents dispatch.
           if (hub && !await authority.authorize(apiToken))
             throw new DeckError("unauthorized", "Machine access expired or was revoked before the request completed. Reconnect from your machines page.", 401);
+          if (peer && !await connections.authorize(apiToken))
+            throw new DeckError("unauthorized", "Deck access was revoked before the request completed.", 401);
           const authorize: LiveAuthorization = async () => {
             // Only input dispatch is tied to this HTTP request's lifetime.
             // Stream authorizers must outlive their completed signaling request.
             if (operation === "remote.input" && res.destroyed) return false;
             if (hub) return authority.authorize(apiToken);
+            if (peer) return connections.authorize(apiToken);
             if (remote) return Boolean(deck.config.config.tailscale?.origin === tailscale.origin &&
               typeof login === "string" && deck.config.config.tailscale.allowedUsers.includes(login));
             if (native) return true;
