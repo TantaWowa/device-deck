@@ -1,5 +1,5 @@
 import { ANDROID_GESTURES, startScrcpy } from "./scrcpy";
-import { androidBootReady, androidFeatures, avdInputMode } from "./android-state";
+import { androidAdbPort, androidBootReady, androidFeatures, avdInputMode, avdProfile } from "./android-state";
 import { IOS_GESTURES, startIdbInteractive } from "./interactive";
 import type { InteractiveSource, VideoProfile } from "../../core/src/live";
 import { androidKeys, rokuKeys, hidKeys, iosHardwareKeys, deviceInputMode } from "../../core/src/remote";
@@ -63,7 +63,6 @@ export class Adapters {
   private discoveryPending?: Promise<Discovery>;
   private discoveryResult?: Discovery;
   private discoveryAt = -Infinity;
-  private discoveryStarted = -Infinity;
   private discoveryCounters = { requests: 0, hits: 0, shared: 0, starts: 0 };
   private inputModes = new Map<string, "touch" | "remote">();
   constructor(private getConfig: () => Config, private execute = run, private now: () => number = Date.now) {
@@ -115,12 +114,11 @@ export class Adapters {
   async discover(force = false): Promise<Discovery> {
     this.discoveryCounters.requests++;
     if (this.discoveryPending) { this.discoveryCounters.shared++; return structuredClone(await this.discoveryPending); }
-    if (this.discoveryResult && (this.now() - this.discoveryStarted < 5000 || (!force && this.now() - this.discoveryAt < 30_000))) {
+    if (this.discoveryResult && !force && this.now() - this.discoveryAt < 30_000) {
       this.discoveryCounters.hits++;
       return structuredClone(this.discoveryResult);
     }
     this.discoveryCounters.starts++;
-    this.discoveryStarted = this.now();
     const signal = AbortSignal.timeout(30_000);
     const execute: typeof run = (command, args, timeout, options) => this.probes.run(command, args, timeout, { ...options, signal });
     this.discoveryPending = this.discoverNow(force, execute).then((result) => {
@@ -143,10 +141,11 @@ export class Adapters {
     };
     await Promise.all([
       safe("Android", async () => {
+        const defaultPort = androidAdbPort();
         if (!(await available(this.tool("adb")))) return;
         for (const port of [
           ...new Set([
-            5037,
+            defaultPort,
             ...this.getConfig().devices.flatMap((d) =>
               d.connection.type === "adb" ? [d.connection.port] : [],
             ),
@@ -193,10 +192,12 @@ export class Adapters {
             if (devices.some((d) => d.id === id)) continue;
             const features = state === "device" ? (await execute(this.tool("adb"), ["-P", String(port), "-s", serial, "shell", "pm", "list", "features"], 5000).catch(() => ({ stdout: Buffer.from("") }))).stdout.toString() : "";
             const inputMode = /^feature:/m.test(features) ? androidFeatures(features).inputMode : avdName ? await avdInputMode(avdName) : undefined;
+            const profile = avdName ? await avdProfile(avdName) : {};
             devices.push({
               id,
               name: model,
-              model,
+              model: profile.model || model,
+              ...(profile.runtime ? { runtime: profile.runtime } : {}),
               ...(inputMode ? { inputMode } : {}),
               platform: "Android",
               kind: serial.startsWith("emulator-") ? "virtual" : "physical",
@@ -227,7 +228,7 @@ export class Adapters {
               const configuredPort =
                 configured?.connection.type === "adb"
                   ? configured.connection.port
-                  : 5037;
+                  : defaultPort;
               if (
                 configuredPort !== port ||
                 devices.some(
@@ -239,10 +240,12 @@ export class Adapters {
                 continue;
               const id = uid("avd", avdName),
                 nativeId = `native-${id}`;
+              const profile = await avdProfile(avdName);
               devices.push({
                 id,
                 name: avdName,
-                model: "Android virtual device",
+                model: profile.model || "Android virtual device",
+                ...(profile.runtime ? { runtime: profile.runtime } : {}),
                 inputMode: configured?.inputMode || await avdInputMode(avdName) || "touch",
                 platform: "Android",
                 kind: "virtual",
@@ -275,13 +278,14 @@ export class Adapters {
         const data = JSON.parse(result.stdout.toString());
         for (const [runtime, list] of Object.entries(data.devices || {})) {
           if (!/iOS|tvOS/.test(runtime)) continue;
-          for (const d of list as { udid: string; name: string }[]) {
+          for (const d of list as { udid: string; name: string; deviceTypeIdentifier?: string }[]) {
             const id = uid("sim", d.udid),
               sourceId = `native-${id}`;
             devices.push({
               id,
               name: d.name,
-              model: runtime.split(".").at(-1) || "",
+              model: d.deviceTypeIdentifier?.split(".").at(-1) || runtime.split(".").at(-1) || "",
+              runtime: runtime.split(".").at(-1) || "",
               platform: "Apple",
               kind: "virtual",
               visibility: "local",
@@ -314,18 +318,21 @@ export class Adapters {
             "--quiet",
           ]);
           const data = JSON.parse(await readFile(file, "utf8"));
-          for (const d of data.result?.devices || [])
+          for (const d of data.result?.devices || []) {
+            const hardware = d.properties?.hardware || d.hardwareProperties;
+            if (hardware?.reality === "simulated" || d.visibilityClass === "simulators") continue;
             devices.push({
               id: uid("apple", d.identifier),
-              name: d.deviceProperties?.name || "Apple device",
-              model: d.hardwareProperties?.marketingName || d.hardwareProperties?.productType || "",
-              inputMode: appleHardwareInputMode(d.hardwareProperties),
+              name: d.properties?.state?.name || d.deviceProperties?.name || "Apple device",
+              model: hardware?.marketingName || hardware?.productType || "",
+              inputMode: appleHardwareInputMode(hardware),
               platform: "Apple",
               kind: "physical",
               visibility: "local",
               connection: { type: "apple-device", udid: d.identifier },
               captureSourceId: null,
             });
+          }
         } finally {
           await rm(dir, { recursive: true, force: true });
         }

@@ -40,6 +40,23 @@ Remote requests must arrive over the local proxy connection for that exact confi
 
 When Tailscale access is enabled, local processes that can reach the loopback listener are trusted. They can impersonate Serve, including processes run by another OS user; this does not provide per-OS-user isolation. This release has no per-device user roles; the separate portal provides an account-owned machine registry. Shared visibility is a label. Enabling Tailscale grants full daemon access to the configured users.
 
+## Connected Decks
+
+`DeckConnections` owns named outgoing connections and hashed incoming access grants
+in private `deck-connections.json`. The HTTP server authenticates local clients,
+then proxies the selected `/v1/decks/NAME/v1/...` operation or media route. The host
+executes the existing service operation against its own SQLite ledger and capture
+engine. No local shadow reservations, capture workers or distributed lock protocol
+are created. Media downloads stream through the local daemon with byte ranges;
+WebRTC signaling is forwarded while video travels directly from host to browser.
+
+Explicit token authentication takes precedence over browser/Tailscale identity,
+so revoking a Deck grant cannot fall back to browser authorization. Grants cannot
+manage trust, change host tool paths or forward through another Deck. A lost
+response is reported without mutation retries or local fallback. CLI and MCP
+select a host explicitly; the browser reloads on host switches and stores leases
+under separate keys. See [Deck sharing](deck-sharing.md) for setup and lifecycle.
+
 ## Cloud portal
 
 The `/app/` PWA uses Firebase Auth and the Cloud Run registry in `apps/cloud`. Firestore stores account-owned machine addresses and public identities. Pairing requires a one-use code issued locally and a receipt signed by the machine. The host pins the configured portal key and validates separate 60-second, machine-scoped grants. Firebase ID tokens never go to machines. The cloud does not probe, proxy or tunnel machine traffic; feeds, artifacts and commands travel directly between browser and daemon. Stable machine IDs and in-memory grants isolate clients on machine switches. See [remote access](remote-access.md) for deployment, browser HTTPS requirements and revocation bounds.

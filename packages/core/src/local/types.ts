@@ -24,6 +24,7 @@ export const deviceSchema = z
     platform: z.enum(["Roku", "Android", "Apple", "Other"]),
     kind: z.enum(["physical", "virtual"]),
     model: z.string().max(256).default(""),
+    runtime: z.string().max(256).optional(),
     tags: z
       .array(z.string().trim().min(1).max(48))
       .max(30)
@@ -146,6 +147,7 @@ export const configSchema = z
   .object({
     schemaVersion: z.literal(1),
     port: z.number().int().min(0).max(65535).default(47831),
+    monetization: z.object({ enabled: z.boolean().default(false) }).strict().optional(),
     tailscale: tailscaleSchema.optional(),
     network: networkSchema.optional(),
     devices: z.array(deviceSchema).default([]),
@@ -323,6 +325,8 @@ export const selectorSchema = z
     platform: z.enum(["Roku", "Android", "Apple", "Other"]).optional(),
     kind: z.enum(["physical", "virtual"]).optional(),
     formFactor: z.enum(["phone", "tv", "other"]).optional(),
+    model: z.string().trim().min(1).max(256).optional(),
+    runtime: z.string().trim().min(1).max(256).optional(),
     tags: z.array(z.string().trim().min(1).max(48)).max(30).optional(),
     name: z.string().optional(),
     state: z
@@ -535,6 +539,8 @@ export function matchDevices(
       (!selector.platform || d.platform === selector.platform) &&
       (!selector.kind || d.kind === selector.kind) &&
       (!selector.formFactor || deviceFormFactor(d) === selector.formFactor) &&
+      (!selector.model || d.model.toLowerCase() === selector.model.toLowerCase()) &&
+      (!selector.runtime || (d.runtime || "").toLowerCase() === selector.runtime.toLowerCase()) &&
       (!selector.tags ||
         selector.tags.every((tag) => (d.tags || []).includes(tag))) &&
       (!selector.name ||

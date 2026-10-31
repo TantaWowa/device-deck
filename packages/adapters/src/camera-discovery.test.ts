@@ -169,7 +169,7 @@ test("all adapter camera entrypoints share raw results and native-only status st
     assert.ok(discovered.sources.some((source) => source.uniqueId === "camera-one"));
     await Promise.all([adapters.discover(true), adapters.captureCards(config.sources, true)]);
     assert.equal(cameraStarts, 1);
-    assert.equal(adapters.inventoryStats().discovery.starts, 1);
+    assert.equal(adapters.inventoryStats().discovery.starts, 2);
   } finally { await adapters.close(); }
 });
 

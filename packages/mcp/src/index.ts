@@ -1,7 +1,8 @@
 import { version } from "../../core/src/version";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { callOperation, callService, endpoint } from "../../core/src/client";
+import { callOperation, callService, serviceRequest, selectedDeck } from "../../core/src/client";
+import { deckNameSchema } from "../../core/src/decks";
 import { operations, type Operation } from "../../core/src/local/types";
 import { z } from "zod";
 const server = new McpServer({ name: "device-deck", version });
@@ -50,7 +51,7 @@ const descriptions: Partial<Record<Operation, string>> = {
   "remote.override":
     "Explicitly send one key, text string or x/y tap to an already reserved device without taking its reservation. Requires deviceId, the expected active sessionId, the overriding user's display owner and confirmed=true. Preserves the current reservation and recording; changed or ended sessions reject the override. Capture still requires the owner's lease credential.",
   "captures.screenshot":
-    "Save a real screenshot in the shared local capture folder. Optionally copy it to the Mac clipboard or make an annotated copy. Return file metadata and image content.",
+    "Save a real screenshot in the selected host's capture folder. Optionally copy it to that host's clipboard or make an annotated copy. Return file metadata and image content, including for a remote Deck.",
   "captures.openFolder":
     "Open the configured capture folder in Finder on the Mac running Device Deck. Accepts no path. For remote clients, this opens Finder on the host Mac, not on the viewing computer.",
   "captures.storage": "Report space used by managed capture files, clean originals, metadata and trash.",
@@ -69,24 +70,22 @@ for (const [operation, schema] of Object.entries(operations)) {
     operation.replaceAll(".", "_"),
     descriptions[operation as Operation] ||
       `Device Deck ${operation}. Uses the same validated operation as CLI and web.`,
-    inputSchema.shape,
-    async (args: Record<string, unknown>) => {
+    { ...inputSchema.shape, deck: z.union([z.literal("local"), deckNameSchema]).optional().describe("Connected Deck name, for example ms. Omit for DEVICE_DECK_TARGET or the local Mac. Use the same Deck for every operation on a lease.") },
+    async ({ deck, ...args }: Record<string, unknown>) => {
       try {
         const result = await callOperation(
           operation as Operation,
           args,
           "Agent",
+          undefined,
+          typeof deck === "string" ? deck : selectedDeck(),
         );
         const content: any[] = [{ type: "text", text: JSON.stringify(result) }];
         if (
           operation === "captures.screenshot" &&
           result.status === "completed"
         ) {
-          const ep = await endpoint();
-          const res = await fetch(`${ep.url}/v1/artifacts/${result.id}/file`, {
-            headers: { Authorization: `Bearer ${ep.token}` },
-            redirect: "error",
-          });
+          const res = await serviceRequest(`/v1/artifacts/${encodeURIComponent(result.id)}/file`, { signal: AbortSignal.timeout(30000) }, typeof deck === "string" ? deck : selectedDeck());
           if (res.ok) {
             const data = Buffer.from(await res.arrayBuffer());
             if (data.length <= 8 * 1024 * 1024)
@@ -117,14 +116,25 @@ for (const [operation, schema] of Object.entries(operations)) {
   );
 }
 server.tool(
-  "service_health",
-  "Inspect the real local daemon and dependency diagnostics.",
+  "decks_list",
+  "List remote Deck connections configured on this Mac. Use their names in the deck argument of device, capture and session tools. Reservations remain on the selected host.",
   {},
   async () => {
     try {
+      const response = await serviceRequest("/v1/decks", { signal: AbortSignal.timeout(5000) }, "local");
+      return { isError: !response.ok, content: [{ type: "text" as const, text: JSON.stringify(await response.json()) }] };
+    } catch (error) { return { isError: true, content: [{ type: "text" as const, text: (error as Error).message }] }; }
+  },
+);
+server.tool(
+  "service_health",
+  "Inspect the real local daemon and dependency diagnostics.",
+  { deck: z.union([z.literal("local"), deckNameSchema]).optional() },
+  async ({ deck }) => {
+    try {
       return {
         content: [
-          { type: "text", text: JSON.stringify(await callService("health")) },
+          { type: "text", text: JSON.stringify(await callService("health", deck)) },
         ],
       };
     } catch (e) {

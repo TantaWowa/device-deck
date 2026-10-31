@@ -6,7 +6,12 @@ import {
   reservationGroupManifestSchema,
   type ReservationGroupManifest,
 } from "../../../packages/core/src/local/types";
-import { callOperation } from "../../../packages/core/src/client";
+import { callOperation, selectedDeck } from "../../../packages/core/src/client";
+
+function assertCredentialDeck(value: { deck?: unknown }) {
+  if ((value.deck || "local") !== selectedDeck())
+    throw new DeckError("arguments", `This credential belongs to Deck ${value.deck || "local"}. Select that Deck explicitly before using it.`, 400);
+}
 
 async function jsonFile(file: string) {
   try {
@@ -50,6 +55,7 @@ export async function readGroupCredential(file: string) {
       "Reservation result must contain groupId and leaseToken.",
       400,
     );
+  assertCredentialDeck(value);
   return { groupId: value.groupId, leaseToken: value.leaseToken };
 }
 
@@ -78,6 +84,7 @@ export async function prepareGroupCredential(
       groupId: value.groupId as string,
       leaseToken: value.leaseToken as string,
     };
+    assertCredentialDeck(value);
     if (credential.groupId !== groupId)
       throw new DeckError(
         "arguments",
@@ -94,7 +101,7 @@ export async function prepareGroupCredential(
   const candidate = `${file}.${process.pid}.${randomUUID()}.credential`;
   const handle = await open(candidate, "wx", 0o600);
   try {
-    await handle.writeFile(JSON.stringify(credential, null, 2) + "\n");
+    await handle.writeFile(JSON.stringify({ ...credential, ...(selectedDeck() !== "local" ? { deck: selectedDeck() } : {}) }, null, 2) + "\n");
     await handle.sync();
   } finally {
     await handle.close();

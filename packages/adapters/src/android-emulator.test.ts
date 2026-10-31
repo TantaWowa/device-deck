@@ -720,3 +720,18 @@ test("Launch waits for both boot animation completion and a capturable display",
   assert.equal((await f.emulator.control(device, "launch")).state, "booted");
   assert.equal(f.launches.length, 0);
 });
+
+
+test("headless Android launch uses software rendering without an emulator window", async (t) => {
+  const previous = process.env.DEVICE_DECK_HEADLESS;
+  t.after(() => {
+    if (previous === undefined) delete process.env.DEVICE_DECK_HEADLESS;
+    else process.env.DEVICE_DECK_HEADLESS = previous;
+  });
+  process.env.DEVICE_DECK_HEADLESS = "1";
+  const f = fixture();
+  await f.emulator.control(device, "launch", async () => {});
+  assert.deepEqual(f.launches[0].args.slice(0, 7), ["-avd", "TV_API_35", "-no-window", "-gpu", "software", "-feature", "-Vulkan"]);
+  assert.equal(f.launches[0].port, 5038);
+  assert(f.launches[0].args.some(argument => argument.startsWith("qemu.devdeck_launch=")));
+});

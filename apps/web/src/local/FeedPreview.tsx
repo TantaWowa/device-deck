@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import type { Device, Session, Source } from "../../../../packages/core/src/local/types";
 import { deviceInputMode } from "../../../../packages/core/src/remote";
-import { api } from "./api";
+import { api, serviceUrl } from "./api";
 import { LivePreview, type LiveLease } from "./LivePreview";
 import type { DeviceLease } from "./DeviceControls";
 
@@ -55,7 +55,7 @@ export function FeedPreview({ source, device, session, lease, owner: defaultOwne
 
   const endpoint = source.kind === "usb" ? `/v1/source-preview/${encodeURIComponent(source.id)}` : `/v1/preview/${encodeURIComponent(source.deviceId || device?.id || "")}`;
   const getSnapshot = useCallback(async (signal: AbortSignal) => {
-    const response = await fetch(endpoint, { signal, cache: "no-store" });
+    const response = await fetch(serviceUrl(endpoint), { signal, cache: "no-store" });
     if (!response.ok) {
       const failure = await response.json().catch(() => ({}));
       throw new Error(failure.message || "Snapshot unavailable.");

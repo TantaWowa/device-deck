@@ -1,5 +1,6 @@
 import { FloatingRemote } from "./FloatingRemote";
 import { AccountConnection } from "./AccountConnection";
+import { DeckSelector } from "./DeckSelector";
 import { ConnectionScreen } from "./ConnectionScreen";
 import { useInventoryPolling } from "./useInventoryPolling";
 import { browserUUID } from "../../../../packages/ui/src/uuid";
@@ -86,7 +87,7 @@ import type {
   SourceConfig,
   Operation,
 } from "../../../../packages/core/src/local/types";
-import { api, bootstrap } from "./api";
+import { api, bootstrap, activeDeck, serviceUrl, leaseStorageKey } from "./api";
 import "../style.css";
 import "./style.css";
 import "./remote-control.css";
@@ -95,13 +96,13 @@ type Lease = { session: Session; leaseToken: string };
 const time = (value: number) => new Date(value).toLocaleString();
 const duration = (ms: number) =>
   `${Math.floor(ms / 60000)}m ${Math.floor(ms / 1000) % 60}s`;
-const fileUrl = (a: Artifact, kind = "file") => `/v1/artifacts/${encodeURIComponent(a.id)}/${kind}`;
+const fileUrl = (a: Artifact, kind = "file") => serviceUrl(`/v1/artifacts/${encodeURIComponent(a.id)}/${kind}`);
 const getCaptureBlob = async (a: Artifact, kind: "file" | "clean" | "log", signal?: AbortSignal) => {
   const response = await fetch(fileUrl(a, kind), { signal });
   if (!response.ok) throw new Error("Could not load the capture file.");
   return response.blob();
 };
-const captureThumbnailUrl = (a: Artifact) => `/v1/artifacts/${encodeURIComponent(a.id)}/thumbnail`;
+const captureThumbnailUrl = (a: Artifact) => serviceUrl(`/v1/artifacts/${encodeURIComponent(a.id)}/thumbnail`);
 function Modal({
   title,
   children,
@@ -206,7 +207,7 @@ function App() {
   }, [deviceSort]);
   const [leases, setLeases] = useState<Record<string, Lease>>(() => {
     try {
-      return JSON.parse(localStorage.getItem("deck-local-leases") || "{}");
+      return JSON.parse(localStorage.getItem(leaseStorageKey) || "{}");
     } catch {
       return {};
     }
@@ -256,12 +257,12 @@ function App() {
     }
   }, { intervalMs: 2500 });
   useEffect(
-    () => localStorage.setItem("deck-local-leases", JSON.stringify(leases)),
+    () => localStorage.setItem(leaseStorageKey, JSON.stringify(leases)),
     [leases],
   );
   useEffect(() => {
     const sync = (event: StorageEvent) => {
-      if (event.key !== "deck-local-leases" || !event.newValue) return;
+      if (event.key !== leaseStorageKey || !event.newValue) return;
       try {
         setLeases(JSON.parse(event.newValue));
       } catch {}
@@ -563,7 +564,8 @@ function App() {
     <div className="live-app">
       <aside className="live-sidebar">
         <Brand />
-        <span className="live-workspace">{tailscaleConnection ? "TAILSCALE WORKSPACE" : "LOCAL WORKSPACE"}</span>
+        <span className="live-workspace">{activeDeck !== "local" ? `REMOTE DECK: ${activeDeck}` : tailscaleConnection ? "TAILSCALE WORKSPACE" : "LOCAL WORKSPACE"}</span>
+        <DeckSelector />
         <nav>
           {menu.map((item) => (
             <button
@@ -578,7 +580,7 @@ function App() {
           ))}
         </nav>
         <div className="live-sidebar-footer">
-          <span className="live-dot" /> {tailscaleConnection ? "Connected through Tailscale" : "Running on this Mac"}
+          <span className="live-dot" /> {activeDeck !== "local" ? `Running on ${activeDeck}` : tailscaleConnection ? "Connected through Tailscale" : "Running on this Mac"}
           <p>{tailscaleConnection ? "Devices and captures run on the host Mac." : "One daemon. Every client."}</p>
           <code>devdeck tui</code>
           <small>
@@ -593,7 +595,7 @@ function App() {
             <span className="live-dot" />{" "}
             {connectionError
               ? "Service unavailable"
-              : tailscaleConnection ? "Tailscale connected" : "Local service connected"}
+              : activeDeck !== "local" ? `Connected to ${activeDeck} through this Mac` : tailscaleConnection ? "Tailscale connected" : "Local service connected"}
           </span>
         </div>
         <AccountConnection />
@@ -954,7 +956,7 @@ function App() {
                                 aria-label={`Copy CLI command for ${d.name}`}
                                 onClick={() =>
                                   perform(async () => {
-                                    const command = `devdeck remote --device '${d.name.replaceAll("'", "'\\''")}'`;
+                                    const command = `devdeck remote${activeDeck !== "local" ? ` --deck ${activeDeck}` : ""} --device '${d.name.replaceAll("'", "'\\''")}'`;
                                     if (!navigator.clipboard?.writeText) {
                                       setNotice(`Copy this command: ${command}`);
                                       return;
@@ -1125,10 +1127,11 @@ function App() {
         )}
         {tab === "Capture Cards" && (
           <CaptureCards
+            hostName={activeDeck === "local" ? "this Mac" : activeDeck}
             cards={cards.sources.map((s) => ({
               ...s,
               uniqueId: s.uniqueId!,
-              thumbnailUrl: `/v1/capture-card-thumbnail/${encodeURIComponent(s.id)}`,
+              thumbnailUrl: serviceUrl(`/v1/capture-card-thumbnail/${encodeURIComponent(s.id)}`),
               deviceId: data.devices.find((d) => d.captureSourceId === s.id)
                 ?.id,
             }))}
@@ -1391,7 +1394,7 @@ function App() {
       )}
       {showDiscovery && discovery && (
         <Modal
-          title="Discovered on this Mac"
+          title={activeDeck === "local" ? "Discovered on this Mac" : `Discovered on ${activeDeck}`}
           onClose={() => setShowDiscovery(false)}
         >
           <DiscoveryDevices

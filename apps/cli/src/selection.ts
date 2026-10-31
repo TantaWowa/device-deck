@@ -70,6 +70,8 @@ export function parseSelector(values: Record<string, unknown>): Selector {
     platform,
     kind: values.kind,
     formFactor: values["form-factor"],
+    model: values.model,
+    runtime: values.runtime,
     tags:
       typeof values.tags === "string"
         ? values.tags.split(",").map((tag) => tag.trim()).filter(Boolean)

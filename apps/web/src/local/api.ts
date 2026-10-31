@@ -1,6 +1,10 @@
 import type { Operation } from "../../../../packages/core/src/local/types";
+import { deckRoute, deckLeaseStorageKey } from "../../../../packages/core/src/decks";
+export const activeDeck = new URLSearchParams(location.search).get("deck") || "local";
+export const serviceUrl = (route: string) => deckRoute(route, activeDeck);
+export const leaseStorageKey = deckLeaseStorageKey(activeDeck);
 export async function api<T = any>(operation: Operation, args: unknown = {}, signal?: AbortSignal): Promise<T> {
-  const response = await fetch(`/v1/operations/${operation}`, {
+  const response = await fetch(serviceUrl(`/v1/operations/${operation}`), {
     method: "POST",
     signal,
     headers: { "Content-Type": "application/json", "X-Device-Deck": "local" },

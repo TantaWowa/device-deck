@@ -7,6 +7,7 @@ import { DeckService } from "./local/service";
 import { dataDirectory } from "../../../packages/core/src/local/paths";
 import { atomicWrite, expand } from "../../../packages/config/src";
 import { root } from "../../../packages/adapters/src";
+import { DeckConnections } from "./decks";
 export async function runDaemon(
   licensing?: import("../../../packages/licensing/src").EntitlementService,
 ) {
@@ -46,6 +47,7 @@ export async function runDaemon(
   const servers: ReturnType<typeof createService>[] = [];
   try {
     await deck.init();
+    console.error(deck.licensing.status().message);
     const token = randomBytes(32).toString("base64url");
     const network = deck.config.config.network;
     const bindHost = process.env.DEVICE_DECK_HOST || network?.host || "127.0.0.1";
@@ -57,7 +59,8 @@ export async function runDaemon(
     const authority = new MachineAuthority(directory);
     await authority.init();
     const credentials = createBrowserCredentials();
-    const server = createService(deck, token, path.join(root, "build/web"), { bindHost, tls, authority, credentials });
+    const decks = new DeckConnections(directory);
+    const server = createService(deck, token, path.join(root, "build/web"), { bindHost, tls, authority, credentials, decks });
     servers.push(server);
     const port = Number(
       process.env.DEVICE_DECK_PORT ?? deck.config.config.port,
@@ -73,7 +76,7 @@ export async function runDaemon(
     // management when the external listener uses TLS or a specific interface.
     let control = server;
     if (tls || !["127.0.0.1", "0.0.0.0"].includes(bindHost)) {
-      control = createService(deck, token, path.join(root, "build/web"), { authority, credentials, networkPort: address.port, bindHost });
+      control = createService(deck, token, path.join(root, "build/web"), { authority, credentials, decks, networkPort: address.port, bindHost });
       servers.push(control);
       await new Promise<void>((resolve, reject) => {
         control.once("error", reject);

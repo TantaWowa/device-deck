@@ -32,9 +32,9 @@ export function License({
     <section className="license-page">
       <div className="workspace-heading">
         <div>
-          <h1>License & Upgrade</h1>
+          <h1>{status.licenseId === "enterprise-unlocked" ? "Monetization disabled" : "License & Upgrade"}</h1>
           <p>
-            One license for this Mac, across the browser, terminal and agents.
+            {status.licenseId === "enterprise-unlocked" ? "All features are available in this Device Deck instance." : "One license for this Mac, across the browser, terminal and agents."}
           </p>
         </div>
         <strong className="license-tier">
@@ -42,12 +42,15 @@ export function License({
             ? "Pro trial"
             : status.tier === "pro"
               ? "Pro"
-              : "Free"}
+              : status.tier === "enterprise"
+                ? "Enterprise"
+                : "Free"}
         </strong>
       </div>
       <p className="license-message" role="status">
         {status.message}
       </p>
+      {status.licenseId !== "enterprise-unlocked" && <>
       <div className="license-plans">
         <article>
           <h2>Free</h2>
@@ -149,6 +152,7 @@ export function License({
           require Pro; your saved captures remain available.
         </p>
       </div>
+      </>}
     </section>
   );
 }

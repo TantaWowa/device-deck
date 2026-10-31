@@ -1,6 +1,6 @@
 {
   "name": "device-deck",
-  "version": "0.5.0-beta.1",
+  "version": "0.7.0-beta.1",
   "private": true,
   "type": "module",
   "workspaces": [
@@ -60,7 +60,8 @@
     "qa:portal": "node --import tsx scripts/qa-portal.ts",
     "qa:portal-remote": "node scripts/qa-portal-remote.mjs",
     "qa:portal-pwa": "node scripts/qa-portal-pwa.mjs",
-    "qa:phone-controls": "node scripts/qa-phone-controls.mjs"
+    "qa:phone-controls": "node scripts/qa-phone-controls.mjs",
+    "qa:decks": "node --import tsx scripts/qa-decks.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.17.5",

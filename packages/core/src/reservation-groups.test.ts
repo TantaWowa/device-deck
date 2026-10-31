@@ -94,3 +94,13 @@ test("group matching backtracks on canonical source identity, not source aliases
   assert.equal(selected?.first.id, "a");
   assert.equal(selected?.second.id, "c");
 });
+
+test("selectors match exact model and runtime identifiers case-insensitively", () => {
+  const phone = { ...device("phone", "touch", []), model: "iPhone-17-Pro", runtime: "iOS-26-2" };
+  const older = { ...device("older", "touch", []), model: "iPhone-17-Pro", runtime: "iOS-18-5" };
+  const tv = { ...device("tv", "remote", []), model: "Apple-TV-4K-3rd-generation-4K", runtime: "tvOS-26-2" };
+  assert.deepEqual(matchDevices([phone, older, tv], [], { model: "iphone-17-pro" }).map((d) => d.id), ["phone", "older"]);
+  assert.deepEqual(matchDevices([phone, older, tv], [], { model: "iPhone-17-Pro", runtime: "ios-26-2" }).map((d) => d.id), ["phone"]);
+  assert.deepEqual(matchDevices([phone, older, tv], [], { runtime: "tvOS-26-2" }).map((d) => d.id), ["tv"]);
+  assert.deepEqual(matchDevices([device("bare", "touch", [])], [], { runtime: "iOS-26-2" }), []);
+});

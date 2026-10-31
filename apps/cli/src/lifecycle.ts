@@ -47,7 +47,7 @@ export async function lifecycle(command: string, launchArgs?: string[]) {
       return "Device Deck is already running.";
     } catch {}
     const bundle = packagedApplication();
-    if (bundle && !launchArgs) {
+    if (bundle && !launchArgs && process.env.DEVICE_DECK_HEADLESS !== "1") {
       await run("/usr/bin/open", applicationArgs(bundle, directory));
     } else {
       const log = await open(path.join(directory, "daemon.log"), "a", 0o600);

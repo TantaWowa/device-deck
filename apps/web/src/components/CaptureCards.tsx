@@ -101,6 +101,7 @@ function CardActionDialog({ kind, cards, devices, busy, error, close, submit }: 
 }
 
 export function CaptureCards({
+  hostName = "this Mac",
   cards,
   devices,
   busy,
@@ -118,6 +119,7 @@ export function CaptureCards({
   view,
   demo = false,
 }: {
+  hostName?: string;
   cards: CardView[];
   devices: CardDevice[];
   busy: boolean;
@@ -272,7 +274,7 @@ export function CaptureCards({
                       <h2 title={card.name}>{card.name}</h2>
                       <p className="card-connection">
                         {card.status === "connected"
-                          ? "Connected to this Mac"
+                          ? `Connected to ${hostName}`
                           : card.status === "unknown" ? "Checking capture card…" : "Capture card disconnected"}
                       </p>
                     </div>

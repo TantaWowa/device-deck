@@ -1,5 +1,5 @@
 import React, { useCallback } from "react";
-import { api } from "./api";
+import { api, serviceUrl } from "./api";
 import { LivePreview } from "./LivePreview";
 
 /** Local preview adapter. Video is continuous; snapshots are an explicit fallback. */
@@ -13,7 +13,7 @@ export function CapturePreview({ name, endpoint, active = true }: {
   const sourceId = endpoint.startsWith("/v1/source-preview/") ? decodeURIComponent(endpoint.slice("/v1/source-preview/".length)) : undefined;
   const deviceId = endpoint.startsWith("/v1/preview/") ? decodeURIComponent(endpoint.slice("/v1/preview/".length)) : undefined;
   const getSnapshot = useCallback(async (signal: AbortSignal) => {
-    const response = await fetch(endpoint, { signal, cache: "no-store" });
+    const response = await fetch(serviceUrl(endpoint), { signal, cache: "no-store" });
     if (!response.ok) {
       const failure = await response.json().catch(() => ({}));
       throw new Error(failure.message || `Snapshot returned ${response.status}.`);

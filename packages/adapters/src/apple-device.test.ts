@@ -45,3 +45,38 @@ test("physical Apple TV health refresh corrects old discovery and gives Companio
   assert.match(phone.healthDetail, /physical iPhones and iPads/);
   assert.deepEqual(phone.capabilities, []);
 });
+
+test("discovery excludes devicectl simulator rows while retaining physical devices in both metadata formats", async () => {
+  const config = configSchema.parse({ schemaVersion: 1, settings: { folder: "/tmp/captures" },
+    tools: { adb: "/usr/bin/true", emulator: "/usr/bin/true", python: "/usr/bin/true" } });
+  const rows = [
+    { identifier: "sim-modern", properties: { hardware: { reality: "simulated" } } },
+    { identifier: "sim-legacy", hardwareProperties: { reality: "simulated" } },
+    { identifier: "sim-visibility", visibilityClass: "simulators" },
+    { identifier: "phone", properties: { hardware: { reality: "physical", marketingName: "iPhone", platform: "iOS" }, state: { name: "My phone" } } },
+    { identifier: "tv", hardwareProperties: { reality: "physical", marketingName: "Apple TV", platform: "tvOS" }, deviceProperties: { name: "My TV" } },
+  ];
+  const execute: typeof run = async (_command, args) => {
+    let output = "[]";
+    if (args[0] === "-P") output = "List of devices attached\n";
+    else if (args[0] === "-list-avds") output = "";
+    else if (args[0] === "simctl") output = JSON.stringify({ devices: { "com.apple.CoreSimulator.SimRuntime.iOS-26-2": [
+      { udid: "sim-modern", name: "Simulator", deviceTypeIdentifier: "com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro" },
+    ] } });
+    else if (args[0] === "devicectl") {
+      await writeFile(args[args.indexOf("--json-output") + 1], JSON.stringify({ result: { devices: rows } }));
+      output = "";
+    }
+    return { stdout: Buffer.from(output), stderr: "" };
+  };
+  const adapters = new Adapters(() => config, execute);
+  Object.defineProperty(adapters, "scanRoku", { value: async () => [] });
+  try {
+    const found = await adapters.discover(true);
+    assert.deepEqual(found.diagnostics, []);
+    const physical = found.devices.filter((device) => device.connection.type === "apple-device");
+    assert.deepEqual(physical.map((device) => [device.name, device.model, device.inputMode]), [["My phone", "iPhone", "touch"], ["My TV", "Apple TV", "remote"]]);
+    assert.equal(found.devices.filter((device) => "udid" in device.connection && device.connection.udid === "sim-modern").length, 1);
+    assert.equal(found.devices.find((device) => "udid" in device.connection && device.connection.udid === "sim-modern")?.kind, "virtual");
+  } finally { await adapters.close(); }
+});
