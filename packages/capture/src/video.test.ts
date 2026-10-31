@@ -11,6 +11,7 @@ import { validateConfig } from "../../config/src";
 import type { H264Frame, LiveVideoSource } from "../../core/src/live";
 import { h264Nals } from "./h264";
 import { encodeLiveImages } from "./video";
+import type { WdaConnection } from "../../adapters/src/webdriveragent";
 
 function keyframe(source: LiveVideoSource, afterTimestamp = -1n) {
   return videoFrames(source, 1, afterTimestamp).then(([frame]) => frame);
@@ -37,6 +38,38 @@ function videoFrames(source: LiveVideoSource, count: number, afterTimestamp = -1
     if (settled) closed();
   });
 }
+
+test("physical iOS viewers share native WDA snapshots and release their USB forward after the final viewer", { timeout: 20000 }, async (t) => {
+  if (!await available("ffmpeg")) return t.skip("ffmpeg required for the real encoder fixture");
+  const image = (await run("ffmpeg", ["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "color=c=red:s=64x128", "-frames:v", "1", "-f", "image2pipe", "-c:v", "png", "pipe:1"])).stdout;
+  const config = validateConfig({ schemaVersion: 1, settings: { folder: "/tmp/captures" }, devices: [{ id: "iphone", name: "iPhone", platform: "Apple", kind: "physical", captureSourceId: "native",
+    connection: { type: "apple-device", udid: "physical", webDriverAgent: {} } }], sources: [{ id: "native", name: "iPhone screen", kind: "native", deviceId: "iphone" }] });
+  let opened = 0, closed = 0;
+  class FixtureAdapters extends Adapters {
+    async startAppleScreen(): Promise<WdaConnection> {
+      opened++; let released = false;
+      return {
+        request: async (method, route) => {
+          assert.equal(method, "GET"); assert.equal(route, "/screenshot");
+          return { value: image.toString("base64") };
+        },
+        onClose: () => () => {},
+        close: async () => { if (!released) { released = true; closed++; } },
+      };
+    }
+  }
+  const adapters = new FixtureAdapters(() => config), engine = new CaptureEngine(adapters);
+  let one: LiveVideoSource | undefined, two: LiveVideoSource | undefined;
+  try {
+    [one, two] = await Promise.all([engine.live(config.devices[0], config.sources[0]), engine.live(config.devices[0], config.sources[0])]);
+    assert.equal(opened, 1);
+    assert.equal(one.fps, 2);
+    assert.ok((await keyframe(one)).data.length);
+    await one.close(); assert.equal(closed, 0);
+    assert.ok((await keyframe(two)).data.length);
+    await two.close(); assert.equal(closed, 1);
+  } finally { await one?.close(); await two?.close(); await engine.close(); await adapters.close(); }
+});
 
 test("successive PNG screenshots retain their colours, as do USB JPEG frames", async (t) => {
   if (!(await available("ffmpeg"))) return t.skip("ffmpeg required for the real encoder fixture");

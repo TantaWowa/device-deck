@@ -41,7 +41,7 @@ const descriptions: Partial<Record<Operation, string>> = {
     "Explicitly take over an existing session with a reason and confirmed=true. Its recording is finalized before the new reservation.",
   "remote.input":
     "Send exactly one key, text string or x/y tap using a current lease credential. Unsupported keys and platforms return errors.",
-  "control.start": "Start daemon-owned persistent touch control for a credential-owned Android or iOS simulator session. Returns supported gestures and screen dimensions. Android uses pinned scrcpy; iOS uses idb. Idle controllers expire after 15 seconds.",
+  "control.start": "Start daemon-owned persistent touch control for a credential-owned Android, iOS simulator or configured physical iPhone/iPad session. Returns supported gestures and screen dimensions. Android uses pinned scrcpy; iOS simulators use idb; physical iOS uses a signed WebDriverAgent helper over USB. Idle controllers expire after 15 seconds.",
   "control.pointer": "Send an ordered down/move/up/cancel contact in encoded screen pixels through an existing or newly started lease-owned Android controller. Movement is continuous and bounded. Send dimensions matching the current display. Never replay after connection loss.",
   "control.stop": "Cancel active contacts and stop scripted control helpers without releasing the reservation or interrupting recording.",
   "remote.gesture": "Perform a supported tap, swipe or longPress with the current lease, in encoded screen pixels. width/height must match the displayed image; unsupported platforms are rejected. Release or control.stop cleans up the helper.",

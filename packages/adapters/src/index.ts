@@ -1,6 +1,7 @@
 import { ANDROID_GESTURES, startScrcpy } from "./scrcpy";
 import { androidAdbPort, androidBootReady, androidFeatures, avdInputMode, avdProfile } from "./android-state";
 import { IOS_GESTURES, startIdbInteractive } from "./interactive";
+import { openWda, startWdaInteractive, wdaScreen, wdaScreenshot, WDA_GESTURES } from "./webdriveragent";
 import type { InteractiveSource, VideoProfile } from "../../core/src/live";
 import { androidKeys, rokuKeys, hidKeys, iosHardwareKeys, deviceInputMode } from "../../core/src/remote";
 import { controlSimulator, simulatorState, SimulatorInventory, wakeSimulator, SIMULATOR_UNAVAILABLE_MESSAGE } from "./simulator";
@@ -574,16 +575,24 @@ export class Adapters {
       }
       if (c.type === "apple-device") {
         const list = await appleDevices();
-        const found = list.find((x: any) => x.identifier === c.udid);
+        const found = list.find((x: any) => x.identifier === c.udid || (x.properties?.hardware || x.hardwareProperties)?.udid === c.udid);
         result.online = Boolean(found && ["connected", "available"].includes(found.connectionProperties?.tunnelState || found.deviceProperties?.connectionState));
-        if (found?.hardwareProperties) {
-          result.inputMode = appleHardwareInputMode(found.hardwareProperties);
-          result.model = found.hardwareProperties.marketingName || found.hardwareProperties.productType || result.model;
+        const hardware = found?.properties?.hardware || found?.hardwareProperties;
+        if (hardware) {
+          result.inputMode = appleHardwareInputMode(hardware);
+          result.model = hardware.marketingName || hardware.productType || result.model;
         }
         result.healthDetail =
           deviceInputMode(result) === "remote"
             ? "This Apple TV was discovered by Xcode. Configure and pair an Apple TV Companion connection for remote input. A connected USB capture feed is view-only."
-            : "Touch input on physical iPhones and iPads is not supported by this adapter. A connected USB capture feed is view-only; use an iOS simulator for touch control.";
+            : "For touch input on physical iPhones and iPads, configure WebDriverAgent in this device's settings and start its signed helper over USB.";
+        if (result.online && deviceInputMode(result) === "touch" && c.webDriverAgent) {
+          if (await available(this.tool("iproxy"))) {
+            result.capabilities.push("touch");
+            result.gestureCapabilities = [...WDA_GESTURES];
+            result.healthDetail = "WebDriverAgent configured · connect by USB and keep the signed helper running";
+          } else result.healthDetail = "Physical iOS touch needs iproxy. Install libusbmuxd, then configure iproxy in Settings.";
+        }
       }
       const source = this.getConfig().sources.find(
         (s) => s.id === d.captureSourceId,
@@ -591,10 +600,12 @@ export class Adapters {
       if (
         result.online &&
         source &&
-        (source.kind === "usb" || ["adb", "simulator"].includes(c.type))
+        (source.kind === "usb" || ["adb", "simulator"].includes(c.type) ||
+          c.type === "apple-device" && c.webDriverAgent && result.capabilities.includes("touch"))
       ) {
         result.capabilities.push("preview", "screenshot");
         if (
+          (source.kind === "usb" || c.type !== "apple-device") &&
           (await available(this.tool("ffmpeg"))) &&
           (await available(this.tool("ffprobe")))
         )
@@ -802,6 +813,10 @@ export class Adapters {
     );
   }
   async startInteractive(d: DeviceConfig, control = true, profile: VideoProfile = "balanced"): Promise<InteractiveSource> {
+    if (d.connection.type === "apple-device" && d.connection.webDriverAgent) {
+      if (!control) fail("unsupported-capability", "Use the physical iOS screen source for view-only capture.");
+      return startWdaInteractive(await this.startAppleScreen(d), () => this.startAppleScreen(d));
+    }
     if (d.connection.type === "adb") {
       d = await this.verifyIdentity(d);
       if (!(await androidBootReady(this.tool("adb"), this.adb(d), this.execute)))
@@ -811,6 +826,19 @@ export class Adapters {
     if (d.connection.type === "simulator" && await simulatorState(d, this.execute) !== "booted")
       fail("device-not-ready", "This simulator is stopped or still booting. Wait for its system screen before opening the feed.", 409);
     return startIdbInteractive(d, this.tool("idb"), control);
+  }
+  async startAppleScreen(d: DeviceConfig) {
+    const c = d.connection;
+    if (c.type !== "apple-device" || !c.webDriverAgent)
+      fail("unsupported-capability", "Configure WebDriverAgent for this physical iPhone or iPad.");
+    const devices = await this.appleDevices();
+    const matches = devices.filter((x: any) => x.identifier === c.udid || (x.properties?.hardware || x.hardwareProperties)?.udid === c.udid);
+    const hardware = matches[0]?.properties?.hardware || matches[0]?.hardwareProperties;
+    if (matches.length !== 1 || hardware?.reality !== "physical" || appleHardwareInputMode(hardware) !== "touch" || !hardware.udid)
+      fail("identity-unverified", "Xcode must report the exact physical iPhone or iPad and its hardware UDID. Reconnect and rediscover it.", 409);
+    const connection = await openWda(hardware.udid, c.webDriverAgent.port, this.tool("iproxy"));
+    try { await wdaScreen(connection); return connection; }
+    catch (error) { await connection.close(); throw error; }
   }
   async pair(d: DeviceConfig) {
     if (d.connection.type !== "apple-tv")
@@ -876,6 +904,11 @@ export class Adapters {
   }
   async screenshot(d: DeviceConfig) {
     d = await this.verifyIdentity(d);
+    if (d.connection.type === "apple-device" && d.connection.webDriverAgent) {
+      const connection = await this.startAppleScreen(d);
+      try { return await wdaScreenshot(connection); }
+      finally { await connection.close(); }
+    }
     if (d.connection.type === "adb")
       return (
         await run(this.tool("adb"), [

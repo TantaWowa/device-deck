@@ -260,7 +260,7 @@ For scripted gestures, reserve a device first, then use the generic CLI `call` c
 
 `control.pointer` accepts `{sessionId,leaseToken,event}` with the same pointer event shape as the data channel. It is available only when continuous drag is advertised, currently touchscreen Android. `control.stop` releases its contacts and source without ending the reservation. Scripted input is refused while a browser owns touch control for that session. Opening browser control ends the scripted controller. Idle scripted controllers expire after 15 seconds.
 
-MCP exposes the same operations as `streams_open`, `streams_ping`, `streams_close`, `control_start`, `control_pointer`, `control_stop` and `remote_gesture`. iOS simulators use native H.264 video and advertise completed tap/swipe/long-press gestures through idb. They do not accept continuous drag or multitouch.
+MCP exposes the same operations as `streams_open`, `streams_ping`, `streams_close`, `control_start`, `control_pointer`, `control_stop` and `remote_gesture`. iOS simulators use native H.264 video and advertise completed tap/swipe/long-press gestures through idb. Configured physical iPhones/iPads expose the same completed gestures through [WebDriverAgent over USB](physical-ios.md), with a native screenshot feed sampled at up to two frames per second. Neither iOS adapter accepts continuous drag or multitouch.
 
 ## MCP walkthrough
 

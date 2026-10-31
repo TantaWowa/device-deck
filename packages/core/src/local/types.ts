@@ -68,7 +68,10 @@ export const deviceSchema = z
           .regex(/^[\w.:-]+$/),
         identifier: z.string().min(1),
       }),
-      z.object({ type: z.literal("apple-device"), udid: z.string().min(1) }),
+      z.object({
+        type: z.literal("apple-device"), udid: z.string().min(1),
+        webDriverAgent: z.object({ port: z.number().int().min(1).max(65535).default(8100) }).strict().optional(),
+      }),
     ]),
     captureSourceId: z.string().nullable().default(null),
   })
@@ -163,6 +166,7 @@ export const configSchema = z
         ffmpeg: z.string().optional(),
         ffprobe: z.string().optional(),
         idb: z.string().optional(),
+        iproxy: z.string().optional(),
         python: z.string().optional(),
       })
       .strict()

@@ -127,7 +127,8 @@ export class LiveStreams {
       }
       // A touchscreen controller must see its actual native display, even if a
       // view-only feed has an external USB source assigned to the same device.
-      const nativeIosControl = args.control && target.device?.connection.type === "simulator" && target.device.connection.os === "ios";
+      const nativeIosControl = args.control && (target.device?.connection.type === "simulator" && target.device.connection.os === "ios" ||
+        target.device?.connection.type === "apple-device" && Boolean(target.device.connection.webDriverAgent));
       const videoTarget = nativeIosControl ? { ...target, source: {
         id: target.source?.kind === "native" ? target.source.id : `native-control-${target.device!.id}`,
         name: `${target.device!.name} native screen`, kind: "native" as const, deviceId: target.device!.id,
