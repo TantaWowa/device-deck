@@ -18,6 +18,8 @@ An Android device's optional `connection.avdName` is its persistent virtual-devi
 
 Existing serial-only emulator entries can close their exact running emulator once its AVD identity is readable. Lifecycle and reservation preflight learn and save that verified AVD name, rejecting duplicate registered identities. A stopped serial-only entry needs its AVD name set in **Edit device** before Launch is available. If an emulator is still booting or its identity is unreadable, wait and refresh; a launch timeout leaves its process running. Physical devices do not have simulator lifecycle controls.
 
+For custom Android storage, run `devdeck start` or `devdeck service install` from a shell with the intended `ANDROID_HOME`, `ANDROID_SDK_ROOT`, `ANDROID_USER_HOME` and `ANDROID_AVD_HOME` values. The packaged launcher forwards these paths through LaunchServices, and service installation saves them for later logins. Reinstall the login service after changing those paths. Set absolute `tools.adb` and `tools.emulator` paths in Settings because the packaged app uses its own executable search path.
+
 Scripts and MCP use the same operation:
 
 ```sh
