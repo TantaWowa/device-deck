@@ -14,7 +14,7 @@ import {
 } from "./provider";
 import { releaseTrust, FEATURES, type LicensingTrust } from "./trust";
 export type LicenseStatus = {
-  tier: "free" | "trial" | "pro";
+  tier: "free" | "trial" | "pro" | "enterprise";
   state: "free" | "active" | "offline" | "expired" | "invalid" | "unconfigured";
   configured: boolean;
   message: string;

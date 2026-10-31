@@ -3,6 +3,14 @@ import path from "node:path";
 import { readFile } from "node:fs/promises";
 import { run } from "./process";
 
+export function androidAdbPort(env = process.env) {
+  const value = env.ANDROID_ADB_SERVER_PORT ?? "5037";
+  const port = Number(value);
+  if (!/^\d+$/.test(value) || !Number.isInteger(port) || port < 1 || port > 65535)
+    throw new Error("ANDROID_ADB_SERVER_PORT must be an integer from 1 to 65535.");
+  return port;
+}
+
 export function androidFeatures(output: string) {
   const features = new Set(output.split(/\r?\n/).map((line) => line.trim()));
   return {
@@ -30,6 +38,26 @@ export async function avdInputMode(name: string, directories = [
     } catch {}
   }
   return undefined;
+}
+
+/** Hardware profile and system image of a stopped or running AVD, from its config.ini. */
+export async function avdProfile(name: string, directories = [
+  process.env.ANDROID_AVD_HOME,
+  path.join(process.env.ANDROID_USER_HOME || path.join(os.homedir(), ".android"), "avd"),
+]): Promise<{ model?: string; runtime?: string }> {
+  if (!/^[A-Za-z0-9_][A-Za-z0-9_.-]*$/.test(name)) return {};
+  for (const directory of directories) {
+    if (!directory) continue;
+    try {
+      const pointer = await readFile(path.join(directory, `${name}.ini`), "utf8").catch(() => "");
+      const location = pointer.match(/^path=(.+)$/m)?.[1].trim() || path.join(directory, `${name}.avd`);
+      const config = await readFile(path.join(location, "config.ini"), "utf8");
+      const model = config.match(/^hw\.device\.name=(.+)$/m)?.[1].trim();
+      const image = config.match(/^image\.sysdir\.1=(.+)$/m)?.[1].trim().replace(/\/+$/, "").replaceAll("/", ";");
+      return { ...(model ? { model } : {}), ...(image ? { runtime: image } : {}) };
+    } catch {}
+  }
+  return {};
 }
 
 /** ADB's device state only means the transport is ready, not Android itself. */

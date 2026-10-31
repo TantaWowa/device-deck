@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { staleVirtualDevices } from "../../../packages/core/src/discovery";
 import { resolveReportRange } from "../../../packages/core/src/reports";
 import { parseArgs } from "node:util";
 import { readFile } from "node:fs/promises";
@@ -12,6 +13,7 @@ import {
 } from "../../../packages/core/src/client";
 import {
   operations,
+  type DeviceConfig,
   type Operation,
   type Selector,
   type Snapshot,
@@ -29,6 +31,7 @@ import path from "node:path";
 import { lifecycle } from "./lifecycle";
 import { tailscaleCommand, tailscaleBrowserUrl } from "./tailscale";
 import { networkCommand, pairCommand } from "./network";
+import { discoverRegistration } from "./registration";
 import { pick, parseSelector } from "./selection";
 import { selectFeeds, feedQuery } from "./feeds";
 import { readGroupCredential, readReservationManifest, releaseGroupCredential, reservationCommandOutput, prepareGroupCredential } from "./reservation-files";
@@ -58,14 +61,19 @@ Usage: devdeck <command> [options]
   view [--source NAME_OR_ID]    Open a browser feed; Left/Right switches feeds
        [--sources A,B,C] [--mux] [--browser] [--json]
   devices [filters]            List configured devices
+  register --udid UDID|--avd NAME|--serial SERIAL [--name NAME] [--tags a,b]
+                               Register a discovered device non-interactively
+  unregister --device ID --yes | --stale-virtual --yes
+                               Remove registered devices discovery no longer finds
   sources | sessions | captures | history
   reports [--range day|week|month|custom] [--start YYYY-MM-DD --end YYYY-MM-DD]
   license status|refresh|deactivate
   license activate <key-file>  Read a license key from a private file
   config [get|import|export|validate] [file]
   reserve [filters] --owner NAME --reason TEXT
-  reserve MANIFEST.json --result-file FILE --json
-                               Atomically reserve and ready a device group
+  reserve MANIFEST.json --result-file FILE --json [--wait SECONDS]
+                               Atomically reserve and ready a device group;
+                               --wait retries while devices are held
   renew | release              Use --session ID --lease TOKEN
   renew | release RESULT.json  Renew or release a reservation group
   remote [filters]             Interactive remote and device picker
@@ -79,6 +87,7 @@ Usage: devdeck <command> [options]
 
 Filters: --device NAME_OR_ID --platform Roku|Android|Apple|Other --name TEXT
          --kind physical|virtual --form-factor phone|tv|other --tags ci,nightly
+         --model iPhone-17-Pro|pixel_9 --runtime iOS-26-2|system-images;android-35;...
          --state free|reserved|online|offline|locked --capabilities key,record
 Options: --json --ttl MINUTES --mode clean|annotated
 
@@ -96,6 +105,12 @@ const optionTypes: Record<string, { type: "string" | "boolean" }> =
       "platform",
       "kind",
       "form-factor",
+      "model",
+      "runtime",
+      "udid",
+      "avd",
+      "serial",
+      "wait",
       "tags",
       "name",
       "state",
@@ -128,7 +143,7 @@ const optionTypes: Record<string, { type: "string" | "boolean" }> =
       "address",
     ].map((k) => [k, { type: "string" }]),
   );
-for (const key of ["json", "help", "clipboard", "yes", "mux", "browser", "version", "tailscale", "revoke"])
+for (const key of ["json", "help", "clipboard", "yes", "mux", "browser", "version", "tailscale", "revoke", "stale-virtual"])
   optionTypes[key] = { type: "boolean" };
 try {
   const { values: v, positionals: p } = parseArgs({
@@ -318,6 +333,46 @@ try {
           : "../../tui/src/index"
       );
     } else if (command === "discover") result = await callOperation("discover", { refresh: true });
+    else if (command === "register") {
+      const wanted = { udid: v.udid ? String(v.udid).toLowerCase() : undefined, avd: v.avd ? String(v.avd) : undefined, serial: v.serial ? String(v.serial) : undefined };
+      if (!wanted.udid && !wanted.avd && !wanted.serial) throw new DeckError("arguments", "Supply --udid, --avd or --serial.", 400);
+      const { found, match } = await discoverRegistration(wanted);
+      const current = await callOperation("config.get");
+      const config = structuredClone(current.config);
+      const tags = typeof v.tags === "string" ? v.tags.split(",").map((tag) => tag.trim()).filter(Boolean) : [];
+      const index = config.devices.findIndex((d: DeviceConfig) => d.id === match.id);
+      const existing: DeviceConfig | undefined = index >= 0 ? config.devices[index] : undefined;
+      const registered = {
+        ...(existing || {}),
+        ...match,
+        name: v.name ? String(v.name) : existing?.name || match.name,
+        tags: [...new Set([...(existing?.tags || []), ...tags])],
+      };
+      if (existing) config.devices[index] = registered; else config.devices.push(registered);
+      for (const source of found.sources.filter((s) => s.deviceId === match.id))
+        if (!config.sources.some((c: { id: string }) => c.id === source.id)) config.sources.push(source);
+      await callOperation("config.save", { config, revision: current.revision });
+      result = { registered, created: !existing };
+    } else if (command === "unregister") {
+      if (!v.yes) throw new DeckError("arguments", "Unregister requires --yes.", 400);
+      const current = await callOperation("config.get");
+      const config = structuredClone(current.config);
+      let removed: DeviceConfig[];
+      if (v["stale-virtual"]) {
+        const found = await callOperation("discover", { refresh: true });
+        removed = staleVirtualDevices(config, found);
+      } else if (v.device) {
+        const wanted = String(v.device).toLowerCase();
+        removed = config.devices.filter((d: DeviceConfig) => [d.id.toLowerCase(), d.name.toLowerCase()].includes(wanted));
+        if (!removed.length) throw new DeckError("no-match", "No registered device matches --device.", 404);
+      } else throw new DeckError("arguments", "Supply --device ID or --stale-virtual.", 400);
+      const ids = new Set(removed.map((d) => d.id));
+      const sourceIds = new Set(removed.map((d) => d.captureSourceId).filter(Boolean));
+      config.devices = config.devices.filter((d: DeviceConfig) => !ids.has(d.id));
+      config.sources = config.sources.filter((s: { id: string; kind: string }) => !(s.kind === "native" && sourceIds.has(s.id)));
+      if (removed.length) await callOperation("config.save", { config, revision: current.revision });
+      result = { removed: removed.map((d) => ({ id: d.id, name: d.name, model: d.model })) };
+    }
     else if (command === "config") {
       const sub = p[1] || "get";
       if (sub === "validate") {
@@ -413,10 +468,23 @@ try {
               groupId: manifest.groupId,
               leaseToken: randomBytes(32).toString("base64url"),
             };
-        const acquired = await callOperation(
-          "sessions.reserveGroup",
-          { ...manifest, leaseToken: credential.leaseToken },
-        );
+        const deadline = v.wait ? Date.now() + Number(v.wait) * 1000 : 0;
+        if (v.wait && !(Number.isFinite(Number(v.wait)) && Number(v.wait) > 0)) throw new DeckError("arguments", "--wait takes a finite positive number of seconds.", 400);
+        let acquired;
+        for (;;) {
+          try {
+            acquired = await callOperation(
+              "sessions.reserveGroup",
+              { ...manifest, leaseToken: credential.leaseToken },
+            );
+            break;
+          } catch (error) {
+            const retryable = error instanceof DeckError && ["group-no-match", "group-preparing"].includes(error.code);
+            if (!retryable || Date.now() >= deadline) throw error;
+            console.error(`Waiting for devices (${Math.ceil((deadline - Date.now()) / 1000)}s left): ${(error as Error).message}`);
+            await new Promise((resolve) => setTimeout(resolve, 5000));
+          }
+        }
         if (resultFile)
           await atomicWrite(resultFile, JSON.stringify(acquired, null, 2) + "\n");
         result = reservationCommandOutput(acquired, resultFile);

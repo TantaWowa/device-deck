@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { androidFeatures, avdInputMode } from "./android-state";
+import { androidFeatures, avdInputMode, avdProfile } from "./android-state";
 import { Adapters } from "./index";
 import { configSchema, deviceSchema } from "../../core/src/local/types";
 import { deviceInputMode } from "../../core/src/remote";
@@ -28,6 +28,17 @@ test("stopped AVD classification uses SDK tags including relocated AVDs, never a
     assert.equal(await avdInputMode("actual_tv", [directory]), "remote");
     assert.equal(await avdInputMode("missing", [directory]), undefined);
     assert.equal(await avdInputMode("../actual_tv", [directory]), undefined);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test("AVD profile reports the hardware model and system image in SDK package form", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "deck-avd-profile-"));
+  try {
+    await mkdir(path.join(directory, "Pool_pixel_9.avd"));
+    await writeFile(path.join(directory, "Pool_pixel_9.avd/config.ini"), "hw.device.name=pixel_9\nimage.sysdir.1=system-images/android-35/google_apis/arm64-v8a/\ntag.id=google_apis\n");
+    assert.deepEqual(await avdProfile("Pool_pixel_9", [directory]), { model: "pixel_9", runtime: "system-images;android-35;google_apis;arm64-v8a" });
+    assert.deepEqual(await avdProfile("missing", [directory]), {});
+    assert.deepEqual(await avdProfile("../Pool_pixel_9", [directory]), {});
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 

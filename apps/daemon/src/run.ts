@@ -46,6 +46,7 @@ export async function runDaemon(
   const servers: ReturnType<typeof createService>[] = [];
   try {
     await deck.init();
+    console.error(deck.licensing.status().message);
     const token = randomBytes(32).toString("base64url");
     const network = deck.config.config.network;
     const bindHost = process.env.DEVICE_DECK_HOST || network?.host || "127.0.0.1";

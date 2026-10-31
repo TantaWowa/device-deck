@@ -53,6 +53,7 @@ import {
   FEATURES,
   type EntitlementService,
 } from "../../../../packages/licensing/src";
+import { UnlockedEnterpriseLicense } from "../../../../packages/licensing/src/enterprise";
 type Job = {
   artifact: Artifact;
   handle: RecordingHandle;
@@ -81,7 +82,8 @@ export class DeckService {
   readonly config: ConfigStore;
   readonly adapters: Adapters;
   readonly capture: CaptureEngine;
-  readonly licensing: EntitlementService;
+  private entitlement: EntitlementService;
+  get licensing() { return this.entitlement; }
   readonly streams: LiveStreams;
   readonly thumbnails: CaptureThumbnails;
   readonly captureCardThumbnails = new CaptureCardThumbnails();
@@ -119,14 +121,14 @@ export class DeckService {
     configFile = path.join(directory, "config.json"),
     adapters?: Adapters,
     capture?: CaptureEngine,
-    licensing?: EntitlementService,
+    private readonly licensingOverride?: EntitlementService,
     groupReadiness: Partial<GroupReadinessPolicy> = {},
   ) {
     this.config = new ConfigStore(configFile);
     this.adapters = adapters || new Adapters(() => this.config.config);
     this.capture = capture || new CaptureEngine(this.adapters);
     this.thumbnails = new CaptureThumbnails((id) => this.store.artifact(id), () => this.adapters.tool("ffmpeg"));
-    this.licensing = licensing || new LicenseManager(directory);
+    this.entitlement = licensingOverride || new LicenseManager(directory);
     this.groupReadiness = {
       ...defaultGroupReadinessPolicy,
       ...groupReadiness,
@@ -145,6 +147,8 @@ export class DeckService {
   async init() {
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
     await this.config.load();
+    if (!this.licensingOverride && !this.config.config.monetization?.enabled)
+      this.entitlement = new UnlockedEnterpriseLicense();
     await this.licensing.init();
     this.store = new Store(path.join(this.directory, "state.sqlite"));
     await this.recover();
