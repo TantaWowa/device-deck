@@ -28,10 +28,13 @@ export function packagedApplication() {
     ? bundle
     : undefined;
 }
-function applicationArgs(bundle: string, directory: string) {
-  return ["-n", "-g", "-a", bundle, "--args", "--service", "--profile", directory,
+const androidEnvironmentKeys = ["ANDROID_HOME", "ANDROID_SDK_ROOT", "ANDROID_USER_HOME", "ANDROID_AVD_HOME"];
+export function applicationArgs(bundle: string, directory: string, environment = process.env) {
+  return ["-n", "-g", "-a", bundle,
+    ...androidEnvironmentKeys.flatMap(key => environment[key] ? ["--env", `${key}=${environment[key]}`] : []),
+    "--args", "--service", "--profile", directory,
     ...[["DEVICE_DECK_CONFIG", "--config"], ["DEVICE_DECK_PORT", "--port"], ["DEVICE_DECK_HOST", "--host"]].flatMap(([key, flag]) =>
-      process.env[key] ? [flag, process.env[key]!] : []),
+      environment[key] ? [flag, environment[key]!] : []),
   ];
 }
 export async function lifecycle(command: string, launchArgs?: string[]) {
@@ -125,6 +128,7 @@ export async function lifecycle(command: string, launchArgs?: string[]) {
         "DEVICE_DECK_CONFIG",
         "DEVICE_DECK_PORT",
         "DEVICE_DECK_HOST",
+        ...androidEnvironmentKeys,
       ]
         .filter((key) => process.env[key])
         .map(
