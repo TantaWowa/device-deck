@@ -581,7 +581,10 @@ export class DeckService {
       case "apps.launch":
         return this.withLease(args, async (session) => {
           const device = this.device(session.deviceId);
-          const adapter = this.interactions.get(session.id) ?? this.adapters.forDevice(device);
+          const adapter = this.interactions.get(session.id) ?? this.adapters.forDevice(device, {
+            opened: (wdaSessionId) => this.store.putOwnedInteraction({ sessionId: session.id, device, wdaSessionId }),
+            closed: () => this.store.clearOwnedInteraction(session.id),
+          });
           this.interactions.set(session.id, adapter);
           const startedAt = new Date().toISOString();
           if (authorize && !await authorize()) fail("unauthorized", "Device access expired before dispatch.", 401);
@@ -2192,6 +2195,10 @@ export class DeckService {
       .run(async () => {
         await stopInput;
         await this.interactions.get(s.id)?.close();
+        for (const owned of this.store.ownedInteractions().filter((value) => value.sessionId === s.id)) {
+          await this.adapters.closeOwnedWda(owned.device, owned.wdaSessionId);
+          this.store.clearOwnedInteraction(s.id);
+        }
         this.interactions.delete(s.id);
         await this.finishRecording(
           s.id,
@@ -2406,6 +2413,12 @@ export class DeckService {
     this.store.clearWorker(worker.id);
   }
   private async recover() {
+    for (const owned of this.store.ownedInteractions()) {
+      try {
+        await this.adapters.closeOwnedWda(owned.device, owned.wdaSessionId);
+        this.store.clearOwnedInteraction(owned.sessionId);
+      } catch (error) { this.diagnostics.push(`Device interaction cleanup requires attention: ${(error as Error).message}`); }
+    }
     for (const worker of this.store.workers()) {
       try {
         await this.cleanWorker(worker);
@@ -2424,13 +2437,13 @@ export class DeckService {
       await this.manifest(a).catch(() => {});
     }
     for (const s of this.store.sessions().filter((s) => s.state !== "closed")) {
-      const pending = this.store
+      const pending = this.store.ownedInteractions().some((owned) => owned.sessionId === s.id) || this.store
         .workers()
         .some((w) => this.store.artifact(w.id).sessionId === s.id);
       s.state = pending ? "closing" : "closed";
       s.endedAt = pending ? undefined : Date.now();
       s.closeReason = pending
-        ? "Recorder cleanup requires attention. Connect the device and retry release."
+        ? "Device cleanup requires attention. Connect the device and retry release."
         : "Service restarted";
       this.store.putSession(s);
       this.store.event({

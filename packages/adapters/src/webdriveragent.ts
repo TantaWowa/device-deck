@@ -124,7 +124,7 @@ export function wdaActions(input: GestureInput, screen: WdaScreen) {
 }
 
 /** Completed gestures retain their final up, even if the lease closes mid-flight. */
-export async function startWdaInteractive(connection: WdaConnection, reconnectForCleanup?: () => Promise<WdaConnection>): Promise<InteractiveSource & { sessionId: string }> {
+export async function startWdaInteractive(connection: WdaConnection, reconnectForCleanup?: () => Promise<WdaConnection>, onSessionCreated?: (id: string) => void): Promise<InteractiveSource & { sessionId: string }> {
   let sessionId: string | undefined;
   try {
     const status = await connection.request("GET", "/status");
@@ -134,6 +134,7 @@ export async function startWdaInteractive(connection: WdaConnection, reconnectFo
       shouldTerminateApp: false, waitForIdleTimeout: 0,
     }, firstMatch: [{}] } });
     sessionId = z.object({ sessionId: z.string().min(1) }).parse(created.value).sessionId;
+    onSessionCreated?.(sessionId);
     const route = `/session/${encodeURIComponent(sessionId)}`;
     let closed = false, disconnected = false, cleaned = false;
     let pending: Promise<void> | undefined, closing: Promise<void> | undefined;

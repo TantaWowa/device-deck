@@ -13,6 +13,7 @@ import {
 import { chmodSync } from "node:fs";
 import {
   type Session,
+  type DeviceConfig,
   type Event,
   type Input,
   type Artifact,
@@ -23,6 +24,7 @@ import {
 const hash = (token: string) =>
   createHash("sha256").update(token).digest("hex");
 type LeaseRow = { payload: string; token_hash: string };
+type OwnedInteraction = { sessionId: string; device: DeviceConfig; wdaSessionId: string };
 export class Store {
   readonly db: DatabaseSync;
   constructor(file: string) {
@@ -38,6 +40,7 @@ export class Store {
       CREATE TABLE IF NOT EXISTS inputs(id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, recording_id TEXT, payload TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS artifacts(id TEXT PRIMARY KEY, session_id TEXT NOT NULL, payload TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS workers(artifact_id TEXT PRIMARY KEY, payload TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS interaction_ownership(session_id TEXT PRIMARY KEY, payload TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS reservation_groups(id TEXT PRIMARY KEY, state TEXT NOT NULL, token_hash TEXT NOT NULL, payload TEXT NOT NULL);
       PRAGMA user_version=1;`);
   }
@@ -58,6 +61,15 @@ export class Store {
         payload: string;
       }[]
     ).map((r) => JSON.parse(r.payload) as Session);
+  }
+  ownedInteractions() {
+    return (this.db.prepare("SELECT payload FROM interaction_ownership").all() as { payload: string }[]).map((row) => JSON.parse(row.payload) as OwnedInteraction);
+  }
+  putOwnedInteraction(value: OwnedInteraction) {
+    this.db.prepare("INSERT OR REPLACE INTO interaction_ownership VALUES (?,?)").run(value.sessionId, JSON.stringify(value));
+  }
+  clearOwnedInteraction(sessionId: string) {
+    this.db.prepare("DELETE FROM interaction_ownership WHERE session_id=?").run(sessionId);
   }
   session(id: string) {
     const row = this.db

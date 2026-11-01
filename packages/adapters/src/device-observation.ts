@@ -13,6 +13,7 @@ export type ObservationHost = {
   adb(): string[];
   verify(): Promise<unknown>;
   wda(): Promise<WdaConnection>;
+  ownership?: { opened(sessionId: string): void; closed(): void };
 };
 export interface ObservationAdapter {
   readonly capabilities: InteractionCapabilities;
@@ -77,7 +78,7 @@ export function normalizeUi(value: any, options: UiRead, coordinateSpace: "point
 }
 
 export function boundedLogs(raw: string, options: DeviceLogs) {
-  const redacted = raw.replace(/(["']?(?:authorization|cookie|password|access[_-]?token|refresh[_-]?token|api[_-]?key)["']?\s*[=:]\s*)(?:"(?:\\.|[^"\\\r\n])*(?:\\)?(?:"|(?=\r?\n|$))|'(?:\\.|[^'\\\r\n])*(?:\\)?(?:'|(?=\r?\n|$))|[^\r\n,]+)/gi, "$1[REDACTED]");
+  const redacted = raw.replace(/(["']?(?:authorization|cookie|password|access[_-]?token|refresh[_-]?token|api[_-]?key)["']?\s*[=:]\s*)(?:"(?:\\[\s\S]|[^"\\])*(?:"|(?:\\)?$)|'(?:\\[\s\S]|[^'\\])*(?:'|(?:\\)?$)|[^\r\n,]+)/gi, "$1[REDACTED]");
   const lines = redacted.split(/\r?\n/);
   const selected = lines.slice(0, options.maxLines).join("\n");
   const bytes = Buffer.from(selected);
@@ -200,7 +201,7 @@ class PhysicalAppleObservation extends ObservationBase {
   async launch(appId: string, args: string[]) {
     await this.close();
     const connection = await this.host.wda();
-    const source = await startWdaInteractive(connection, () => this.host.wda());
+    const source = await startWdaInteractive(connection, () => this.host.wda(), (id) => this.host.ownership?.opened(id));
     this.pending = source;
     try {
       await connection.request("POST", `/session/${encodeURIComponent(source.sessionId)}/wda/apps/launch`, { bundleId: appId, arguments: args, shouldWaitForQuiescence: false });
@@ -211,6 +212,7 @@ class PhysicalAppleObservation extends ObservationBase {
     const source = this.pending;
     if (!source) return;
     await source.close();
+    this.host.ownership?.closed();
     if (this.pending === source) this.pending = undefined;
   }
 }

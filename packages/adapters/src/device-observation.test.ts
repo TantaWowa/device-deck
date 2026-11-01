@@ -5,6 +5,7 @@ import { mkdtemp, writeFile, chmod, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { observationAdapter, androidUi, normalizeUi, boundedLogs, type ObservationHost } from "./device-observation";
+import { Adapters } from "./index";
 import { deviceLogsSchema, uiReadSchema } from "../../core/src/device-interaction";
 import { deviceSchema } from "../../core/src/local/types";
 import type { run } from "./process";
@@ -43,7 +44,7 @@ test("logs enforce finite intervals, byte and line budgets and remove common cre
   assert(!json.text.includes("secret")); assert(json.text.includes('"ok":true'));
   const unicode = boundedLogs("abc" + "界".repeat(100), deviceLogsSchema.parse({ maxBytes: 256 }));
   assert(unicode.truncated); assert(Buffer.byteLength(unicode.text) <= 256); assert(!unicode.text.includes("\uFFFD"));
-  for (const raw of ['{"password":"prefix,credential-tail', '{"password":"prefix,credential-tail\\', "password='prefix,credential-tail"]) {
+  for (const raw of ['{"password":"prefix,credential-tail', '{"password":"prefix,credential-tail\\', "password='prefix,credential-tail", 'password="first-line\ncredential-tail"', '{"password":"prefix,credential-tail\r']) {
     assert(!boundedLogs(raw, deviceLogsSchema.parse({})).text.includes("credential-tail"));
   }
 });
@@ -123,6 +124,8 @@ test("failed launch cleanup survives until its owned WDA session can reconnect a
   const phone = deviceSchema.parse({ ...device, kind: "physical", connection: { type: "apple-device", udid: "physical", webDriverAgent: {} } });
   const context = host(async () => result(""));
   let active: string | null = null, disconnected = false, connections = 0, deleted = 0, closed = 0;
+  let owned: string | undefined;
+  context.ownership = { opened: (id) => { owned = id; }, closed: () => { owned = undefined; } };
   context.wda = async () => { connections++; return { request: async (method, route) => {
     if (route === "/status") {
       if (active && !disconnected) { disconnected = true; throw new Error("USB disconnected during cleanup"); }
@@ -131,13 +134,38 @@ test("failed launch cleanup survives until its owned WDA session can reconnect a
     if (route === "/wda/screen") return { value: { screenSize: { width: 390, height: 844 }, scale: 3 } };
     if (route === "/session") { active = "owned"; return { value: { sessionId: active } }; }
     if (method === "DELETE") { assert.equal(route, "/session/owned"); active = null; deleted++; }
+    if (route.endsWith("/wda/apps/launch")) assert.equal(owned, "owned", "Ownership is recorded before launch dispatch");
     return { value: null };
   }, onClose: () => () => {}, close: async () => { closed++; } }; };
   const adapter = observationAdapter(phone, context);
   await assert.rejects(adapter.launch("org.hope.app", []), /USB disconnected/);
   assert.equal(active, "owned");
+  assert.equal(owned, "owned");
   await adapter.close(); await adapter.close();
   assert.equal(active, null); assert.equal(connections, 2); assert.equal(deleted, 1); assert.equal(closed, 2);
+  assert.equal(owned, undefined);
+});
+
+test("recovered WDA cleanup checks the exact owned session and preserves another tool's replacement", async () => {
+  const phone = deviceSchema.parse({ ...device, kind: "physical", connection: { type: "apple-device", udid: "physical", webDriverAgent: {} } });
+  let active = "owned", closed = 0;
+  const requests: string[] = [];
+  class CleanupAdapters extends Adapters {
+    async startAppleScreen(device: typeof phone) {
+      assert.deepEqual(device, phone);
+      return { request: async (method: string, route: string) => {
+        requests.push(`${method} ${route}`); return { sessionId: active, value: null };
+      }, onClose: () => () => {}, close: async () => { closed++; } };
+    }
+  }
+  const adapters = new CleanupAdapters(() => { throw new Error("Unexpected configuration access"); });
+  try {
+    await adapters.closeOwnedWda(phone, "owned");
+    active = "replacement";
+    await adapters.closeOwnedWda(phone, "owned");
+    assert.deepEqual(requests, ["GET /status", "DELETE /session/owned", "GET /status"]);
+    assert.equal(closed, 2);
+  } finally { await adapters.close(); }
 });
 
 test("Roku app queries and launch preserve exact target verification and unsupported transports are explicit", async (t) => {

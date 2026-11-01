@@ -5,6 +5,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { DeckService } from "./local/service";
+import { Store } from "./local/store";
 import { Adapters } from "../../../packages/adapters/src";
 import { deviceSchema, type Device, type DeviceConfig } from "../../../packages/core/src/local/types";
 
@@ -75,4 +76,39 @@ test("device observations use the same lease, discover schemas, preserve provena
     failClose = false; await deck.execute("sessions.release", finalLease);
     assert.equal(closes - before, 2);
   } finally { await deck.close(); await rm(directory, { recursive: true, force: true }); }
+});
+
+test("restart retains failed WDA launch cleanup and releases only after the same owned session is cleaned", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "deck-gateway-restart-"));
+  const phone = deviceSchema.parse({ id: "physical", name: "Phone", platform: "Apple", kind: "physical", connection: { type: "apple-device", udid: "00008110-0012345678901234", webDriverAgent: {} } });
+  let deck: DeckService, online = false, attempts = 0;
+  class RecoveryAdapters extends Adapters {
+    async diagnostics() { return []; }
+    async inspect(d: DeviceConfig): Promise<Device> { return { ...d, online: true, locked: false, healthDetail: "Fixture", capabilities: ["touch"] }; }
+    async closeOwnedWda(device: DeviceConfig, id: string) {
+      assert.deepEqual(device, phone); assert.equal(id, "owned-wda-session"); attempts++;
+      if (!online) throw new Error("Connect the same USB phone");
+    }
+  }
+  const adapters = new RecoveryAdapters(() => deck.config.config);
+  deck = new DeckService(directory, undefined, adapters);
+  await deck.init();
+  await deck.execute("config.save", { config: { ...deck.config.config, devices: [phone] }, revision: deck.config.revision });
+  await deck.close();
+  const persisted = new Store(path.join(directory, "state.sqlite"));
+  const held = persisted.reserve(phone.id, null, null, "Agent", "Interrupted app launch", 15);
+  persisted.putOwnedInteraction({ sessionId: held.session.id, device: phone, wdaSessionId: "owned-wda-session" });
+  persisted.close();
+  deck = new DeckService(directory, undefined, adapters);
+  try {
+    await deck.init();
+    assert.equal(deck.store.session(held.session.id).state, "closing");
+    assert.equal(deck.store.ownedInteractions().length, 1);
+    await assert.rejects(deck.execute("sessions.reserve", { selector: { device: phone.id }, owner: "Other", reason: "Must remain occupied" }), /reserved/);
+    online = true;
+    await deck.execute("sessions.release", { sessionId: held.session.id, leaseToken: held.leaseToken });
+    assert.equal(attempts, 2);
+    assert.equal(deck.store.ownedInteractions().length, 0);
+    assert.equal(deck.store.session(held.session.id).state, "closed");
+  } finally { online = true; await deck.close(); await rm(directory, { recursive: true, force: true }); }
 });
