@@ -8,6 +8,7 @@ import { DeckService } from "./local/service";
 import { Store } from "./local/store";
 import { Adapters } from "../../../packages/adapters/src";
 import { CaptureEngine, type RecordingHandle } from "../../../packages/capture/src";
+import type { InteractiveSource } from "../../../packages/core/src/live";
 import { deviceSchema, type Device, type DeviceConfig, type SourceConfig, type Source } from "../../../packages/core/src/local/types";
 
 test("device observations use the same lease, discover schemas, preserve provenance and recheck authorization", async () => {
@@ -117,11 +118,15 @@ test("restart retains failed WDA launch cleanup and releases only after the same
 test("release finalizes an independent USB recording before failed WDA cleanup retains the reservation", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "deck-gateway-recorder-"));
   const phone = deviceSchema.parse({ id: "physical", name: "Phone", platform: "Apple", kind: "physical", captureSourceId: "usb", connection: { type: "apple-device", udid: "00008110-0012345678901234", webDriverAgent: {} } });
-  let deck: DeckService, stopped = false, failCleanup = true;
+  let deck: DeckService, stopped = false, failCleanup = true, failInput = false;
   class RecordingAdapters extends Adapters {
     async diagnostics() { return []; }
     async inspect(d: DeviceConfig): Promise<Device> { return { ...d, online: true, locked: false, healthDetail: "Fixture", capabilities: ["touch", "record"] }; }
     async inspectSources(sources: SourceConfig[]): Promise<Source[]> { return sources.map((source) => ({ ...source, status: "connected" })); }
+    async startInteractive(): Promise<InteractiveSource> {
+      return { width: 100, height: 100, capabilities: ["tap"], onFrame: () => () => {}, onClose: () => () => {},
+        pointer: async () => {}, gesture: async () => {}, close: async () => { if (failInput) throw new Error("Input cleanup requires reconnect"); } };
+    }
     forDevice(device: DeviceConfig) {
       return { ...super.forDevice(device), close: async () => {
         assert(stopped, "The recorder must stop before retryable helper cleanup");
@@ -151,5 +156,18 @@ test("release finalizes an independent USB recording before failed WDA cleanup r
     assert(stopped); assert.equal(deck.store.artifacts()[0].status, "completed");
     assert.equal(deck.store.session(held.session.id).state, "closing");
     failCleanup = false; await deck.execute("sessions.release", lease);
-  } finally { failCleanup = false; await deck.close(); await rm(directory, { recursive: true, force: true }); }
+    stopped = false;
+    const next: any = await deck.execute("sessions.reserve", { selector: { device: phone.id }, owner: "Agent", reason: "Input cleanup failure" });
+    const current = { sessionId: next.session.id, leaseToken: next.leaseToken };
+    await deck.execute("devices.capabilities", current);
+    await deck.execute("recordings.start", { ...current, mode: "clean" });
+    await deck.execute("control.start", current);
+    failInput = true;
+    await assert.rejects(deck.execute("sessions.release", current), /Input cleanup requires reconnect/);
+    assert(stopped);
+    assert.equal(deck.store.artifacts().find((artifact) => artifact.sessionId === current.sessionId)?.status, "completed");
+    assert.equal(deck.store.session(current.sessionId).state, "closing");
+    failInput = false; await deck.execute("sessions.release", current);
+    assert.equal(deck.store.session(current.sessionId).state, "closed");
+  } finally { failCleanup = false; failInput = false; await deck.close(); await rm(directory, { recursive: true, force: true }); }
 });
