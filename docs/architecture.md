@@ -12,6 +12,8 @@ Reservation groups persist one credential hash and their member/startup metadata
 
 The service marks a session `closing` synchronously before waiting for its device queue. Subsequent input fails immediately. Queued operations revalidate before execution. Recorder finalization and source cleanup complete before a successor can reserve. On restart, persisted worker identities are checked before signalling processes. Unverifiable remote cleanup keeps the reservation closing, visible and unavailable.
 
+Physical iOS app launch records its WDA session ID and exact device identity before launch dispatch. Failed cleanup survives daemon restart and reservation release retries. Recovery deletes only the matching owned WDA session; a replacement session is preserved.
+
 Maintenance locks are distinct from reservations. Maintenance on a reserved device returns a per-device failure. A restart temporarily establishes a maintenance lock before awaiting adapter I/O.
 
 ## Capture ownership
