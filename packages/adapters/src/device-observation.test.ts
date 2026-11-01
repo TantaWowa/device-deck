@@ -41,6 +41,8 @@ test("logs enforce finite intervals, byte and line budgets and remove common cre
   assert.equal(logs.truncated, true); assert(!logs.text.includes("secret")); assert(logs.text.includes("ok"));
   const json = boundedLogs('{"password":"json-secret","access_token":"escaped-\\\"secret","ok":true}', deviceLogsSchema.parse({}));
   assert(!json.text.includes("secret")); assert(json.text.includes('"ok":true'));
+  const unicode = boundedLogs("abc" + "界".repeat(100), deviceLogsSchema.parse({ maxBytes: 256 }));
+  assert(unicode.truncated); assert(Buffer.byteLength(unicode.text) <= 256); assert(!unicode.text.includes("\uFFFD"));
 });
 
 test("simulator UI and app operations use exact UDID and the idb backend without desktop access", async () => {

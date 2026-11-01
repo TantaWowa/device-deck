@@ -1,4 +1,5 @@
 import { createConnection } from "node:net";
+import { StringDecoder } from "node:string_decoder";
 import type { DeviceConfig } from "../../core/src/local/types";
 import { DeckError } from "../../core/src/local/types";
 import type { DeviceLogs, InteractionCapabilities, UiNode, UiRead, UiSnapshot } from "../../core/src/device-interaction";
@@ -78,7 +79,7 @@ export function boundedLogs(raw: string, options: DeviceLogs) {
   const lines = redacted.split(/\r?\n/);
   const selected = lines.slice(0, options.maxLines).join("\n");
   const bytes = Buffer.from(selected);
-  return { text: bytes.subarray(0, options.maxBytes).toString("utf8"), truncated: lines.length > options.maxLines || bytes.length > options.maxBytes };
+  return { text: new StringDecoder("utf8").write(bytes.subarray(0, options.maxBytes)), truncated: lines.length > options.maxLines || bytes.length > options.maxBytes };
 }
 
 async function collect(command: string, args: string[], limit: number) {
