@@ -5,6 +5,7 @@ import { mkdtemp, writeFile, chmod, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { observationAdapter, androidUi, normalizeUi, boundedLogs, type ObservationHost } from "./device-observation";
+import { Adapters } from "./index";
 import { deviceLogsSchema, uiReadSchema } from "../../core/src/device-interaction";
 import { deviceSchema } from "../../core/src/local/types";
 import type { run } from "./process";
@@ -43,6 +44,9 @@ test("logs enforce finite intervals, byte and line budgets and remove common cre
   assert(!json.text.includes("secret")); assert(json.text.includes('"ok":true'));
   const unicode = boundedLogs("abc" + "界".repeat(100), deviceLogsSchema.parse({ maxBytes: 256 }));
   assert(unicode.truncated); assert(Buffer.byteLength(unicode.text) <= 256); assert(!unicode.text.includes("\uFFFD"));
+  for (const raw of ['{"password":"prefix,credential-tail', '{"password":"prefix,credential-tail\\', "password='prefix,credential-tail", 'password="first-line\ncredential-tail"', '{"password":"prefix,credential-tail\r']) {
+    assert(!boundedLogs(raw, deviceLogsSchema.parse({})).text.includes("credential-tail"));
+  }
 });
 
 test("simulator UI and app operations use exact UDID and the idb backend without desktop access", async () => {
@@ -68,15 +72,15 @@ test("Android preserves frozen ADB selectors, supports TV launch categories and 
     calls.push(args);
     if (args.includes("uiautomator")) return result('<hierarchy><node resource-id="play" text="Pause" /></hierarchy>');
     if (args.includes("dumpsys")) return result("mResumedActivity: ActivityRecord{abc u0 org.hope.app/.Main t1}");
-    if (args.includes("resolve-activity")) return result(args.includes("android.intent.category.LEANBACK_LAUNCHER") ? "org.hope.app/.TvActivity" : "No activity found");
-    return result(fail ? "Error: Activity class does not exist" : "Status: ok");
+    if (args.includes("resolve-activity")) return result(args.includes("android.intent.category.LEANBACK_LAUNCHER") ? "org.hope.app/.Tv$Activity" : "No activity found");
+    return { ...result("Starting: Intent { cmp=org.hope.app/.ExceptionHandler }\nStatus: ok"), stderr: fail ? "Error type 3: Activity class does not exist" : "" };
   }));
   assert.equal(adapter.capabilities.backend, "adb-scrcpy");
   assert.equal((await adapter.ui(uiReadSchema.parse({}))).nodes[0].label, "Pause");
   assert.equal((await adapter.appState("org.hope.app")).foreground, true);
   await adapter.launch("org.hope.app", []);
   assert(calls.every((args) => args.slice(0, 4).join(" ") === "-P 5038 -t 72"));
-  assert(calls.some((args) => args.includes("org.hope.app/.TvActivity")));
+  assert(calls.some((args) => args.includes("'org.hope.app/.Tv$Activity'")));
   fail = true; await assert.rejects(adapter.launch("org.hope.app", []), /could not launch/);
 });
 
@@ -114,6 +118,54 @@ test("physical app launch targets only its owned WDA session and preserves repla
   assert.equal(closed, 1);
   assert(!calls.some((call) => call.startsWith("DELETE")));
   await assert.rejects(observationAdapter(phone, context).launch("org.hope.app", []), /already has an active/);
+});
+
+test("failed launch cleanup survives until its owned WDA session can reconnect and close", async () => {
+  const phone = deviceSchema.parse({ ...device, kind: "physical", connection: { type: "apple-device", udid: "physical", webDriverAgent: {} } });
+  const context = host(async () => result(""));
+  let active: string | null = null, disconnected = false, connections = 0, deleted = 0, closed = 0;
+  let owned: string | undefined;
+  context.ownership = { opened: (id) => { owned = id; }, closed: () => { owned = undefined; } };
+  context.wda = async () => { connections++; return { request: async (method, route) => {
+    if (route === "/status") {
+      if (active && !disconnected) { disconnected = true; throw new Error("USB disconnected during cleanup"); }
+      return { sessionId: active, value: {} };
+    }
+    if (route === "/wda/screen") return { value: { screenSize: { width: 390, height: 844 }, scale: 3 } };
+    if (route === "/session") { active = "owned"; return { value: { sessionId: active } }; }
+    if (method === "DELETE") { assert.equal(route, "/session/owned"); active = null; deleted++; }
+    if (route.endsWith("/wda/apps/launch")) assert.equal(owned, "owned", "Ownership is recorded before launch dispatch");
+    return { value: null };
+  }, onClose: () => () => {}, close: async () => { closed++; } }; };
+  const adapter = observationAdapter(phone, context);
+  await assert.rejects(adapter.launch("org.hope.app", []), /USB disconnected/);
+  assert.equal(active, "owned");
+  assert.equal(owned, "owned");
+  await adapter.close(); await adapter.close();
+  assert.equal(active, null); assert.equal(connections, 2); assert.equal(deleted, 1); assert.equal(closed, 2);
+  assert.equal(owned, undefined);
+});
+
+test("recovered WDA cleanup checks the exact owned session and preserves another tool's replacement", async () => {
+  const phone = deviceSchema.parse({ ...device, kind: "physical", connection: { type: "apple-device", udid: "physical", webDriverAgent: {} } });
+  let active = "owned", closed = 0;
+  const requests: string[] = [];
+  class CleanupAdapters extends Adapters {
+    async startAppleScreen(device: typeof phone) {
+      assert.deepEqual(device, phone);
+      return { request: async (method: string, route: string) => {
+        requests.push(`${method} ${route}`); return { sessionId: active, value: null };
+      }, onClose: () => () => {}, close: async () => { closed++; } };
+    }
+  }
+  const adapters = new CleanupAdapters(() => { throw new Error("Unexpected configuration access"); });
+  try {
+    await adapters.closeOwnedWda(phone, "owned");
+    active = "replacement";
+    await adapters.closeOwnedWda(phone, "owned");
+    assert.deepEqual(requests, ["GET /status", "DELETE /session/owned", "GET /status"]);
+    assert.equal(closed, 2);
+  } finally { await adapters.close(); }
 });
 
 test("Roku app queries and launch preserve exact target verification and unsupported transports are explicit", async (t) => {

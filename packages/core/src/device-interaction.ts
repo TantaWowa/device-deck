@@ -43,4 +43,5 @@ export interface DeviceInteraction {
   logs(options: DeviceLogs): Promise<{ text: string; truncated: boolean; since: string; until: string }>;
   appState(appId?: string): Promise<Record<string, unknown>>;
   launch(appId: string, args: string[]): Promise<unknown>;
+  close(): Promise<void>;
 }

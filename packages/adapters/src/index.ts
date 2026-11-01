@@ -2,7 +2,7 @@ import { ANDROID_GESTURES, startScrcpy } from "./scrcpy";
 import { androidAdbPort, androidBootReady, androidFeatures, avdInputMode, avdProfile } from "./android-state";
 import { IOS_GESTURES, startIdbInteractive } from "./interactive";
 import { openWda, startWdaInteractive, wdaScreen, wdaScreenshot, WDA_GESTURES } from "./webdriveragent";
-import { observationAdapter } from "./device-observation";
+import { observationAdapter, type ObservationHost } from "./device-observation";
 import type { DeviceInteraction } from "../../core/src/device-interaction";
 import type { InteractiveSource, VideoProfile } from "../../core/src/live";
 import { androidKeys, rokuKeys, hidKeys, iosHardwareKeys, deviceInputMode } from "../../core/src/remote";
@@ -97,7 +97,7 @@ export class Adapters {
       this.getConfig().tools[name] || (name === "python" ? "python3" : name)
     );
   }
-  forDevice(device: DeviceConfig): DeviceInteraction {
+  forDevice(device: DeviceConfig, ownership?: ObservationHost["ownership"]): DeviceInteraction {
     let current = device;
     const observation = observationAdapter(device, {
       execute: this.execute,
@@ -115,6 +115,7 @@ export class Adapters {
         return current;
       },
       wda: () => this.startAppleScreen(device),
+      ownership,
     });
     return {
       capabilities: observation.capabilities,
@@ -125,6 +126,7 @@ export class Adapters {
       logs: (options) => observation.logs(options),
       appState: (appId) => observation.appState(appId),
       launch: (appId, args) => observation.launch(appId, args),
+      close: () => observation.close(),
     };
   }
   adb(d: DeviceConfig) {
@@ -871,6 +873,13 @@ export class Adapters {
     const connection = await openWda(hardware.udid, c.webDriverAgent.port, this.tool("iproxy"));
     try { await wdaScreen(connection); return connection; }
     catch (error) { await connection.close(); throw error; }
+  }
+  async closeOwnedWda(device: DeviceConfig, sessionId: string) {
+    const connection = await this.startAppleScreen(device);
+    try {
+      const status = await connection.request("GET", "/status");
+      if (status.sessionId === sessionId) await connection.request("DELETE", `/session/${encodeURIComponent(sessionId)}`);
+    } finally { await connection.close(); }
   }
   async pair(d: DeviceConfig) {
     if (d.connection.type !== "apple-tv")

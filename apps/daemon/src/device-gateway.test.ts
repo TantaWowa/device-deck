@@ -1,23 +1,27 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { DeckService } from "./local/service";
+import { Store } from "./local/store";
 import { Adapters } from "../../../packages/adapters/src";
-import { deviceSchema, type Device, type DeviceConfig } from "../../../packages/core/src/local/types";
+import { CaptureEngine, type RecordingHandle } from "../../../packages/capture/src";
+import type { InteractiveSource } from "../../../packages/core/src/live";
+import { deviceSchema, type Device, type DeviceConfig, type SourceConfig, type Source } from "../../../packages/core/src/local/types";
 
 test("device observations use the same lease, discover schemas, preserve provenance and recheck authorization", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "deck-gateway-"));
   const device = deviceSchema.parse({ id: "phone", name: "Phone", platform: "Apple", kind: "virtual", connection: { type: "simulator", os: "ios", udid: "00000000-0000-4000-8000-000000000001" } });
-  let deck: DeckService, reads = 0, launches = 0, wait: Promise<void> | undefined;
+  let deck: DeckService, reads = 0, launches = 0, closes = 0, failClose = false, wait: Promise<void> | undefined;
   class FixtureAdapters extends Adapters {
     async diagnostics() { return []; }
     async inspect(d: DeviceConfig): Promise<Device> { return { ...d, online: true, locked: false, healthDetail: "Fixture", capabilities: ["touch"] }; }
     forDevice(d: DeviceConfig) {
       return { ...super.forDevice(d), ui: async () => { reads++; await wait; return { nodes: [], coordinateSpace: "points" as const, truncated: false }; },
-        launch: async (appId: string) => { launches++; return { appId }; } };
+        launch: async (appId: string) => { launches++; return { appId }; },
+        close: async () => { closes++; if (failClose) throw new Error("Reconnect to finish owned cleanup"); } };
     }
   }
   const adapters = new FixtureAdapters(() => deck.config.config);
@@ -47,5 +51,123 @@ test("device observations use the same lease, discover schemas, preserve provena
     await assert.rejects(read, /expired during observation/);
     await deck.execute("sessions.release", lease);
     await assert.rejects(deck.execute("ui.read", lease)); assert.equal(reads, 2);
+    wait = undefined;
+    for (const operation of ["apps.launch", "ui.read"] as const) {
+      const next: any = await deck.execute("sessions.reserve", { selector: { device: device.id }, owner: "Test", reason: "Release during authorization" });
+      const current = { sessionId: next.session.id, leaseToken: next.leaseToken };
+      let entered!: () => void, resume!: () => void, checks = 0;
+      const pendingAuth = new Promise<void>((resolve) => { entered = resolve; });
+      const pending = deck.execute(operation, { ...current, ...(operation === "apps.launch" ? { appId: "org.hope.app" } : {}) }, "Agent", async () => {
+        if (++checks === 2) { entered(); await new Promise<void>((resolve) => { resume = resolve; }); }
+        return true;
+      });
+      await pendingAuth;
+      const release = deck.execute("sessions.release", current);
+      while (deck.store.session(current.sessionId).state !== "closing") await new Promise((resolve) => setImmediate(resolve));
+      resume();
+      await assert.rejects(pending, /closing|lease|active|expired/i);
+      await release;
+    }
+    assert.equal(launches, 1, "Release while authorization waits must prevent launch");
+    const last: any = await deck.execute("sessions.reserve", { selector: { device: device.id }, owner: "Test", reason: "Retry owned cleanup" });
+    const finalLease = { sessionId: last.session.id, leaseToken: last.leaseToken };
+    await deck.execute("devices.capabilities", finalLease);
+    failClose = true; const before = closes;
+    await assert.rejects(deck.execute("sessions.release", finalLease), /Reconnect/);
+    assert.equal(deck.store.session(finalLease.sessionId).state, "closing");
+    failClose = false; await deck.execute("sessions.release", finalLease);
+    assert.equal(closes - before, 2);
   } finally { await deck.close(); await rm(directory, { recursive: true, force: true }); }
+});
+
+test("restart retains failed WDA launch cleanup and releases only after the same owned session is cleaned", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "deck-gateway-restart-"));
+  const phone = deviceSchema.parse({ id: "physical", name: "Phone", platform: "Apple", kind: "physical", connection: { type: "apple-device", udid: "00008110-0012345678901234", webDriverAgent: {} } });
+  let deck: DeckService, online = false, attempts = 0;
+  class RecoveryAdapters extends Adapters {
+    async diagnostics() { return []; }
+    async inspect(d: DeviceConfig): Promise<Device> { return { ...d, online: true, locked: false, healthDetail: "Fixture", capabilities: ["touch"] }; }
+    async closeOwnedWda(device: DeviceConfig, id: string) {
+      assert.deepEqual(device, phone); assert.equal(id, "owned-wda-session"); attempts++;
+      if (!online) throw new Error("Connect the same USB phone");
+    }
+  }
+  const adapters = new RecoveryAdapters(() => deck.config.config);
+  deck = new DeckService(directory, undefined, adapters);
+  await deck.init();
+  await deck.execute("config.save", { config: { ...deck.config.config, devices: [phone] }, revision: deck.config.revision });
+  await deck.close();
+  const persisted = new Store(path.join(directory, "state.sqlite"));
+  const held = persisted.reserve(phone.id, null, null, "Agent", "Interrupted app launch", 15);
+  persisted.putOwnedInteraction({ sessionId: held.session.id, device: phone, wdaSessionId: "owned-wda-session" });
+  persisted.close();
+  deck = new DeckService(directory, undefined, adapters);
+  try {
+    await deck.init();
+    assert.equal(deck.store.session(held.session.id).state, "closing");
+    assert.equal(deck.store.ownedInteractions().length, 1);
+    await assert.rejects(deck.execute("sessions.reserve", { selector: { device: phone.id }, owner: "Other", reason: "Must remain occupied" }), /reserved/);
+    online = true;
+    await deck.execute("sessions.release", { sessionId: held.session.id, leaseToken: held.leaseToken });
+    assert.equal(attempts, 2);
+    assert.equal(deck.store.ownedInteractions().length, 0);
+    assert.equal(deck.store.session(held.session.id).state, "closed");
+  } finally { online = true; await deck.close(); await rm(directory, { recursive: true, force: true }); }
+});
+
+test("release finalizes an independent USB recording before failed WDA cleanup retains the reservation", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "deck-gateway-recorder-"));
+  const phone = deviceSchema.parse({ id: "physical", name: "Phone", platform: "Apple", kind: "physical", captureSourceId: "usb", connection: { type: "apple-device", udid: "00008110-0012345678901234", webDriverAgent: {} } });
+  let deck: DeckService, stopped = false, failCleanup = true, failInput = false;
+  class RecordingAdapters extends Adapters {
+    async diagnostics() { return []; }
+    async inspect(d: DeviceConfig): Promise<Device> { return { ...d, online: true, locked: false, healthDetail: "Fixture", capabilities: ["touch", "record"] }; }
+    async inspectSources(sources: SourceConfig[]): Promise<Source[]> { return sources.map((source) => ({ ...source, status: "connected" })); }
+    async startInteractive(): Promise<InteractiveSource> {
+      return { width: 100, height: 100, capabilities: ["tap"], onFrame: () => () => {}, onClose: () => () => {},
+        pointer: async () => {}, gesture: async () => {}, close: async () => { if (failInput) throw new Error("Input cleanup requires reconnect"); } };
+    }
+    forDevice(device: DeviceConfig) {
+      return { ...super.forDevice(device), close: async () => {
+        assert(stopped, "The recorder must stop before retryable helper cleanup");
+        if (failCleanup) throw new Error("WDA cleanup requires reconnect");
+      } };
+    }
+  }
+  class RecordingCapture extends CaptureEngine {
+    async startRecording(id: string, device: DeviceConfig, _source: SourceConfig, file: string): Promise<RecordingHandle> {
+      await writeFile(file, "fixture recording");
+      let end!: () => void;
+      return { id, deviceId: device.id, path: file, startedAt: Date.now(), startedMono: performance.now(), ended: new Promise<string | undefined>((resolve) => { end = () => resolve(undefined); }), stop: async () => { stopped = true; end(); return { bytes: 17, duration: 1 }; } };
+    }
+    async closeSource() {}
+    async close() {}
+  }
+  const adapters = new RecordingAdapters(() => deck.config.config);
+  deck = new DeckService(directory, undefined, adapters, new RecordingCapture(adapters));
+  try {
+    await deck.init();
+    await deck.execute("config.save", { revision: deck.config.revision, config: { ...deck.config.config, devices: [phone], sources: [{ id: "usb", name: "USB", kind: "usb", uniqueId: "fixture" }], settings: { ...deck.config.config.settings, folder: path.join(directory, "captures") } } });
+    const held: any = await deck.execute("sessions.reserve", { selector: { device: phone.id }, owner: "Agent", reason: "USB recording cleanup" });
+    const lease = { sessionId: held.session.id, leaseToken: held.leaseToken };
+    await deck.execute("devices.capabilities", lease);
+    await deck.execute("recordings.start", { ...lease, mode: "clean" });
+    await assert.rejects(deck.execute("sessions.release", lease), /reconnect/);
+    assert(stopped); assert.equal(deck.store.artifacts()[0].status, "completed");
+    assert.equal(deck.store.session(held.session.id).state, "closing");
+    failCleanup = false; await deck.execute("sessions.release", lease);
+    stopped = false;
+    const next: any = await deck.execute("sessions.reserve", { selector: { device: phone.id }, owner: "Agent", reason: "Input cleanup failure" });
+    const current = { sessionId: next.session.id, leaseToken: next.leaseToken };
+    await deck.execute("devices.capabilities", current);
+    await deck.execute("recordings.start", { ...current, mode: "clean" });
+    await deck.execute("control.start", current);
+    failInput = true;
+    await assert.rejects(deck.execute("sessions.release", current), /Input cleanup requires reconnect/);
+    assert(stopped);
+    assert.equal(deck.store.artifacts().find((artifact) => artifact.sessionId === current.sessionId)?.status, "completed");
+    assert.equal(deck.store.session(current.sessionId).state, "closing");
+    failInput = false; await deck.execute("sessions.release", current);
+    assert.equal(deck.store.session(current.sessionId).state, "closed");
+  } finally { failCleanup = false; failInput = false; await deck.close(); await rm(directory, { recursive: true, force: true }); }
 });
