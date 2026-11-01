@@ -125,6 +125,7 @@ export class Adapters {
       logs: (options) => observation.logs(options),
       appState: (appId) => observation.appState(appId),
       launch: (appId, args) => observation.launch(appId, args),
+      close: () => observation.close(),
     };
   }
   adb(d: DeviceConfig) {

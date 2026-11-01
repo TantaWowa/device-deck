@@ -11,13 +11,14 @@ import { deviceSchema, type Device, type DeviceConfig } from "../../../packages/
 test("device observations use the same lease, discover schemas, preserve provenance and recheck authorization", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "deck-gateway-"));
   const device = deviceSchema.parse({ id: "phone", name: "Phone", platform: "Apple", kind: "virtual", connection: { type: "simulator", os: "ios", udid: "00000000-0000-4000-8000-000000000001" } });
-  let deck: DeckService, reads = 0, launches = 0, wait: Promise<void> | undefined;
+  let deck: DeckService, reads = 0, launches = 0, closes = 0, failClose = false, wait: Promise<void> | undefined;
   class FixtureAdapters extends Adapters {
     async diagnostics() { return []; }
     async inspect(d: DeviceConfig): Promise<Device> { return { ...d, online: true, locked: false, healthDetail: "Fixture", capabilities: ["touch"] }; }
     forDevice(d: DeviceConfig) {
       return { ...super.forDevice(d), ui: async () => { reads++; await wait; return { nodes: [], coordinateSpace: "points" as const, truncated: false }; },
-        launch: async (appId: string) => { launches++; return { appId }; } };
+        launch: async (appId: string) => { launches++; return { appId }; },
+        close: async () => { closes++; if (failClose) throw new Error("Reconnect to finish owned cleanup"); } };
     }
   }
   const adapters = new FixtureAdapters(() => deck.config.config);
@@ -47,5 +48,31 @@ test("device observations use the same lease, discover schemas, preserve provena
     await assert.rejects(read, /expired during observation/);
     await deck.execute("sessions.release", lease);
     await assert.rejects(deck.execute("ui.read", lease)); assert.equal(reads, 2);
+    wait = undefined;
+    for (const operation of ["apps.launch", "ui.read"] as const) {
+      const next: any = await deck.execute("sessions.reserve", { selector: { device: device.id }, owner: "Test", reason: "Release during authorization" });
+      const current = { sessionId: next.session.id, leaseToken: next.leaseToken };
+      let entered!: () => void, resume!: () => void, checks = 0;
+      const pendingAuth = new Promise<void>((resolve) => { entered = resolve; });
+      const pending = deck.execute(operation, { ...current, ...(operation === "apps.launch" ? { appId: "org.hope.app" } : {}) }, "Agent", async () => {
+        if (++checks === 2) { entered(); await new Promise<void>((resolve) => { resume = resolve; }); }
+        return true;
+      });
+      await pendingAuth;
+      const release = deck.execute("sessions.release", current);
+      while (deck.store.session(current.sessionId).state !== "closing") await new Promise((resolve) => setImmediate(resolve));
+      resume();
+      await assert.rejects(pending, /closing|lease|active|expired/i);
+      await release;
+    }
+    assert.equal(launches, 1, "Release while authorization waits must prevent launch");
+    const last: any = await deck.execute("sessions.reserve", { selector: { device: device.id }, owner: "Test", reason: "Retry owned cleanup" });
+    const finalLease = { sessionId: last.session.id, leaseToken: last.leaseToken };
+    await deck.execute("devices.capabilities", finalLease);
+    failClose = true; const before = closes;
+    await assert.rejects(deck.execute("sessions.release", finalLease), /Reconnect/);
+    assert.equal(deck.store.session(finalLease.sessionId).state, "closing");
+    failClose = false; await deck.execute("sessions.release", finalLease);
+    assert.equal(closes - before, 2);
   } finally { await deck.close(); await rm(directory, { recursive: true, force: true }); }
 });

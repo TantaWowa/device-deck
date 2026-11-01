@@ -3,6 +3,7 @@ import { StringDecoder } from "node:string_decoder";
 import type { DeviceConfig } from "../../core/src/local/types";
 import { DeckError } from "../../core/src/local/types";
 import type { DeviceLogs, InteractionCapabilities, UiNode, UiRead, UiSnapshot } from "../../core/src/device-interaction";
+import type { InteractiveSource } from "../../core/src/live";
 import { run, start, stop } from "./process";
 import { startWdaInteractive, type WdaConnection } from "./webdriveragent";
 
@@ -19,6 +20,7 @@ export interface ObservationAdapter {
   logs(options: DeviceLogs): Promise<{ text: string; truncated: boolean; since: string; until: string }>;
   appState(appId?: string): Promise<Record<string, unknown>>;
   launch(appId: string, args: string[]): Promise<unknown>;
+  close(): Promise<void>;
 }
 const unsupported = (operation: string): never => { throw new DeckError("unsupported-capability", `This device adapter does not support ${operation}.`, 409); };
 const decode = (s: string) => s.replace(/&(?:quot|apos|lt|gt|amp);|&#(?:x[\da-f]+|\d+);/gi, (entity) => {
@@ -75,7 +77,7 @@ export function normalizeUi(value: any, options: UiRead, coordinateSpace: "point
 }
 
 export function boundedLogs(raw: string, options: DeviceLogs) {
-  const redacted = raw.replace(/(["']?(?:authorization|cookie|password|access[_-]?token|refresh[_-]?token|api[_-]?key)["']?\s*[=:]\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\r\n,]+)/gi, "$1[REDACTED]");
+  const redacted = raw.replace(/(["']?(?:authorization|cookie|password|access[_-]?token|refresh[_-]?token|api[_-]?key)["']?\s*[=:]\s*)(?:"(?:\\.|[^"\\\r\n])*(?:\\)?(?:"|(?=\r?\n|$))|'(?:\\.|[^'\\\r\n])*(?:\\)?(?:'|(?=\r?\n|$))|[^\r\n,]+)/gi, "$1[REDACTED]");
   const lines = redacted.split(/\r?\n/);
   const selected = lines.slice(0, options.maxLines).join("\n");
   const bytes = Buffer.from(selected);
@@ -106,6 +108,7 @@ abstract class ObservationBase implements ObservationAdapter {
   async logs(_options: DeviceLogs): Promise<{ text: string; truncated: boolean; since: string; until: string }> { return unsupported("device logs"); }
   async appState(_appId?: string): Promise<Record<string, unknown>> { return unsupported("app state"); }
   async launch(_appId: string, _args: string[]): Promise<unknown> { return unsupported("app launch"); }
+  async close(): Promise<void> {}
 }
 
 class AppleSimulatorObservation extends ObservationBase {
@@ -175,13 +178,14 @@ class AndroidObservation extends ObservationBase {
       if (/^[A-Za-z0-9_.]+\/[A-Za-z0-9_.$]+$/.test(resolved)) break;
     }
     if (!/^[A-Za-z0-9_.]+\/[A-Za-z0-9_.$]+$/.test(resolved) || resolved.split("/")[0] !== appId) throw new DeckError("app-unavailable", "No launcher activity was found for the requested installed app.", 409);
-    const result = await this.adb(["shell", "am", "start", "-W", "-n", resolved]);
-    if (/Error:|Exception|Status:\s*(?!ok\b)\w+/i.test(result.stdout.toString())) throw new DeckError("app-launch-failed", "Android could not launch the requested app.", 502);
+    const result = await this.adb(["shell", "am", "start", "-W", "-n", `'${resolved}'`]);
+    if (/Error(?: type \d+)?:|Exception|Status:\s*(?!ok\b)\w+/i.test(`${result.stdout}\n${result.stderr}`)) throw new DeckError("app-launch-failed", "Android could not launch the requested app.", 502);
     return { appId, activity: resolved };
   }
 }
 
 class PhysicalAppleObservation extends ObservationBase {
+  private pending?: InteractiveSource;
   readonly capabilities: InteractionCapabilities = { backend: "webdriveragent", ui: true, logs: false, appState: true, appLaunch: true, notes: ["Signed WebDriverAgent and USB are required. Close touch control before launching an app. Historical device logs are unsupported."] };
   private async read(method: string, route: string, body?: unknown) {
     const connection = await this.host.wda();
@@ -194,12 +198,20 @@ class PhysicalAppleObservation extends ObservationBase {
     return { foregroundAppId: info.bundleId ?? null, pid: info.pid ?? null, ...(appId ? { appId, foreground: info.bundleId ? info.bundleId === appId : null } : {}) };
   }
   async launch(appId: string, args: string[]) {
+    await this.close();
     const connection = await this.host.wda();
-    const source = await startWdaInteractive(connection);
+    const source = await startWdaInteractive(connection, () => this.host.wda());
+    this.pending = source;
     try {
       await connection.request("POST", `/session/${encodeURIComponent(source.sessionId)}/wda/apps/launch`, { bundleId: appId, arguments: args, shouldWaitForQuiescence: false });
       return { appId };
-    } finally { await source.close(); }
+    } finally { await this.close(); }
+  }
+  async close() {
+    const source = this.pending;
+    if (!source) return;
+    await source.close();
+    if (this.pending === source) this.pending = undefined;
   }
 }
 

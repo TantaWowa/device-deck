@@ -5,6 +5,7 @@ import { constants } from "node:fs";
 import { performance } from "node:perf_hooks";
 import { zodToJsonSchema } from "zod-to-json-schema";
 import { version } from "../../../../packages/core/src/version";
+import type { DeviceInteraction } from "../../../../packages/core/src/device-interaction";
 import {
   ConfigStore,
   SerialQueue,
@@ -91,6 +92,7 @@ export class DeckService {
   readonly captureCardThumbnails = new CaptureCardThumbnails();
   store!: Store;
   private control = new Map<string, SerialQueue>();
+  private interactions = new Map<string, DeviceInteraction>();
   private global = new SerialQueue();
   private library = new SerialQueue();
   private jobs = new Map<string, Job>();
@@ -578,7 +580,9 @@ export class DeckService {
       case "apps.state":
       case "apps.launch":
         return this.withLease(args, async (session) => {
-          const device = this.device(session.deviceId), adapter = this.adapters.forDevice(device);
+          const device = this.device(session.deviceId);
+          const adapter = this.interactions.get(session.id) ?? this.adapters.forDevice(device);
+          this.interactions.set(session.id, adapter);
           const startedAt = new Date().toISOString();
           if (authorize && !await authorize()) fail("unauthorized", "Device access expired before dispatch.", 401);
           const identity = JSON.stringify(device), tools = JSON.stringify(this.config.config.tools);
@@ -596,10 +600,12 @@ export class DeckService {
             : await this.streams.withHardwareInput(session.id, async () => {
               validate();
               if (authorize && !await authorize()) fail("unauthorized", "Device access expired before app launch.", 401);
+              validate();
               return adapter.launch(args.appId, args.arguments);
             });
           validate();
           if (authorize && !await authorize()) fail("unauthorized", "Device access expired during observation.", 401);
+          validate();
           return { result: payload, observation: { id: randomUUID(), deviceId: device.id, sessionId: session.id,
             backend: adapter.capabilities.backend, startedAt, finishedAt: new Date().toISOString(),
             sha256: createHash("sha256").update(JSON.stringify(payload)).digest("hex") } };
@@ -2185,6 +2191,8 @@ export class DeckService {
     const closing = this.queue(s.deviceId)
       .run(async () => {
         await stopInput;
+        await this.interactions.get(s.id)?.close();
+        this.interactions.delete(s.id);
         await this.finishRecording(
           s.id,
           interrupted || reason.startsWith("Service") ? reason : undefined,

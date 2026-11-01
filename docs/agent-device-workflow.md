@@ -28,6 +28,8 @@ UI reads default to 500 visited nodes and depth 20, with maxima of 2,000 nodes a
 
 The daemon chooses the backend. There is no per-call override. Simulator input keeps idb, which completed commands faster than WebDriverAgent in the local comparison. Physical iOS requires the [signed WebDriverAgent setup](physical-ios.md). Close physical iOS touch control before launching another app, because touch control owns its WDA automation session. Android and Roku launch arguments are unsupported.
 
+If physical iOS launch cleanup loses its USB connection, Device Deck retains the owned session for retry. Reservation release remains pending until cleanup succeeds; reconnect the same helper and retry release.
+
 Historical logs default to the preceding minute, with a maximum interval of ten minutes. Reads default to 64 KiB and 500 lines, with maxima of 256 KiB and 2,000 lines. Roku captures new developer-console output for `durationMs`, up to five seconds, and rejects historical timestamps and process filters. Apple `process` filters match an exact process name; Android filters match a log tag. Android timestamps are translated using a sampled device clock, whose offset and uncertainty accompany the result. Common credential fields are redacted, but app log text may still contain sensitive data. Reads never clear shared log buffers. Truncation is explicit.
 
 An unsupported operation returns `unsupported-capability`. A locked Mac desktop is separate from device transport readiness. Check device health and the operation's result through Device Deck before treating the desktop lock as a blocker. Do not use desktop clicking to drive a native device.

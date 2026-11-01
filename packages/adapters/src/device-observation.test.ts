@@ -43,6 +43,9 @@ test("logs enforce finite intervals, byte and line budgets and remove common cre
   assert(!json.text.includes("secret")); assert(json.text.includes('"ok":true'));
   const unicode = boundedLogs("abc" + "界".repeat(100), deviceLogsSchema.parse({ maxBytes: 256 }));
   assert(unicode.truncated); assert(Buffer.byteLength(unicode.text) <= 256); assert(!unicode.text.includes("\uFFFD"));
+  for (const raw of ['{"password":"prefix,credential-tail', '{"password":"prefix,credential-tail\\', "password='prefix,credential-tail"]) {
+    assert(!boundedLogs(raw, deviceLogsSchema.parse({})).text.includes("credential-tail"));
+  }
 });
 
 test("simulator UI and app operations use exact UDID and the idb backend without desktop access", async () => {
@@ -68,15 +71,15 @@ test("Android preserves frozen ADB selectors, supports TV launch categories and 
     calls.push(args);
     if (args.includes("uiautomator")) return result('<hierarchy><node resource-id="play" text="Pause" /></hierarchy>');
     if (args.includes("dumpsys")) return result("mResumedActivity: ActivityRecord{abc u0 org.hope.app/.Main t1}");
-    if (args.includes("resolve-activity")) return result(args.includes("android.intent.category.LEANBACK_LAUNCHER") ? "org.hope.app/.TvActivity" : "No activity found");
-    return result(fail ? "Error: Activity class does not exist" : "Status: ok");
+    if (args.includes("resolve-activity")) return result(args.includes("android.intent.category.LEANBACK_LAUNCHER") ? "org.hope.app/.Tv$Activity" : "No activity found");
+    return { ...result("Status: ok"), stderr: fail ? "Error type 3: Activity class does not exist" : "" };
   }));
   assert.equal(adapter.capabilities.backend, "adb-scrcpy");
   assert.equal((await adapter.ui(uiReadSchema.parse({}))).nodes[0].label, "Pause");
   assert.equal((await adapter.appState("org.hope.app")).foreground, true);
   await adapter.launch("org.hope.app", []);
   assert(calls.every((args) => args.slice(0, 4).join(" ") === "-P 5038 -t 72"));
-  assert(calls.some((args) => args.includes("org.hope.app/.TvActivity")));
+  assert(calls.some((args) => args.includes("'org.hope.app/.Tv$Activity'")));
   fail = true; await assert.rejects(adapter.launch("org.hope.app", []), /could not launch/);
 });
 
@@ -114,6 +117,27 @@ test("physical app launch targets only its owned WDA session and preserves repla
   assert.equal(closed, 1);
   assert(!calls.some((call) => call.startsWith("DELETE")));
   await assert.rejects(observationAdapter(phone, context).launch("org.hope.app", []), /already has an active/);
+});
+
+test("failed launch cleanup survives until its owned WDA session can reconnect and close", async () => {
+  const phone = deviceSchema.parse({ ...device, kind: "physical", connection: { type: "apple-device", udid: "physical", webDriverAgent: {} } });
+  const context = host(async () => result(""));
+  let active: string | null = null, disconnected = false, connections = 0, deleted = 0, closed = 0;
+  context.wda = async () => { connections++; return { request: async (method, route) => {
+    if (route === "/status") {
+      if (active && !disconnected) { disconnected = true; throw new Error("USB disconnected during cleanup"); }
+      return { sessionId: active, value: {} };
+    }
+    if (route === "/wda/screen") return { value: { screenSize: { width: 390, height: 844 }, scale: 3 } };
+    if (route === "/session") { active = "owned"; return { value: { sessionId: active } }; }
+    if (method === "DELETE") { assert.equal(route, "/session/owned"); active = null; deleted++; }
+    return { value: null };
+  }, onClose: () => () => {}, close: async () => { closed++; } }; };
+  const adapter = observationAdapter(phone, context);
+  await assert.rejects(adapter.launch("org.hope.app", []), /USB disconnected/);
+  assert.equal(active, "owned");
+  await adapter.close(); await adapter.close();
+  assert.equal(active, null); assert.equal(connections, 2); assert.equal(deleted, 1); assert.equal(closed, 2);
 });
 
 test("Roku app queries and launch preserve exact target verification and unsupported transports are explicit", async (t) => {
