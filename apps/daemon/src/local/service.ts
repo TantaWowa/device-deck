@@ -3,6 +3,8 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdir, stat, rm, readFile, copyFile, rmdir } from "node:fs/promises";
 import { constants } from "node:fs";
 import { performance } from "node:perf_hooks";
+import { zodToJsonSchema } from "zod-to-json-schema";
+import { version } from "../../../../packages/core/src/version";
 import {
   ConfigStore,
   SerialQueue,
@@ -139,7 +141,7 @@ export class DeckService {
         if (!target.source) fail("source-missing", "Configure a capture source for this device.", 404);
         return this.capture.live(target.device, target.source, profile);
       },
-      interactive: (device, profile) => this.adapters.startInteractive(device, true, profile),
+      interactive: (device, profile) => this.adapters.forDevice(device).interactive(true, profile),
       report: (error) => { this.diagnostics.push(error.message); if (this.diagnostics.length > 100) this.diagnostics.shift(); },
       helperIdentity: () => JSON.stringify(this.config.config.tools),
     });
@@ -567,6 +569,41 @@ export class DeckService {
     const args = operations[operation]?.parse(value) as any;
     if (!args) fail("unknown-operation", "Unknown operation.", 404);
     switch (operation) {
+      case "api.describe":
+        return { version, operations: Object.fromEntries(Object.entries(operations).map(([name, schema]) => [name, zodToJsonSchema(schema, { $refStrategy: "none" })])),
+          workflow: "Reserve the device, call devices.capabilities with the lease, then use supported apps, ui, control, logs and capture operations. Release the same lease when finished. Native test suites retain their own frameworks. A locked Mac desktop does not establish a device transport failure." };
+      case "devices.capabilities":
+      case "ui.read":
+      case "logs.read":
+      case "apps.state":
+      case "apps.launch":
+        return this.withLease(args, async (session) => {
+          const device = this.device(session.deviceId), adapter = this.adapters.forDevice(device);
+          const startedAt = new Date().toISOString();
+          if (authorize && !await authorize()) fail("unauthorized", "Device access expired before dispatch.", 401);
+          const identity = JSON.stringify(device), tools = JSON.stringify(this.config.config.tools);
+          const validate = () => {
+            this.store.validate(args.sessionId, args.leaseToken);
+            if (this.changingConfig || identity !== JSON.stringify(this.device(device.id)) || tools !== JSON.stringify(this.config.config.tools))
+              fail("configuration-changing", "The device or tools changed during observation. Retry with the current configuration.", 409);
+            if (this.store.lockReason(device.id)) fail("device-locked", "Device is locked for maintenance.", 409);
+          };
+          validate();
+          const payload = operation === "devices.capabilities" ? { ...adapter.capabilities, device: await this.adapters.inspect(device) }
+            : operation === "ui.read" ? await adapter.ui(args)
+            : operation === "logs.read" ? await adapter.logs(args.options)
+            : operation === "apps.state" ? await adapter.appState(args.appId)
+            : await this.streams.withHardwareInput(session.id, async () => {
+              validate();
+              if (authorize && !await authorize()) fail("unauthorized", "Device access expired before app launch.", 401);
+              return adapter.launch(args.appId, args.arguments);
+            });
+          validate();
+          if (authorize && !await authorize()) fail("unauthorized", "Device access expired during observation.", 401);
+          return { result: payload, observation: { id: randomUUID(), deviceId: device.id, sessionId: session.id,
+            backend: adapter.capabilities.backend, startedAt, finishedAt: new Date().toISOString(),
+            sha256: createHash("sha256").update(JSON.stringify(payload)).digest("hex") } };
+        });
       case "inventory":
         this.inventoryReads[`inventory:${origin}`] = (this.inventoryReads[`inventory:${origin}`] || 0) + 1;
         return this.snapshot(args.deviceIds);
@@ -1589,7 +1626,7 @@ export class DeckService {
     const at = Date.now(),
       mono = performance.now(),
       job = this.jobs.get(session.id);
-    await this.adapters.input(this.device(session.deviceId), args);
+    await this.adapters.forDevice(this.device(session.deviceId)).input(args);
     const key =
       args.key ||
       (args.text !== undefined

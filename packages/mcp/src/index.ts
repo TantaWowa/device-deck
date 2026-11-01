@@ -7,6 +7,12 @@ import { operations, type Operation } from "../../core/src/local/types";
 import { z } from "zod";
 const server = new McpServer({ name: "device-deck", version });
 const descriptions: Partial<Record<Operation, string>> = {
+  "api.describe": "Read this installed Device Deck version's operation schemas and the interactive device workflow. Use this before guessing commands.",
+  "devices.capabilities": "Read the leased device's selected backend, readiness and supported interaction/observation capabilities. Unsupported capabilities must not be guessed or bypassed through desktop tools.",
+  "ui.read": "Read a bounded structured UI snapshot for the leased device: identifiers, labels, values, states and bounds. Unknown state stays null; truncated trees are explicit. Native app custom renderers may expose only part of their UI.",
+  "logs.read": "Read bounded device logs using the current lease. Apple/Android support up to ten minutes of history; Roku supports a short live developer-console capture. Results include provenance and truncation; no shared log buffer is cleared.",
+  "apps.state": "Read app state through the leased device's native adapter. Omit appId to inspect the available foreground/app listing. Unknown properties remain unknown.",
+  "apps.launch": "Launch or foreground an installed app on the leased device. Uses native device transport, independently of the locked desktop. Physical iOS requires a signed WDA helper and no existing touch controller.",
   "license.status":
     "Read the daemon's verified Free, trial or Pro entitlement state. Never returns the license key.",
   "license.activate":

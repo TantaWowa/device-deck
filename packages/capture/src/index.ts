@@ -329,7 +329,7 @@ export class CaptureEngine {
     if (!pending) {
       pending = (async () => {
         const data = await (async () => {
-          if (s.kind !== "usb") return this.adapters.screenshot(d!);
+          if (s.kind !== "usb") return this.adapters.forDevice(d!).screenshot();
           const { stream, release } = await this.retainUsb(s);
           try { return await stream.frame(); }
           finally { await release(closeWhenUnused); }

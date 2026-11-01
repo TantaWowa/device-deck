@@ -2,6 +2,8 @@
 
 Every device operation passes through the daemon. The full input schemas are generated from the running TypeScript contract in [operations.schema.json](operations.schema.json). Configuration uses [device-deck.schema.json](device-deck.schema.json).
 
+Run `devdeck api` or call `api.describe` to read the installed version and operation schemas. For lease-bound UI inspection, bounded logs, app state and app launch, see [interactive agent work](agent-device-workflow.md).
+
 Reports default to today in the Mac timezone. See [report ranges and Capture Cards](reports-and-capture-cards.md) for timestamp/count semantics, date-range CLI examples and the `capture-cards.list` operation.
 
 Apple iOS/tvOS simulators and Android AVDs can be launched and closed directly in web Devices or with **O** in TUI Devices. The shared `devices.simulator` operation uses the configured UDID or exact AVD identity, requires confirmation to close, and protects reservations and recordings. See [simulator controls](simulator-controls.md).

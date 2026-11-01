@@ -40,6 +40,10 @@ Remote requests must arrive over the local proxy connection for that exact confi
 
 When Tailscale access is enabled, local processes that can reach the loopback listener are trusted. They can impersonate Serve, including processes run by another OS user; this does not provide per-OS-user isolation. This release has no per-device user roles; the separate portal provides an account-owned machine registry. Shared visibility is a label. Enabling Tailscale grants full daemon access to the configured users.
 
+## Device interactions
+
+`Adapters.forDevice` binds input, interactive streaming, screenshots and observations to one `DeviceInteraction` contract. Observation adapters implement UI reads, bounded logs, app state and launch for idb, WDA, Android and Roku. The daemon validates the lease and authorization before dispatch and again before returning observations. Results carry device/session/backend provenance and a content digest. Native test runners keep their existing execution paths. See [interactive agent work](agent-device-workflow.md).
+
 ## Physical iOS input
 
 `packages/adapters/src/webdriveragent.ts` owns the physical iPhone/iPad WebDriverAgent protocol and each USB-only `iproxy` child. The optional `apple-device.webDriverAgent` configuration enables this path. `Adapters` resolves the configured Xcode identifier to a physical hardware UDID before starting a forward. The helper remains an external, signed test runner; Device Deck does not sign or install it.

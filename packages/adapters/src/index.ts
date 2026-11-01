@@ -2,6 +2,8 @@ import { ANDROID_GESTURES, startScrcpy } from "./scrcpy";
 import { androidAdbPort, androidBootReady, androidFeatures, avdInputMode, avdProfile } from "./android-state";
 import { IOS_GESTURES, startIdbInteractive } from "./interactive";
 import { openWda, startWdaInteractive, wdaScreen, wdaScreenshot, WDA_GESTURES } from "./webdriveragent";
+import { observationAdapter } from "./device-observation";
+import type { DeviceInteraction } from "../../core/src/device-interaction";
 import type { InteractiveSource, VideoProfile } from "../../core/src/live";
 import { androidKeys, rokuKeys, hidKeys, iosHardwareKeys, deviceInputMode } from "../../core/src/remote";
 import { controlSimulator, simulatorState, SimulatorInventory, wakeSimulator, SIMULATOR_UNAVAILABLE_MESSAGE } from "./simulator";
@@ -94,6 +96,36 @@ export class Adapters {
     return (
       this.getConfig().tools[name] || (name === "python" ? "python3" : name)
     );
+  }
+  forDevice(device: DeviceConfig): DeviceInteraction {
+    let current = device;
+    const observation = observationAdapter(device, {
+      execute: this.execute,
+      tool: (name) => this.tool(name),
+      adb: () => this.adb(current),
+      verify: async () => {
+        current = await this.verifyIdentity(device);
+        const c = current.connection;
+        if (c.type === "adb" && !await androidBootReady(this.tool("adb"), this.adb(current), this.execute))
+          fail("device-not-ready", "Android is still booting or unavailable.", 409);
+        if (c.type === "simulator" && await simulatorState(current, this.execute) !== "booted")
+          fail("device-not-ready", "The selected simulator must be running for this operation.", 409);
+        if (c.type === "roku" && (await this.rokuInfo(c.host)).serial !== c.serial)
+          fail("identity-mismatch", "Roku at this address has a different serial number.", 409);
+        return current;
+      },
+      wda: () => this.startAppleScreen(device),
+    });
+    return {
+      capabilities: observation.capabilities,
+      input: (value) => this.input(device, value),
+      interactive: (control = true, profile = "balanced") => this.startInteractive(device, control, profile),
+      screenshot: () => this.screenshot(device),
+      ui: (options) => observation.ui(options),
+      logs: (options) => observation.logs(options),
+      appState: (appId) => observation.appState(appId),
+      launch: (appId, args) => observation.launch(appId, args),
+    };
   }
   adb(d: DeviceConfig) {
     if (d.connection.type !== "adb") return [];

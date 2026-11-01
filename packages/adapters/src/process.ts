@@ -7,7 +7,7 @@ export async function run(
   command: string,
   args: string[],
   timeout = 15000,
-  options: { cwd?: string; signal?: AbortSignal } = {},
+  options: { cwd?: string; signal?: AbortSignal; maxOutputBytes?: number } = {},
 ) {
   if (options.signal?.aborted)
     throw new DeckError("adapter-cancelled", `${command}: Command cancelled.`, 499);
@@ -31,7 +31,7 @@ export async function run(
     if (options.signal?.aborted) abort();
     const collect = (chunks: Buffer[]) => (chunk: Buffer) => {
       bytes += chunk.length;
-      if (bytes > 32 * 1024 * 1024) { terminate("Command output exceeded 32 MiB."); return; }
+      if (bytes > (options.maxOutputBytes ?? 32 * 1024 * 1024)) { terminate("Command output exceeded its byte limit."); return; }
       chunks.push(chunk);
     };
     child.stdout.on("data", collect(stdout));

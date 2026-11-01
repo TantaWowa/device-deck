@@ -1,4 +1,196 @@
 {
+  "api.describe": {
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false,
+    "$schema": "http://json-schema.org/draft-07/schema#"
+  },
+  "devices.capabilities": {
+    "type": "object",
+    "properties": {
+      "sessionId": {
+        "type": "string",
+        "minLength": 1
+      },
+      "leaseToken": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "required": [
+      "sessionId",
+      "leaseToken"
+    ],
+    "additionalProperties": false,
+    "$schema": "http://json-schema.org/draft-07/schema#"
+  },
+  "ui.read": {
+    "type": "object",
+    "properties": {
+      "maxNodes": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 2000,
+        "default": 500
+      },
+      "maxDepth": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 40,
+        "default": 20
+      },
+      "selector": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "maxLength": 256
+          },
+          "label": {
+            "type": "string",
+            "maxLength": 512
+          },
+          "type": {
+            "type": "string",
+            "maxLength": 128
+          }
+        },
+        "additionalProperties": false
+      },
+      "sessionId": {
+        "type": "string",
+        "minLength": 1
+      },
+      "leaseToken": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "required": [
+      "sessionId",
+      "leaseToken"
+    ],
+    "additionalProperties": false,
+    "$schema": "http://json-schema.org/draft-07/schema#"
+  },
+  "logs.read": {
+    "type": "object",
+    "properties": {
+      "sessionId": {
+        "type": "string",
+        "minLength": 1
+      },
+      "leaseToken": {
+        "type": "string",
+        "minLength": 1
+      },
+      "options": {
+        "type": "object",
+        "properties": {
+          "since": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "until": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "durationMs": {
+            "type": "integer",
+            "minimum": 100,
+            "maximum": 5000,
+            "default": 1000
+          },
+          "maxBytes": {
+            "type": "integer",
+            "minimum": 256,
+            "maximum": 262144,
+            "default": 65536
+          },
+          "maxLines": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2000,
+            "default": 500
+          },
+          "process": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9._-]+$"
+          }
+        },
+        "additionalProperties": false,
+        "default": {}
+      }
+    },
+    "required": [
+      "sessionId",
+      "leaseToken"
+    ],
+    "additionalProperties": false,
+    "$schema": "http://json-schema.org/draft-07/schema#"
+  },
+  "apps.state": {
+    "type": "object",
+    "properties": {
+      "sessionId": {
+        "type": "string",
+        "minLength": 1
+      },
+      "leaseToken": {
+        "type": "string",
+        "minLength": 1
+      },
+      "appId": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 256,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+      }
+    },
+    "required": [
+      "sessionId",
+      "leaseToken"
+    ],
+    "additionalProperties": false,
+    "$schema": "http://json-schema.org/draft-07/schema#"
+  },
+  "apps.launch": {
+    "type": "object",
+    "properties": {
+      "sessionId": {
+        "type": "string",
+        "minLength": 1
+      },
+      "leaseToken": {
+        "type": "string",
+        "minLength": 1
+      },
+      "appId": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 256,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+      },
+      "arguments": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "maxLength": 1024
+        },
+        "maxItems": 30,
+        "default": []
+      }
+    },
+    "required": [
+      "sessionId",
+      "leaseToken",
+      "appId"
+    ],
+    "additionalProperties": false,
+    "$schema": "http://json-schema.org/draft-07/schema#"
+  },
   "inventory": {
     "type": "object",
     "properties": {
