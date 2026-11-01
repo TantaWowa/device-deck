@@ -73,7 +73,7 @@ test("Android preserves frozen ADB selectors, supports TV launch categories and 
     if (args.includes("uiautomator")) return result('<hierarchy><node resource-id="play" text="Pause" /></hierarchy>');
     if (args.includes("dumpsys")) return result("mResumedActivity: ActivityRecord{abc u0 org.hope.app/.Main t1}");
     if (args.includes("resolve-activity")) return result(args.includes("android.intent.category.LEANBACK_LAUNCHER") ? "org.hope.app/.Tv$Activity" : "No activity found");
-    return { ...result("Status: ok"), stderr: fail ? "Error type 3: Activity class does not exist" : "" };
+    return { ...result("Starting: Intent { cmp=org.hope.app/.ExceptionHandler }\nStatus: ok"), stderr: fail ? "Error type 3: Activity class does not exist" : "" };
   }));
   assert.equal(adapter.capabilities.backend, "adb-scrcpy");
   assert.equal((await adapter.ui(uiReadSchema.parse({}))).nodes[0].label, "Pause");

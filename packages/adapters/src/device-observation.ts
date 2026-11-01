@@ -180,7 +180,7 @@ class AndroidObservation extends ObservationBase {
     }
     if (!/^[A-Za-z0-9_.]+\/[A-Za-z0-9_.$]+$/.test(resolved) || resolved.split("/")[0] !== appId) throw new DeckError("app-unavailable", "No launcher activity was found for the requested installed app.", 409);
     const result = await this.adb(["shell", "am", "start", "-W", "-n", `'${resolved}'`]);
-    if (/Error(?: type \d+)?:|Exception|Status:\s*(?!ok\b)\w+/i.test(`${result.stdout}\n${result.stderr}`)) throw new DeckError("app-launch-failed", "Android could not launch the requested app.", 502);
+    if (/^\s*(?:Error(?: type \d+)?:|(?:[\w$]+\.)*\w*Exception\b|Status:\s*(?!ok\b)\w+)/im.test(`${result.stdout}\n${result.stderr}`)) throw new DeckError("app-launch-failed", "Android could not launch the requested app.", 502);
     return { appId, activity: resolved };
   }
 }
