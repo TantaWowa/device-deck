@@ -2193,17 +2193,19 @@ export class DeckService {
     const stopInput = this.streams.closeSession(s.id);
     const closing = this.queue(s.deviceId)
       .run(async () => {
-        await stopInput;
+        try { await stopInput; }
+        finally {
+          await this.finishRecording(
+            s.id,
+            interrupted || reason.startsWith("Service") ? reason : undefined,
+          );
+        }
         await this.interactions.get(s.id)?.close();
         for (const owned of this.store.ownedInteractions().filter((value) => value.sessionId === s.id)) {
           await this.adapters.closeOwnedWda(owned.device, owned.wdaSessionId);
           this.store.clearOwnedInteraction(s.id);
         }
         this.interactions.delete(s.id);
-        await this.finishRecording(
-          s.id,
-          interrupted || reason.startsWith("Service") ? reason : undefined,
-        );
         for (const worker of this.store
           .workers()
           .filter((w) => this.store.artifact(w.id).sessionId === s.id))

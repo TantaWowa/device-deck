@@ -1,13 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { DeckService } from "./local/service";
 import { Store } from "./local/store";
 import { Adapters } from "../../../packages/adapters/src";
-import { deviceSchema, type Device, type DeviceConfig } from "../../../packages/core/src/local/types";
+import { CaptureEngine, type RecordingHandle } from "../../../packages/capture/src";
+import { deviceSchema, type Device, type DeviceConfig, type SourceConfig, type Source } from "../../../packages/core/src/local/types";
 
 test("device observations use the same lease, discover schemas, preserve provenance and recheck authorization", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "deck-gateway-"));
@@ -111,4 +112,44 @@ test("restart retains failed WDA launch cleanup and releases only after the same
     assert.equal(deck.store.ownedInteractions().length, 0);
     assert.equal(deck.store.session(held.session.id).state, "closed");
   } finally { online = true; await deck.close(); await rm(directory, { recursive: true, force: true }); }
+});
+
+test("release finalizes an independent USB recording before failed WDA cleanup retains the reservation", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "deck-gateway-recorder-"));
+  const phone = deviceSchema.parse({ id: "physical", name: "Phone", platform: "Apple", kind: "physical", captureSourceId: "usb", connection: { type: "apple-device", udid: "00008110-0012345678901234", webDriverAgent: {} } });
+  let deck: DeckService, stopped = false, failCleanup = true;
+  class RecordingAdapters extends Adapters {
+    async diagnostics() { return []; }
+    async inspect(d: DeviceConfig): Promise<Device> { return { ...d, online: true, locked: false, healthDetail: "Fixture", capabilities: ["touch", "record"] }; }
+    async inspectSources(sources: SourceConfig[]): Promise<Source[]> { return sources.map((source) => ({ ...source, status: "connected" })); }
+    forDevice(device: DeviceConfig) {
+      return { ...super.forDevice(device), close: async () => {
+        assert(stopped, "The recorder must stop before retryable helper cleanup");
+        if (failCleanup) throw new Error("WDA cleanup requires reconnect");
+      } };
+    }
+  }
+  class RecordingCapture extends CaptureEngine {
+    async startRecording(id: string, device: DeviceConfig, _source: SourceConfig, file: string): Promise<RecordingHandle> {
+      await writeFile(file, "fixture recording");
+      let end!: () => void;
+      return { id, deviceId: device.id, path: file, startedAt: Date.now(), startedMono: performance.now(), ended: new Promise<string | undefined>((resolve) => { end = () => resolve(undefined); }), stop: async () => { stopped = true; end(); return { bytes: 17, duration: 1 }; } };
+    }
+    async closeSource() {}
+    async close() {}
+  }
+  const adapters = new RecordingAdapters(() => deck.config.config);
+  deck = new DeckService(directory, undefined, adapters, new RecordingCapture(adapters));
+  try {
+    await deck.init();
+    await deck.execute("config.save", { revision: deck.config.revision, config: { ...deck.config.config, devices: [phone], sources: [{ id: "usb", name: "USB", kind: "usb", uniqueId: "fixture" }], settings: { ...deck.config.config.settings, folder: path.join(directory, "captures") } } });
+    const held: any = await deck.execute("sessions.reserve", { selector: { device: phone.id }, owner: "Agent", reason: "USB recording cleanup" });
+    const lease = { sessionId: held.session.id, leaseToken: held.leaseToken };
+    await deck.execute("devices.capabilities", lease);
+    await deck.execute("recordings.start", { ...lease, mode: "clean" });
+    await assert.rejects(deck.execute("sessions.release", lease), /reconnect/);
+    assert(stopped); assert.equal(deck.store.artifacts()[0].status, "completed");
+    assert.equal(deck.store.session(held.session.id).state, "closing");
+    failCleanup = false; await deck.execute("sessions.release", lease);
+  } finally { failCleanup = false; await deck.close(); await rm(directory, { recursive: true, force: true }); }
 });
