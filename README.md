@@ -131,6 +131,8 @@ In Devices, **F** chooses platform and Sim/Real filters, **/** searches, and **D
 
 For scripts, `reserve --json` returns a session ID and secret lease token. Every control/capture command requires both. See [CLI, API and MCP](docs/api.md) for complete examples.
 
+Agents can use the same reservation for structured UI reads, bounded logs, app state and app launch. `devdeck api` describes the installed operations; [interactive agent work](docs/agent-device-workflow.md) explains supported backends and evidence metadata.
+
 ## Platform adapters
 
 | Target                                 | Input                               | Preview / screenshot / recording   | Setup                                                        |

@@ -64,6 +64,7 @@ Usage: devdeck <command> [options]
   tailscale enable|status|disable  Manage private HTTPS access over Tailscale
        [--allow-user LOGIN,LOGIN] [--https-port PORT]
   discover                     Find connected targets and capture cards
+  api                          Describe installed API schemas and agent workflow
   feeds                        List capture feeds and stable IDs
   view [--source NAME_OR_ID]    Open a browser feed; Left/Right switches feeds
        [--sources A,B,C] [--mux] [--browser] [--json]
@@ -350,7 +351,8 @@ try {
           ? "../../../packages/mcp/src/index"
           : "../../tui/src/index"
       );
-    } else if (command === "discover") result = await callOperation("discover", { refresh: true });
+    } else if (command === "api") result = await callOperation("api.describe", {});
+    else if (command === "discover") result = await callOperation("discover", { refresh: true });
     else if (command === "register") {
       const wanted = { udid: v.udid ? String(v.udid).toLowerCase() : undefined, avd: v.avd ? String(v.avd) : undefined, serial: v.serial ? String(v.serial) : undefined };
       if (!wanted.udid && !wanted.avd && !wanted.serial) throw new DeckError("arguments", "Supply --udid, --avd or --serial.", 400);

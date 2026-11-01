@@ -3,6 +3,7 @@ import { reportRequestSchema, type UsageReport } from "../reports";
 import type { LicenseStatus } from "../../../licensing/src";
 import { streamOpenSchema, streamCredentialSchema, gestureInputSchema, pointerInputSchema, type GestureCapability } from "../live";
 import { deviceFormFactor } from "../device-form-factor";
+import { appIdSchema, uiReadSchema, deviceLogsSchema } from "../device-interaction";
 export const capabilitySchema = z.enum([
   "preview",
   "key",
@@ -374,6 +375,12 @@ const remoteInputFields = {
   y: z.number().min(0).max(10000).optional(),
 };
 export const operations = {
+  "api.describe": z.object({}).strict(),
+  "devices.capabilities": z.object(leaseFields).strict(),
+  "ui.read": uiReadSchema.extend(leaseFields),
+  "logs.read": z.object({ ...leaseFields, options: deviceLogsSchema.default({}) }).strict(),
+  "apps.state": z.object({ ...leaseFields, appId: appIdSchema.optional() }).strict(),
+  "apps.launch": z.object({ ...leaseFields, appId: appIdSchema, arguments: z.array(z.string().max(1024)).max(30).default([]) }).strict(),
   inventory: z.object({ deviceIds: z.array(z.string()).max(1000).optional() }).strict(),
   "license.status": z.object({}).strict(),
   "license.activate": z
