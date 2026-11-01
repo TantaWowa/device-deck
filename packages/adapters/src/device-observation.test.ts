@@ -84,10 +84,12 @@ test("physical WDA readback never opens an automation session and closes each ow
   const context = host(async () => result(""));
   context.wda = async () => ({ request: async (method, route) => {
     assert.equal(method, "GET"); routes.push(route);
-    return { value: route.startsWith("/source") ? { type: "Button", name: "play", label: "Pause" } : { bundleId: "org.hope.app", pid: 42 } };
+    return { value: route.startsWith("/source") ? { type: "Button", rawIdentifier: "play", name: "Pause", label: "Pause", isEnabled: "1", isFocused: "0", frame: "{{10, 20}, {100, 30}}", rect: { x: 10, y: 20, width: 100, height: 30 } } : { bundleId: "org.hope.app", pid: 42 } };
   }, onClose: () => () => {}, close: async () => { closed++; } });
   const adapter = observationAdapter(phone, context);
-  assert.equal((await adapter.ui(uiReadSchema.parse({}))).nodes[0].id, "play");
+  const node = (await adapter.ui(uiReadSchema.parse({}))).nodes[0];
+  assert.equal(node.id, "play"); assert.equal(node.enabled, true); assert.equal(node.focused, false);
+  assert.deepEqual(node.bounds, { x: 10, y: 20, width: 100, height: 30 });
   assert.equal((await adapter.appState("org.hope.app")).foreground, true);
   assert.equal(closed, 2); assert(!routes.includes("/session"));
   await assert.rejects(adapter.logs(deviceLogsSchema.parse({})), /does not support/);

@@ -28,7 +28,7 @@ const decode = (s: string) => s.replace(/&(?:quot|apos|lt|gt|amp);|&#(?:x[\da-f]
   return point > 0 && point <= 0x10ffff ? String.fromCodePoint(point) : "";
 });
 const text = (value: unknown): string | null => value == null ? null : String(value).slice(0, 4096);
-const bool = (value: unknown): boolean | null => value === true || value === "true" || value === 1 ? true : value === false || value === "false" || value === 0 ? false : null;
+const bool = (value: unknown): boolean | null => value === true || value === "true" || value === 1 || value === "1" ? true : value === false || value === "false" || value === 0 || value === "0" ? false : null;
 
 export function androidUi(xml: string): unknown[] {
   if (/<!DOCTYPE|<!ENTITY/i.test(xml)) throw new Error("Unexpected Android UI document type.");
@@ -55,14 +55,14 @@ export function normalizeUi(value: any, options: UiRead, coordinateSpace: "point
     visited++;
     const type = text(raw.type ?? raw.AXRole ?? raw.class ?? raw.role);
     const secure = /secure|password/i.test(type || "") || raw.password === "true";
-    const frame = raw.frame ?? raw.rect;
+    const frame = raw.rect ?? raw.frame;
     const bounds = frame && [frame.x, frame.y, frame.width, frame.height].every((n: unknown) => typeof n === "number" && Number.isFinite(n))
       ? { x: frame.x, y: frame.y, width: frame.width, height: frame.height } : null;
     const node: UiNode = {
-      id: text(raw.AXUniqueId ?? raw.identifier ?? raw["resource-id"] ?? raw.name), type,
+      id: text(raw.AXUniqueId ?? raw.rawIdentifier ?? raw.identifier ?? raw["resource-id"] ?? raw.name), type,
       label: secure ? "[secure]" : text(raw.AXLabel ?? raw.label ?? (raw["content-desc"] || raw.text)),
       value: secure ? "[secure]" : text(raw.AXValue ?? raw.value ?? raw.text),
-      enabled: bool(raw.enabled ?? raw.AXEnabled), selected: bool(raw.selected ?? raw.checked), focused: bool(raw.focused), bounds, depth,
+      enabled: bool(raw.enabled ?? raw.isEnabled ?? raw.AXEnabled), selected: bool(raw.selected ?? raw.isSelected ?? raw.checked), focused: bool(raw.focused ?? raw.isFocused), bounds, depth,
     };
     const selector = options.selector;
     if (!selector || (selector.id === undefined || node.id === selector.id) && (selector.label === undefined || node.label === selector.label) && (selector.type === undefined || node.type === selector.type)) nodes.push(node);
