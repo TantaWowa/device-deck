@@ -1,6 +1,6 @@
 {
   "name": "device-deck",
-  "version": "0.8.0-beta.2",
+  "version": "0.9.0-beta.1",
   "private": true,
   "type": "module",
   "workspaces": [
@@ -27,7 +27,7 @@
     "qa": "node scripts/qa.mjs",
     "qa:custom-devices": "node --import tsx scripts/qa-custom-devices.ts",
     "screenshots:website": "node scripts/marketing-screenshots.mjs",
-    "test": "node --import tsx --test apps/daemon/src/*.test.ts apps/billing/src/*.test.ts apps/cloud/src/*.test.ts apps/portal/src/*.test.ts apps/cli/src/*.test.ts apps/tui/src/*.test.ts packages/*/src/*.test.ts",
+    "test": "node --import tsx --test apps/daemon/src/*.test.ts apps/cloud/src/*.test.ts apps/portal/src/*.test.ts apps/cli/src/*.test.ts apps/tui/src/*.test.ts packages/*/src/*.test.ts",
     "service": "node --import tsx apps/daemon/src/index.ts",
     "install:dev-cli": "node scripts/install-dev-cli.mjs",
     "service:local": "node --import tsx scripts/service-local.ts",
@@ -38,19 +38,9 @@
     "build:local": "node scripts/build-local.mjs",
     "schema": "node --import tsx scripts/schema.ts",
     "package:local": "node scripts/package-local.mjs",
-    "build:installer": "node scripts/build-installer.mjs",
-    "billing:serve": "node --import tsx apps/billing/src/index.ts",
-    "billing:recover-lock": "node --import tsx scripts/recover-billing-lock.ts",
     "package:mac": "node scripts/package-mac.mjs",
-    "release:keygen": "node scripts/release/provision-keygen.mjs",
-    "release:team-license": "node scripts/release/issue-team-license.mjs",
-    "test:distribution": "node --test scripts/distribution/*.test.mjs scripts/release/*.test.mjs",
+    "test:distribution": "node --test scripts/distribution/*.test.mjs",
     "proof:mac": "node scripts/proof-mac-package.mjs",
-    "release:publish": "node scripts/release/publish-mac.mjs",
-    "release:github": "node scripts/release/setup-github.mjs",
-    "release:cask": "node --import tsx scripts/release/generate-cask.ts",
-    "billing:build": "node apps/billing/build.mjs",
-    "billing:operator": "node --import tsx apps/billing/src/operator.ts",
     "build:portal": "vite build apps/portal --base=/app/ --outDir ../../dist/app --emptyOutDir",
     "build:cloud": "node apps/cloud/build.mjs",
     "dev:portal": "vite apps/portal --host 127.0.0.1 --port 5175 --strictPort",
@@ -84,5 +74,6 @@
     "typescript": "^5.9.2",
     "vite": "^7.1.5",
     "zod-to-json-schema": "^3.25.2"
-  }
+  },
+  "license": "MIT"
 }

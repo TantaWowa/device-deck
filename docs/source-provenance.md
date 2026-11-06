@@ -18,14 +18,14 @@ On 13 September 2026, Tawi's `src/tui.tsx` at `0878018401c03d5cc1495ad12ef126579
 
 No separate iOS simulator remote script was found in the inspected shell sources. Simulator capture reuses the verified simctl route. Simulator input uses [Meta's idb](https://github.com/facebook/idb), whose [UI command documentation](https://fbidb.io/docs/idb/ui/) describes HID keys, taps and text. Both the official companion and Python client were installed for the dedicated proof simulators.
 
-Device Deck's code remains under the repository's existing proprietary license. Third-party runtime code keeps its original licenses. The package includes dependency license texts. ffmpeg, idb, pyatv and Xcode remain separately installed tools. Mac application distributions include Node with its own license; bundled scrcpy is described below.
+Device Deck's code is available under the MIT license. Third-party runtime code keeps its original licenses. The package includes dependency license texts. ffmpeg, idb, pyatv and Xcode remain separately installed tools. Mac application distributions include Node with its own license; bundled scrcpy is described below.
 
 
 ## Live Android video and touch
 
 On 16 September 2026, Device Deck added a client for the [scrcpy 4.1 internal protocol](https://github.com/Genymobile/scrcpy/blob/v4.1/doc/develop.md). The client was written against `Streamer.java`, `DesktopConnection.java`, `Options.java`, `Controller.java`, and `app/src/control_msg.c` in that tag. It implements H.264 session/frame parsing and touch messages with exact transport identity and per-source cleanup. No installed desktop scrcpy client is required.
 
-The build bundles the unmodified official [`scrcpy-server-v4.1`](https://github.com/Genymobile/scrcpy/releases/tag/v4.1), licensed under Apache-2.0, with SHA-256 `deacb991ed2509715160ffdc7907e47b4160eb30d1566217e9047fd5b8850cae`. The pin is recorded in `scripts/distribution/scrcpy.json`; the build verifies it and copies [the upstream license text](../native/scrcpy-LICENSE) into `build/native/scrcpy-LICENSE`. The runtime checks the same digest before starting a source. This third-party server retains its upstream license and is not relicensed as proprietary Device Deck code.
+The build bundles the unmodified official [`scrcpy-server-v4.1`](https://github.com/Genymobile/scrcpy/releases/tag/v4.1), licensed under Apache-2.0, with SHA-256 `deacb991ed2509715160ffdc7907e47b4160eb30d1566217e9047fd5b8850cae`. The pin is recorded in `scripts/distribution/scrcpy.json`; the build verifies it and copies [the upstream license text](../native/scrcpy-LICENSE) into `build/native/scrcpy-LICENSE`. The runtime checks the same digest before starting a source. This third-party server retains its upstream license and is not relicensed under Device Deck's MIT license.
 
 The idb gesture adapter uses the separately installed official client and companion. Its `describe` JSON, tap-duration and swipe commands were checked against [Meta's idb source](https://github.com/facebook/idb/tree/main/idb/cli/commands). The adapter translates video pixels to the reported simulator point dimensions and exposes completed gestures only; it does not bundle idb or claim continuous pointer support. These source checks and protocol tests do not establish new physical-device proof.
 

@@ -15,32 +15,32 @@ npm test
 npm run package:mac
 ```
 
-The default uses test Keygen trust, creates an ad-hoc-signed application and an **unsigned team installer**, and writes artifacts under ignored `work/distribution`. It never installs into `/Applications`, enables a login service, or copies your development profile, device bindings, recordings or license key into the package.
+The default uses free access, creates an ad-hoc-signed application and an **unsigned installer**, and writes artifacts under ignored `work/distribution`. It never installs into `/Applications`, enables a login service, or copies your development profile, device bindings, recordings or private credentials into the package.
 
 The runtime archive is downloaded from Node's official release host and checked against the architecture-specific SHA-256 pinned in `scripts/distribution/node-runtime.json`. The package does not include npm or require the user's Node, NVM, Python or Xcode to open. A missing cache requires internet access on the build Mac.
 
 For example, version `0.5.0-beta.1` creates:
 
 ```text
-work/distribution/device-deck-0.5.0-beta.1-macos-arm64-test-team.pkg
-work/distribution/device-deck-0.5.0-beta.1-macos-arm64-test-team.pkg.sha256
-work/distribution/device-deck-0.5.0-beta.1-macos-arm64-test-team.json
+work/distribution/device-deck-0.5.0-beta.1-macos-arm64.pkg
+work/distribution/device-deck-0.5.0-beta.1-macos-arm64.pkg.sha256
+work/distribution/device-deck-0.5.0-beta.1-macos-arm64.json
 ```
 
-The JSON records the build commit, license product, runtime, architecture, media dependency mode, signing status, artifact size and checksum. Prerelease names remain in release metadata; macOS bundle and installer receipt versions use the numeric `major.minor.patch` portion. Keep one supported beta installed at a time; an equal-version installer can replace it.
+The JSON records the build commit, runtime, architecture, media dependency mode, signing status, artifact size and checksum. Prerelease names remain in release metadata; macOS bundle and installer receipt versions use the numeric `major.minor.patch` portion. Keep one supported beta installed at a time; an equal-version installer can replace it.
 
 Run the package proof against the staged app:
 
 ```sh
-npm run proof:mac -- --app 'work/distribution/staging/arm64-test/payload/Applications/Device Deck.app' --package work/distribution/device-deck-0.5.0-beta.1-macos-arm64-test-team.pkg
+npm run proof:mac -- --app 'work/distribution/staging/arm64/payload/Applications/Device Deck.app' --package work/distribution/device-deck-0.5.0-beta.1-macos-arm64.pkg
 ```
 
-This verifies the installer checksum and extracted payload against the staged app, then launches only an isolated temporary profile and validates the private runtime, real Free-mode daemon with configured Keygen trust, bundled dashboard, safe shutdown and installer refusal while that app is running. It does not open capture streams or change the developer's running deck. A clean team Mac must still verify Gatekeeper behavior, the first Camera permission prompt and its Device Deck attribution, live USB recording, and upgrade behavior across actual installs.
+This verifies the installer checksum and extracted payload against the staged app, then launches only an isolated temporary profile and validates the private runtime, unrestricted daemon, bundled dashboard, safe shutdown and installer refusal while that app is running. It does not open capture streams or change the developer's running deck. A clean team Mac must still verify Gatekeeper behavior, the first Camera permission prompt and its Device Deck attribution, live USB recording, and upgrade behavior across actual installs.
 
 ## Team installation
 
-1. Share the `.pkg`, its checksum file and the release notes through your team's normal channel. Keep test licenses with test packages; they do not activate live packages.
-2. Verify the checksum, then open the installer. The unsigned team installer has no Apple notarization; managed Macs may require an administrator-approved test deployment. Do not disable Gatekeeper globally. Use the signed release path below for normal outside-team distribution.
+1. Share the `.pkg`, its checksum file and the release notes through your team's normal channel.
+2. Verify the checksum, then open the installer. The unsigned installer has no Apple notarization; managed Macs may require an administrator-approved test deployment. Do not disable Gatekeeper globally. Use the signed release path below for normal outside-team distribution.
 3. Open `/Applications/Device Deck.app`. Its menu-bar icon opens the dashboard and the **Capture setup** instructions. Allow Camera access when the selected capture input requests it.
 4. Install the optional capture encoder if needed: `brew install ffmpeg`. Both standard Homebrew locations are searched. Reopen Device Deck, check Settings diagnostics, discover devices and add selected devices together.
 5. Use `devdeck start`, `devdeck ui` or `devdeck tui` from a terminal. Choose `devdeck service install` only when you want the app to start at login.
@@ -84,7 +84,7 @@ export DEVICE_DECK_NOTARY_PROFILE='device-deck'
 npm run package:mac -- --release
 ```
 
-`--release` selects live Keygen trust. It refuses missing or invalid identities and missing notarization configuration. It signs nested executable code and the app using the hardened runtime, signs the installer, submits it to Apple's notary service, staples the ticket, and verifies the result before writing release metadata. A failed notarization never falls back to an unsigned public release. Test-mode packages cannot use this release path.
+`--release` selects Developer ID signing and notarization. It refuses missing or invalid identities and missing notarization configuration. It signs nested executable code and the app using the hardened runtime, signs the installer, submits it to Apple's notary service, staples the ticket, and verifies the result before writing release metadata. A failed notarization never falls back to an unsigned public release.
 
 Do not publish a manually copied `.pkg` that lacks a matching completed JSON/checksum record. Publish immutable versions through the release workflow. Public signing and clean-Mac acceptance are required before moving from the team beta to market.
 

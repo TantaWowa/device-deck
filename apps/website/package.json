@@ -1,5 +1,7 @@
 {
   "name": "@device-deck/website",
   "private": true,
-  "type": "module"
+  "type": "module",
+  "license": "MIT",
+  "version": "0.9.0-beta.1"
 }

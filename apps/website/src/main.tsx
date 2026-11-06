@@ -95,15 +95,16 @@ Content-Type: application/json
             ["#workspace", "Workspace"],
             ["#capture", "Capture & evidence"],
             ["#cli", "CLI & agents"],
-            ["#status", "Development status"],
+            ["/install", "Install"],
+            ["https://github.com/TantaWowa/device-deck", "GitHub"],
           ].map(([href, label]) => (
             <a href={href} key={href} onClick={() => setMenu(false)}>
               {label}
             </a>
           ))}
         </nav>
-        <a className="button small primary header-demo" href={demo}>
-          Open browser demo <ArrowRight size={14} />
+        <a className="button small primary header-demo" href="/install">
+          Download for Mac <ArrowRight size={14} />
         </a>
         <button
           className="menu-button"
@@ -129,11 +130,11 @@ Content-Type: application/json
             open a remote, and keep your captures together on your Mac.
           </p>
           <div className="hero-actions">
-            <a className="button primary" href={demo}>
-              Explore demo <ArrowRight size={17} />
+            <a className="button primary" href="/install">
+              Download for Mac <ArrowRight size={17} />
             </a>
-            <a className="button" href="#workspace">
-              See the workspace
+            <a className="button" href="https://github.com/TantaWowa/device-deck">
+              Get the source
             </a>
           </div>
           <p className="preview-note">
@@ -499,7 +500,7 @@ Content-Type: application/json
               Ready for team testing.
             </h2>
             <p>
-              Get the Mac installer through your team’s release operator.
+              Download a free Mac installer from GitHub Releases. No Node installation, account, or license key is required for local use.
               These screenshots show the current app with fictional demo data.
               The earlier interactive prototype runs in your browser and never
               connects to your local devices.
@@ -535,8 +536,7 @@ Content-Type: application/json
           </div>
           <p className="status-footnote">
             Current scope is one Mac. Recording requires FFmpeg; simulator and
-            remote support depend on the platform tools and pairing. Public
-            checkout and signed public installers are still in preparation.
+            remote support depend on the platform tools and pairing. Device Deck is free and open source under the MIT license.
             Multi-host coordination is future work.
           </p>
         </section>
@@ -558,7 +558,7 @@ Content-Type: application/json
       </main>
       <footer className="wrap">
         <Brand />
-        <p>Device Deck is a TantaWowa Mac app, currently in team beta.</p>
+        <p>Device Deck is free and open source under the MIT license.</p>
         <span>Local by design · no account login · no cloud file storage</span>
       </footer>
     </>

@@ -155,7 +155,6 @@ export class ConfigStore {
   constructor(readonly file: string) {
     this.config = validateConfig({
       schemaVersion: 1,
-      monetization: { enabled: false },
       settings: { folder: "~/Movies/Device Deck" },
     });
   }

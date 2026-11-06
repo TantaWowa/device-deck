@@ -5,8 +5,7 @@ export type DashboardView =
   | "Captures"
   | "History"
   | "Reports"
-  | "Settings"
-  | "License";
+  | "Settings";
 
 export type DashboardNavigation = {
   view: DashboardView;
@@ -22,7 +21,6 @@ const dashboardSlugs: Record<DashboardView, string> = {
   History: "history",
   Reports: "reports",
   Settings: "settings",
-  License: "license",
 };
 
 const dashboardViews = new Map(

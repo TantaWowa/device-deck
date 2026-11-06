@@ -25,7 +25,7 @@ await cp("native/apple-tv.py", path.join(destination, "native/apple-tv.py"));
 await cp("docs", path.join(destination, "docs"), { recursive: true });
 await cp("examples", path.join(destination, "examples"), { recursive: true });
 await cp("README.md", path.join(destination, "README.md"));
-await cp("COPYRIGHT", path.join(destination, "COPYRIGHT"));
+await cp("LICENSE", path.join(destination, "LICENSE"));
 await writeFile(
   path.join(destination, "devdeck"),
   `#!/bin/sh\nset -eu\nDEVICE_DECK_APP_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)\nexec node "$DEVICE_DECK_APP_DIR/build/devdeck.mjs" "$@"\n`,

@@ -1,16 +1,6 @@
-import { mkdir, readFile, writeFile, rename, rm } from "node:fs/promises";
+import { mkdir, writeFile, rename, rm } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
-import { execFileSync } from "node:child_process";
-import {
-  download,
-  verifyManifest,
-  verifyArchive,
-  type Manifest,
-} from "./index";
-import { installerTrust, type InstallerTrust } from "./trust";
-import { releaseMode } from "../../licensing/src/trust";
-
 export function compareVersions(a: string, b: string) {
   const parse = (v: string) => {
     const match = /^(\d+)\.(\d+)\.(\d+)(?:-([a-z0-9.-]+))?$/.exec(v);
@@ -35,160 +25,41 @@ export function compareVersions(a: string, b: string) {
   }
   return 0;
 }
-export type MacRelease = { manifest: Manifest; envelope: unknown };
-export function currentMacOSVersion() {
-  if (process.platform !== "darwin")
-    throw new Error("Mac package updates require macOS.");
-  const version = execFileSync("/usr/bin/sw_vers", ["-productVersion"], {
-    encoding: "utf8",
-  }).trim();
-  if (!/^\d+\.\d+(?:\.\d+)?$/.test(version))
-    throw new Error("Unable to determine the macOS product version.");
-  return version;
-}
-export function supportsMacOS(minimum: string, current: string) {
-  if (
-    ![minimum, current].every((version) => /^\d+\.\d+(?:\.\d+)?$/.test(version))
-  )
-    throw new Error("Invalid macOS product version.");
-  const normalize = (version: string) =>
-    version.split(".").length === 2 ? `${version}.0` : version;
-  return compareVersions(normalize(current), normalize(minimum)) >= 0;
-}
-export async function checkMacUpdates({
-  key,
-  channel = releaseMode === "test" ? "beta" : "stable",
-  trust = installerTrust,
-  mode = releaseMode,
-  arch = process.arch,
-  osVersion = currentMacOSVersion(),
-  transport = fetch,
-}: {
-  key?: string;
-  channel?: "beta" | "stable";
-  trust?: InstallerTrust;
-  mode?: "live" | "test";
-  arch?: string;
-  osVersion?: string;
-  transport?: typeof fetch;
-} = {}): Promise<MacRelease | undefined> {
-  if (key !== undefined && (!key.trim() || /[\r\n]/.test(key)))
-    throw new Error("Invalid download license.");
+
+export type MacRelease = { manifest: { version: string; filename: string; url: string; sha256: string; bytes: number; signing: string } };
+const repository = "https://api.github.com/repos/TantaWowa/device-deck";
+export async function checkMacUpdates({ channel = "beta", arch = process.arch, transport = fetch }: { channel?: "beta" | "stable"; arch?: string; transport?: typeof fetch } = {}): Promise<MacRelease | undefined> {
+  const response = await transport(`${repository}/releases?per_page=100`, { headers: { Accept: "application/vnd.github+json" }, signal: AbortSignal.timeout(15000) });
+  if (!response.ok) throw new Error(`GitHub release lookup failed (${response.status}).`);
+  const releases = await response.json();
+  if (!Array.isArray(releases)) throw new Error("Invalid GitHub release collection.");
   const candidates: MacRelease[] = [];
-  let cursor = "";
-  for (let page = 1; page <= 20; page++) {
-    const query = new URLSearchParams({
-      product: trust.productId,
-      channel,
-      platform: "darwin",
-      arch: arch === "x64" ? "amd64" : arch,
-      filetype: "pkg",
-      status: "UPLOADED",
-      "page[size]": "100",
-      "page[cursor]": cursor,
-    });
-    const response = await transport(
-      `https://api.keygen.sh/v1/accounts/${encodeURIComponent(trust.accountId)}/artifacts?${query}`,
-      {
-        redirect: "error",
-        signal: AbortSignal.timeout(15000),
-        headers: {
-          Accept: "application/vnd.api+json",
-          ...(key ? { Authorization: `License ${key}` } : {}),
-        },
-      },
-    );
-    if (!response.ok)
-      throw new Error(
-        `Update lookup failed (${response.status}). ${mode === "test" ? "The team beta requires a Device Deck Test license." : "Try again later."}`,
-      );
-    const result = await response.json();
-    if (!Array.isArray(result.data) || result.errors)
-      throw new Error("Invalid release collection.");
-    for (const artifact of result.data) {
-      const envelope = artifact.attributes?.metadata?.deviceDeckManifest;
-      if (!envelope) continue;
-      let manifest: Manifest;
-      try {
-        manifest = verifyManifest(envelope, trust);
-      } catch {
-        continue;
-      }
-      if (
-        manifest.format !== "pkg" ||
-        manifest.mode !== mode ||
-        manifest.channel !== channel ||
-        manifest.arch !== arch ||
-        manifest.platform !== "darwin" ||
-        (mode === "live" && manifest.signing !== "developer-id-notarized")
-      )
-        continue;
-      if (!supportsMacOS(manifest.minimumOS!, osVersion)) continue;
-      if (
-        artifact.type !== "artifacts" ||
-        artifact.id !== manifest.artifactId ||
-        artifact.attributes.filename !== manifest.filename ||
-        artifact.attributes.filesize !== manifest.bytes ||
-        artifact.relationships?.release?.data?.id !== manifest.releaseId
-      )
-        continue;
-      candidates.push({ manifest, envelope });
-    }
-    if (
-      result.data.length === 0 ||
-      result.links?.next === null ||
-      (!result.links?.next && result.data.length < 100)
-    )
-      break;
-    const next = result.data.at(-1)?.id;
-    if (typeof next !== "string" || !next || next === cursor)
-      throw new Error("Update pagination did not advance.");
-    if (page === 20)
-      throw new Error("Update collection exceeds the supported page limit.");
-    cursor = next;
+  for (const release of releases) {
+    if (release.draft || (channel === "stable" && release.prerelease)) continue;
+    const version = String(release.tag_name).replace(/^v/, "");
+    if (!/^\d+\.\d+\.\d+(?:-[a-z0-9.-]+)?$/.test(version)) continue;
+    const filename = `device-deck-${version}-macos-${arch}.pkg`;
+    const asset = release.assets?.find((a: any) => a.name === filename);
+    if (!asset || !/^sha256:[a-f0-9]{64}$/.test(asset.digest || "")) continue;
+    const url = new URL(asset.browser_download_url);
+    if (url.origin !== "https://github.com" || !url.pathname.startsWith("/TantaWowa/device-deck/releases/download/")) continue;
+    if (!Number.isSafeInteger(asset.size) || asset.size <= 0 || asset.size > 2 * 1024 ** 3) continue;
+    candidates.push({ manifest: { version, filename, url: url.href, sha256: asset.digest.slice(7), bytes: asset.size, signing: "See release notes" } });
   }
-  return candidates.sort((a, b) =>
-    compareVersions(b.manifest.version, a.manifest.version),
-  )[0];
+  return candidates.sort((a,b) => compareVersions(b.manifest.version, a.manifest.version))[0];
 }
-export async function downloadMacUpdate(
-  release: MacRelease,
-  directory: string,
-  key?: string,
-  transport: typeof fetch = fetch,
-  trust = installerTrust,
-) {
-  const manifest = verifyManifest(release.envelope, trust);
-  if (
-    manifest.format !== "pkg" ||
-    manifest.arch !== process.arch ||
-    process.platform !== "darwin"
-  )
-    throw new Error("Installer does not match this Mac.");
-  if (!supportsMacOS(manifest.minimumOS!, currentMacOSVersion()))
-    throw new Error(
-      `This installer requires macOS ${manifest.minimumOS} or later.`,
-    );
-  await mkdir(directory, { recursive: true, mode: 0o700 });
-  const destination = path.join(directory, manifest.filename);
-  try {
-    verifyArchive(await readFile(destination), manifest);
-    return destination;
-  } catch (e) {
-    if (
-      (e as NodeJS.ErrnoException).code &&
-      (e as NodeJS.ErrnoException).code !== "ENOENT"
-    )
-      throw e;
-  }
-  const bytes = await download(manifest, key, transport);
-  const temporary = path.join(directory, `.${randomUUID()}.download`);
-  try {
-    await writeFile(temporary, bytes, { mode: 0o600, flag: "wx" });
-    await rename(temporary, destination);
-  } finally {
-    await rm(temporary, { force: true });
-  }
-  // Applying a package remains explicit. No daemon, session or data is changed.
-  return destination;
+export async function downloadMacUpdate(release: MacRelease, directory: string, transport = fetch) {
+  const m = release.manifest;
+  if (path.basename(m.filename) !== m.filename || !/^device-deck-.*\.pkg$/.test(m.filename)) throw new Error("Invalid installer filename.");
+  const url = new URL(m.url);
+  if (url.origin !== "https://github.com" || !url.pathname.startsWith("/TantaWowa/device-deck/releases/download/")) throw new Error("Invalid installer URL.");
+  const response = await transport(url, { signal: AbortSignal.timeout(300000) });
+  if (!response.ok) throw new Error(`Installer download failed (${response.status}).`);
+  const bytes = Buffer.from(await response.arrayBuffer());
+  if (bytes.length !== m.bytes || createHash("sha256").update(bytes).digest("hex") !== m.sha256) throw new Error("Installer checksum or size mismatch.");
+  await mkdir(directory, { recursive: true });
+  const target = path.join(directory, m.filename), temporary = `${target}.${randomUUID()}.tmp`;
+  try { await writeFile(temporary, bytes, { mode: 0o600, flag: "wx" }); await rename(temporary, target); }
+  finally { await rm(temporary, { force: true }); }
+  return target;
 }

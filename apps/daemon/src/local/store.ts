@@ -134,8 +134,8 @@ export class Store {
         );
       if (active.length >= maxSessions)
         fail(
-          "pro-required",
-          "Free supports one active device session. Release it or activate Pro for concurrent sessions.",
+          "session-limit",
+          "The configured session limit has been reached.",
           403,
         );
       const session: Session = {
@@ -194,8 +194,8 @@ export class Store {
       const active = this.sessions().filter((session) => session.state !== "closed");
       if (active.length + members.length > maxSessions)
         fail(
-          "pro-required",
-          `This reservation group needs ${members.length} concurrent device sessions, but the current license permits ${maxSessions}.`,
+          "session-limit",
+          `This reservation group needs ${members.length} concurrent device sessions, but the configured limit permits ${maxSessions}.`,
           403,
         );
       const requestedDevices = new Set<string>();

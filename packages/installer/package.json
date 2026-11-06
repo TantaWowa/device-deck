@@ -1,21 +1,10 @@
 {
   "name": "@tantawowa/device-deck",
-  "version": "0.8.0-beta.2",
+  "version": "0.9.0-beta.1",
   "private": true,
   "type": "module",
   "engines": {
     "node": ">=24"
   },
-  "publishConfig": {
-    "access": "restricted"
-  },
-  "bin": {
-    "devdeck": "dist/cli.mjs"
-  },
-  "files": [
-    "dist",
-    "README.md",
-    "COPYRIGHT",
-    "THIRD_PARTY_NOTICES.txt"
-  ]
+  "license": "MIT"
 }

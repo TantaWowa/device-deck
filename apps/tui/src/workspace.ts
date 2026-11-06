@@ -31,7 +31,6 @@ export const menus = [
   "History",
   "Reports",
   "Settings",
-  "License",
 ] as const;
 export type View = (typeof menus)[number];
 export type Row = {
@@ -474,21 +473,6 @@ export class Workspace {
             "Enter edits this setting.",
           ],
         }));
-      case "License":
-        return [
-          {
-            id: "status",
-            label: `${s.license.tier} license`,
-            meta: s.license.state,
-            detail: [
-              s.license.message,
-              `Sessions: ${s.license.maxSessions ?? "Unlimited"}`,
-              `Features: ${s.license.features.join(", ") || "Free features"}`,
-              "R refreshes license status.",
-              "W opens License in the web app for activation.",
-            ],
-          },
-        ];
     }
   }
   subtitle() {
@@ -564,11 +548,6 @@ export class Workspace {
         return [
           "Enter Edit   D Diagnostics   W Web settings",
           "Changes apply to the local daemon",
-        ];
-      case "License":
-        return [
-          "R Refresh license   W Open license settings",
-          "Enter License details",
         ];
     }
   }
@@ -1441,13 +1420,6 @@ export class Workspace {
         ...(this.snapshot.configError ? [this.snapshot.configError] : []),
         ...this.snapshot.diagnostics,
       ]);
-      return;
-    }
-    if (this.view === "License" && name === "r") {
-      this.run("Refreshing license", async () => {
-        await this.io.call("license.refresh");
-        this.notice("License refreshed.");
-      });
       return;
     }
     const actions = this.actions();
