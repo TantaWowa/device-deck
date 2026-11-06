@@ -13,11 +13,10 @@ test("every application package includes the public reservation client", () => {
   assert.ok(applicationBuildPayload.includes("build-metadata.json"));
 });
 
-test("public packages cannot silently fall back to unsigned or test licensing", () => {
+test("public packages cannot silently fall back to unsigned signing", () => {
   const complete = { release: true, mode: "live", applicationIdentity: "Developer ID Application: Team (123)", installerIdentity: "Developer ID Installer: Team (123)", notaryProfile: "device-deck" };
   assert.doesNotThrow(() => requireReleaseSettings(complete));
   for (const field of ["applicationIdentity", "installerIdentity", "notaryProfile"]) assert.throws(() => requireReleaseSettings({ ...complete, [field]: undefined }));
-  assert.throws(() => requireReleaseSettings({ ...complete, mode: "test" }), /live/);
   assert.doesNotThrow(() => requireReleaseSettings({ release: false, mode: "test" }));
 });
 

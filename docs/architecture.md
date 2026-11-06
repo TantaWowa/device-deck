@@ -75,8 +75,6 @@ The `/app/` PWA uses Firebase Auth and the Cloud Run registry in `apps/cloud`. F
 
 ## Licensing
 
-`packages/licensing` verifies online Keygen responses and signed, time-bound proof against compiled account/product/policy trust. The daemon enforces Free admission inside the reservation transaction and checks paid recording/renewal operations. Entitlement loss preserves already-running work through its original bounded lease. Clients never select a tier. The separate Lemon Squeezy bridge updates registered Keygen licenses and is excluded from customer bundles. See [licensing and billing](licensing-and-billing.md) for trust, expiry and deployment limits.
-
 ## Distribution
 
 The local build bundles the Node entry points and browser assets, plus the Mac helper for the build architecture. The package runs without source checkouts or npm at runtime, using Node 24 and the configured external platform tools. A per-user launchd job runs the daemon at login. The independent website build produces marketing, demo and portal assets for Firebase Hosting. The cloud registry is built and deployed separately; local daemon bundles contain no cloud credentials.

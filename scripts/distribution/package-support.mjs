@@ -25,7 +25,6 @@ export function numericVersion(version) {
 
 export function requireReleaseSettings({ release, mode, applicationIdentity, installerIdentity, notaryProfile }) {
   if (!release) return;
-  if (mode !== "live") throw new Error("Public releases require live licensing trust.");
   if (!applicationIdentity?.startsWith("Developer ID Application:")) throw new Error("Public releases require DEVICE_DECK_APPLICATION_IDENTITY (Developer ID Application).");
   if (!installerIdentity?.startsWith("Developer ID Installer:")) throw new Error("Public releases require DEVICE_DECK_INSTALLER_IDENTITY (Developer ID Installer).");
   if (!notaryProfile) throw new Error("Public releases require DEVICE_DECK_NOTARY_PROFILE, saved with xcrun notarytool store-credentials.");

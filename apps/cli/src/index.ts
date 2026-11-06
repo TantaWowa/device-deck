@@ -54,7 +54,7 @@ Usage: devdeck <command> [options]
   service <action>             Explicit start/stop/status/logs/install/uninstall
   version | doctor             Inspect installed version and capture readiness
   update check|download        Find/download a verified Mac installer
-       [--channel beta|stable] [--key-file FILE] [--output DIRECTORY]
+       [--channel beta|stable] [--output DIRECTORY]
   ui | tui | mcp               Open the dashboard, terminal UI or MCP server
   ui [--address URL|--tailscale] [--json]  Open the dashboard or print its login URL
   network enable|status|disable Configure ordinary IP/port access
@@ -75,8 +75,6 @@ Usage: devdeck <command> [options]
                                Remove registered devices discovery no longer finds
   sources | sessions | captures | history
   reports [--range day|week|month|custom] [--start YYYY-MM-DD --end YYYY-MM-DD]
-  license status|refresh|deactivate
-  license activate <key-file>  Read a license key from a private file
   config [get|import|export|validate] [file]
   reserve [filters] --owner NAME --reason TEXT
   reserve MANIFEST.json --result-file FILE --json [--wait SECONDS]
@@ -208,18 +206,12 @@ try {
     } else if (command === "update") {
       const action = p[1] || "check";
       if (!["check", "download"].includes(action) || (v.channel && !["beta", "stable"].includes(String(v.channel)))) throw new DeckError("arguments", "Use update check|download with --channel beta|stable.", 400);
-      let key: string | undefined;
-      if (v["key-file"]) key = (await readFile(String(v["key-file"]), "utf8")).trim();
-      else {
-        try { key = JSON.parse(await readFile(path.join(dataDirectory(), "license.json"), "utf8")).key; }
-        catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw new Error("Saved license cannot be read. Use --key-file with a private license file."); }
-      }
-      const release = await checkMacUpdates({ key, ...(v.channel ? { channel: String(v.channel) as "beta" | "stable" } : {}) });
-      if (!release) result = { currentVersion: version, available: false, message: "No verified package is available for this release channel and Mac." };
+      const release = await checkMacUpdates({ ...(v.channel ? { channel: String(v.channel) as "beta" | "stable" } : {}) });
+      if (!release) result = { currentVersion: version, available: false, message: "No matching GitHub installer is available yet. Build from source or visit https://github.com/TantaWowa/device-deck/releases." };
       else if (action === "check") result = { currentVersion: version, available: compareVersions(release.manifest.version, version) > 0, release: release.manifest };
       else {
         if (compareVersions(release.manifest.version, version) < 0) throw new Error("The available package is older than this version. Automatic downgrade is not supported.");
-        const file = await downloadMacUpdate(release, path.resolve(String(v.output || path.join(dataDirectory(), "updates"))), key);
+        const file = await downloadMacUpdate(release, path.resolve(String(v.output || path.join(dataDirectory(), "updates"))));
         result = { file, version: release.manifest.version, signing: release.manifest.signing, next: "Finish reservations and recordings, quit Device Deck, then open this installer. Homebrew users should upgrade through Homebrew." };
       }
     } else if (command === "status") result = await callService("health");
@@ -417,17 +409,7 @@ try {
         } else throw new Error("Unknown config command.");
       }
     } else if (command === "license") {
-      const action = p[1] || "status";
-      if (action === "activate") {
-        if (!p[2])
-          throw new Error("Supply a private file containing your license key.");
-        result = await callOperation("license.activate", {
-          key: (await readFile(p[2], "utf8")).trim(),
-        });
-      } else if (["status", "refresh", "deactivate"].includes(action)) {
-        result = await callOperation(`license.${action}` as Operation);
-      } else
-        throw new Error("Use license status, activate, refresh or deactivate.");
+      result = await callOperation("license.status", {});
     } else if (command === "reports") {
       let request;
       try {

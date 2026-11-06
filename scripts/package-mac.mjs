@@ -12,7 +12,7 @@ import {
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 process.chdir(root);
 const { values } = parseArgs({ options: {
-  mode: { type: "string" },
+
   arch: { type: "string", default: process.arch },
   release: { type: "boolean", default: false },
   "skip-build": { type: "boolean", default: false },
@@ -22,10 +22,10 @@ const { values } = parseArgs({ options: {
 } });
 if (values.help) {
   console.log(`Build a Device Deck macOS installer (macOS 14+).
-  node scripts/package-mac.mjs [--mode live|test] [--arch arm64|x64]
+  node scripts/package-mac.mjs [--arch arm64|x64]
        [--media-bundle DIR] [--skip-build] [--output DIR] [--release]
 
-Default: test licensing, ad-hoc-signed app, unsigned team installer, external FFmpeg.
+Default: free app, ad-hoc signature, unsigned installer, external FFmpeg.
 --release requires Developer ID identities and notarization credentials:
   DEVICE_DECK_APPLICATION_IDENTITY='Developer ID Application: ... (TEAMID)'
   DEVICE_DECK_INSTALLER_IDENTITY='Developer ID Installer: ... (TEAMID)'
@@ -34,9 +34,8 @@ No account tokens or private signing keys are written into the application.
 `);
   process.exit(0);
 }
-const mode = values.mode || (values.release ? "live" : "test"), arch = values.arch, release = values.release;
+const mode = "free", arch = values.arch, release = values.release;
 if (process.platform !== "darwin") throw new Error("Build the Mac package on macOS.");
-if (!["live", "test"].includes(mode)) throw new Error("Use --mode live or --mode test.");
 if (!["arm64", "x64"].includes(arch) || arch !== process.arch) throw new Error("Build and validate each package on a Mac of the target architecture.");
 const applicationIdentity = process.env.DEVICE_DECK_APPLICATION_IDENTITY;
 const installerIdentity = process.env.DEVICE_DECK_INSTALLER_IDENTITY;
@@ -48,16 +47,16 @@ if (release) {
   for (const identity of [applicationIdentity, installerIdentity]) if (!identities.includes(`"${identity}"`))
     throw new Error(`Signing identity is not available with a valid private key: ${identity}`);
 }
-if (!values["skip-build"]) exec(process.execPath, ["scripts/build-local.mjs", "--mode", mode]);
+if (!values["skip-build"]) exec(process.execPath, ["scripts/build-local.mjs"]);
 const pkg = JSON.parse(await readFile("package.json", "utf8"));
 const packageVersion = numericVersion(pkg.version);
 const build = JSON.parse(await readFile("build/build-metadata.json", "utf8"));
 if (build.version !== pkg.version || build.mode !== mode || build.arch !== arch)
-  throw new Error("Build metadata does not match package version, licensing mode and architecture. Rebuild before packaging.");
+  throw new Error("Build metadata does not match package version, build mode and architecture. Rebuild before packaging.");
 const runtime = JSON.parse(await readFile("scripts/distribution/node-runtime.json", "utf8"));
 const out = path.resolve(values.output);
-const name = `device-deck-${pkg.version}-macos-${arch}-${mode}${release ? "" : "-team"}`;
-const staging = path.join(out, "staging", `${arch}-${mode}`);
+const name = `device-deck-${pkg.version}-macos-${arch}`;
+const staging = path.join(out, "staging", `${arch}`);
 const payload = path.join(staging, "payload");
 const app = path.join(payload, "Applications", "Device Deck.app");
 const contents = path.join(app, "Contents"), resources = path.join(contents, "Resources");
@@ -96,7 +95,7 @@ for (const item of applicationBuildPayload)
   await cp(path.join(root, "build", item), path.join(resources, "build", item), { recursive: true });
 await mkdir(path.join(resources, "native"));
 await cp("native/apple-tv.py", path.join(resources, "native/apple-tv.py"));
-await cp("COPYRIGHT", path.join(resources, "COPYRIGHT"));
+await cp("LICENSE", path.join(resources, "LICENSE"));
 await writeFile(path.join(contents, "Info.plist"), appInfo(pkg.version));
 await writeFile(path.join(contents, "PkgInfo"), "APPL????");
 await writeFile(path.join(resources, "Capture Setup.html"), captureSetup(values["media-bundle"] ? "bundled" : "external"));
@@ -145,7 +144,7 @@ const distribution = {
   schemaVersion: 1, application: bundleId, version: pkg.version, arch, mode,
   minimumOS, runtime: { name: "node", version: runtime.version, sha256: runtime.darwin[arch] },
   media: values["media-bundle"] ? "bundled" : "external",
-  channel: release ? "stable" : "team", signing: release ? "developer-id-notarized" : "ad-hoc",
+  channel: pkg.version.includes("-") ? "beta" : "stable", signing: release ? "developer-id-notarized" : "ad-hoc",
   build,
 };
 await writeFile(path.join(resources, "distribution.json"), JSON.stringify(distribution, null, 2) + "\n");
@@ -182,4 +181,4 @@ const bytes = await readFile(installer);
 const checksum = digest(bytes);
 await writeFile(`${installer}.sha256`, `${checksum}  ${path.basename(installer)}\n`);
 await writeFile(path.join(out, `${name}.json`), JSON.stringify({ ...distribution, file: path.basename(installer), bytes: bytes.length, sha256: checksum }, null, 2) + "\n");
-console.log(`\n${release ? "Signed and notarized release" : "TEAM TEST PACKAGE — unsigned installer, ad-hoc app"}: ${installer}\nSHA-256 ${checksum}\nStaged app: ${app}`);
+console.log(`\n${release ? "Signed and notarized release" : "FREE PACKAGE — unsigned installer, ad-hoc app"}: ${installer}\nSHA-256 ${checksum}\nStaged app: ${app}`);

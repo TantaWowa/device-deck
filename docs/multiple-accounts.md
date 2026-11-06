@@ -16,7 +16,6 @@ For example, the development instance can use port 47831 and CI port 47832:
 {
   "schemaVersion": 1,
   "port": 47832,
-  "monetization": { "enabled": false },
   "settings": { "folder": "./captures", "owner": "ci-runner" }
 }
 ```
@@ -43,12 +42,5 @@ Physical devices and USB cards remain shared hardware. Configure a dedicated
 device/card only in its assigned instance; separate daemon reservations do not
 coordinate access to the same physical hardware.
 
-## Monetization
-
-Monetization is disabled by default, including existing configuration files that
-omit the field. The daemon logs and license screen say **Monetization disabled**;
-all features and unlimited concurrent sessions are available. Set
-`monetization.enabled` to `true` and restart the daemon to enable the existing
-Keygen licensing path. Port and monetization changes take effect at restart.
-This setting controls runtime entitlements; release-package distribution trust
-and signatures remain enforced.
+## Free access
+All features are free. The legacy monetization configuration is accepted for compatibility but has no effect.

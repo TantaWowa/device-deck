@@ -8,7 +8,7 @@ import { Adapters } from "../../../packages/adapters/src";
 import { validateConfig } from "../../../packages/config/src";
 
 for (const enabled of [undefined, false, true]) {
-  test(`config monetization.enabled=${enabled} selects the startup entitlement`, async () => {
+  test(`config monetization.enabled=${enabled} cannot restrict free access`, async () => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "deck-monetization-"));
     const config = validateConfig({ schemaVersion: 1, settings: { folder: directory },
       ...(enabled === undefined ? {} : { monetization: { enabled } }) });
@@ -21,9 +21,9 @@ for (const enabled of [undefined, false, true]) {
     try {
       await deck.init();
       const status = deck.licensing.status();
-      assert.equal(status.tier, enabled ? "free" : "enterprise");
-      assert.equal(status.maxSessions, enabled ? 1 : null);
-      if (!enabled) assert.match(status.message, /^Monetization disabled\./);
+      assert.equal(status.tier, "free");
+      assert.equal(status.maxSessions, null);
+      assert.match(status.message, /free and open source/);
     } finally {
       await deck.close();
       await rm(directory, { recursive: true, force: true });

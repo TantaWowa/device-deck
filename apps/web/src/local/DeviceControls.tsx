@@ -654,14 +654,7 @@ export function DeviceControls({
                 disabled={busy}
               >
                 <option value="clean">Clean source</option>
-                <option
-                  value="annotated"
-                  disabled={
-                    !data.license.features.includes(
-                      "DEVICE_DECK_RECORDING_ANNOTATIONS",
-                    )
-                  }
-                >
+                <option value="annotated">
                   With keypress overlays
                 </option>
               </select>

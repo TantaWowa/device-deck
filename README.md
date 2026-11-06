@@ -1,6 +1,6 @@
 # Device Deck
 
-Version 0.5.0-beta.1 adds simulator launch/close controls, a Mac application and team installer, real Device Deck Keygen activation, verified update downloads, and automated purchase-to-license issuance. Start with [team deployment](docs/team-rollout.md), [Mac packaging](docs/macos-distribution.md), and [licensing and billing](docs/licensing-and-billing.md).
+Device Deck is free and open source under the [MIT license](LICENSE). All features, concurrent sessions, and recording annotations are available without activation, subscriptions, or payment. Build from source below, or download a Mac installer from [GitHub Releases](https://github.com/TantaWowa/device-deck/releases).
 
 A local Mac workspace for connected TV devices and simulators. The daemon owns reservations, remote input, capture processes and files. The web app, CLI, terminal UI and MCP use the same authenticated operations.
 
@@ -10,7 +10,9 @@ The public website includes a separate simulated demo. It never connects to the 
 
 ## Install the Mac application
 
-Use the team `.pkg` from the release operator, then open `/Applications/Device Deck.app`. It includes Node and the native helper. Run `devdeck version`, `devdeck doctor`, `devdeck ui`, or `devdeck tui`; `devdeck service install` enables launch at login. Recording, USB live video, simulator video and USB screenshots currently need `brew install ffmpeg`. Team builds use TEST licenses and an unsigned installer; signed/notarized public builds use LIVE licenses. See [installation and update details](docs/macos-distribution.md).
+Follow the [Mac install guide](docs/install.md) for downloads, first launch, platform tools, and updates.
+
+Download a `.pkg` from GitHub Releases, then open `/Applications/Device Deck.app`. It includes Node and the native helper. Run `devdeck version`, `devdeck doctor`, `devdeck ui`, or `devdeck tui`; `devdeck service install` enables launch at login. Recording, USB live video, simulator video and USB screenshots currently need `brew install ffmpeg`. Unsigned builds use an ad-hoc app signature; release notes identify signed and notarized builds. See [installation and update details](docs/macos-distribution.md).
 
 ## Build from source
 
@@ -211,21 +213,21 @@ The source adaptation map is in [source provenance](docs/source-provenance.md). 
 
 ## Develop and validate
 
-For hardware development with an explicitly labelled local Pro mock:
+For local hardware development:
 
 ```sh
 npm ci
 npm run build:local
 npm run install:dev-cli   # Install devdeck in ~/.local/bin
 ./devdeck start
-./devdeck license status --json
+./devdeck status --json
 ./devdeck view --mux
 ./devdeck stop
 ```
 
-The repository-root `./devdeck` wrapper uses the ignored `work/local-deck/` profile and starts `scripts/service-local.ts` with real adapters and an explicitly labelled, active Pro mock. `npm run service:local` runs that same daemon in the foreground. Each development start resets the mock to active; it makes no Keygen or Lemon Squeezy calls. After `npm run install:dev-cli`, use `devdeck` from any directory with `~/.local/bin` on your PATH. `./devdeck` also works from the checkout. `DEVICE_DECK_HOME` can select another development profile.
+The repository-root `./devdeck` wrapper uses the ignored `work/local-deck/` profile and starts `scripts/service-local.ts` with real adapters and all features enabled. `npm run service:local` runs that same daemon in the foreground. No license or payment account is required. After `npm run install:dev-cli`, use `devdeck` from any directory with `~/.local/bin` on your PATH. `./devdeck` also works from the checkout. `DEVICE_DECK_HOME` can select another development profile.
 
-The normal `node build/devdeck.mjs` launcher and packaged releases continue using the real license manager and the standard user profile. The development mock is not part of their bundles. The repository wrapper is for local start/stop, not login-service installation. macOS Camera permission must be enabled for the application that launches the capture helper; when launched from Codex, macOS may list that application as “ChatGPT.” Hardware IDs for cards without serial numbers can change when moved to another USB port; rediscover and confirm the picture before rebinding.
+The normal `node build/devdeck.mjs` launcher and packaged releases use the standard user profile with the same unrestricted features. The repository wrapper is for local start/stop, not login-service installation. macOS Camera permission must be enabled for the application that launches the capture helper; when launched from Codex, macOS may list that application as “ChatGPT.” Hardware IDs for cards without serial numbers can change when moved to another USB port; rediscover and confirm the picture before rebinding.
 
 ```sh
 npm run check
@@ -239,6 +241,6 @@ npm run dev             # Marketing site on 5173
 npm run dev:app         # Public demo on 5174
 ```
 
-The Firebase website and portal use the existing `tantawowa-device-deck` project. Only `dist/` is hosted; the authenticated registry API runs separately on Cloud Run. Never deploy the local `build/`, runtime directory, capture files or private endpoint credentials to Firebase. The separate [billing service](apps/billing/README.md) has its own deployment and secrets.
+The Firebase website and portal use the existing `tantawowa-device-deck` project. Only `dist/` is hosted; the authenticated registry API runs separately on Cloud Run. Never deploy the local `build/`, runtime directory, capture files or private endpoint credentials to Firebase.
 
-Copyright 2026 TantaWowa. All rights reserved. Dependency licenses are included in the release's `THIRD_PARTY_NOTICES.txt`.
+Copyright 2026 TantaWowa. Licensed under MIT. Dependency licenses are included in the release's `THIRD_PARTY_NOTICES.txt`.

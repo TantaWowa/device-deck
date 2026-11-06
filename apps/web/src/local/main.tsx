@@ -43,7 +43,6 @@ import { CapturePreview } from "./CapturePreview";
 import { FeedViewer } from "./FeedViewer";
 import { FeedPreview } from "./FeedPreview";
 import { Reports } from "../components/Reports";
-import { License, LicenseReminder } from "../components/License";
 import { CaptureCards, type CardView } from "../components/CaptureCards";
 import {
   assignCaptureCard,
@@ -558,7 +557,6 @@ function App() {
     { name: "History", icon: <History size={18} /> },
     { name: "Reports", icon: <BarChart3 size={18} /> },
     { name: "Settings", icon: <Settings size={18} /> },
-    { name: "License", icon: <Lock size={18} /> },
   ];
   return (
     <div className="live-app">
@@ -599,12 +597,6 @@ function App() {
           </span>
         </div>
         <AccountConnection />
-        {data.license && tab !== "License" && (
-          <LicenseReminder
-            status={data.license}
-            open={() => showView("License")}
-          />
-        )}
         {connectionError && (
           <div className="live-alert" role="alert">
             {connectionError}
@@ -1198,18 +1190,6 @@ function App() {
                 ),
               );
               await refreshCards();
-            }}
-          />
-        )}
-        {tab === "License" && (
-          <License
-            status={data.license}
-            act={async (action, key) => {
-              await api(
-                `license.${action}`,
-                action === "activate" ? { key } : {},
-              );
-              await refresh();
             }}
           />
         )}

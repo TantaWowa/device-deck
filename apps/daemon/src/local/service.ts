@@ -53,10 +53,9 @@ import { phoneHardwareButtons } from "../../../../packages/core/src/remote";
 import type { StreamOpen } from "../../../../packages/core/src/live";
 import {
   LicenseManager,
-  FEATURES,
   type EntitlementService,
 } from "../../../../packages/licensing/src";
-import { UnlockedEnterpriseLicense } from "../../../../packages/licensing/src/enterprise";
+
 type Job = {
   artifact: Artifact;
   handle: RecordingHandle;
@@ -151,8 +150,6 @@ export class DeckService {
   async init() {
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
     await this.config.load();
-    if (!this.licensingOverride && !this.config.config.monetization?.enabled)
-      this.entitlement = new UnlockedEnterpriseLicense();
     await this.licensing.init();
     this.store = new Store(path.join(this.directory, "state.sqlite"));
     await this.recover();
@@ -744,7 +741,7 @@ export class DeckService {
               args.owner,
               args.reason,
               args.ttlMinutes || this.config.config.settings.ttl,
-              this.licensing.status().maxSessions ?? Infinity,
+              Infinity,
             );
           } catch (e) {
             this.store.event({
@@ -979,7 +976,7 @@ export class DeckService {
               requestHash,
               args.ttlMinutes || this.config.config.settings.ttl,
               args.leaseToken,
-              this.licensing.status().maxSessions ?? Infinity,
+              Infinity,
             );
           } catch (error) {
             this.store.event({
@@ -1111,7 +1108,7 @@ export class DeckService {
             args.groupId,
             args.leaseToken,
             expiresAt,
-            (session) => this.checkSessionEntitlement(session),
+            () => {},
           ),
         );
         return { groupId: group.id, expiresAt: group.expiresAt };
@@ -1125,16 +1122,6 @@ export class DeckService {
         const s = this.store.validate(args.sessionId, args.leaseToken);
         if (s.groupId)
           fail("group-owned", "Renew this session through its reservation group.", 409);
-        this.checkSessionEntitlement(s);
-        if (
-          this.jobs.get(s.id)?.artifact.mode === "annotated" &&
-          !this.licensing.status().features.includes(FEATURES.annotations)
-        )
-          fail(
-            "pro-required",
-            "Pro access ended. This recording can finish within its existing lease; stop remains available.",
-            403,
-          );
         s.expiresAt =
           Date.now() +
           (args.ttlMinutes || this.config.config.settings.ttl) * 60000;
@@ -1689,7 +1676,6 @@ export class DeckService {
         if (!device || !args.sessionId || !args.leaseToken) fail("lease-required", "Start a control session first.", 403);
         const session = this.store.validate(args.sessionId, args.leaseToken);
         if (session.deviceId !== device.id) fail("lease-mismatch", "This reservation belongs to another device.", 403);
-        this.checkSessionEntitlement(session);
       }
     };
     validate();
@@ -1917,15 +1903,6 @@ export class DeckService {
     mode: Artifact["mode"] | undefined,
     origin: Artifact["origin"],
   ) {
-    if (
-      (mode || this.config.config.settings.captureMode) === "annotated" &&
-      !this.licensing.status().features.includes(FEATURES.annotations)
-    )
-      fail(
-        "pro-required",
-        "Recording annotations require an active Pro or trial license. Clean recording remains available.",
-        403,
-      );
     if (this.jobs.has(s.id))
       fail("already-recording", "This session already has a recording.", 409);
     const a = this.artifact(
@@ -2257,24 +2234,6 @@ export class DeckService {
         )
         .map((session) => this.closeSession(session.id, "Reservation expired")),
     ]);
-  }
-  private permittedSessionIds() {
-    const limit = this.licensing.status().maxSessions;
-    const active = this.store
-      .sessions()
-      .filter((s) => s.state !== "closed")
-      .sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
-    return new Set(
-      (limit === null ? active : active.slice(0, limit)).map((s) => s.id),
-    );
-  }
-  private checkSessionEntitlement(session: Session) {
-    if (!this.permittedSessionIds().has(session.id))
-      fail(
-        "pro-required",
-        "Pro access ended. This extra session can finish within its existing lease but cannot be renewed.",
-        403,
-      );
   }
   private async cleanWorker(worker: any) {
     if (

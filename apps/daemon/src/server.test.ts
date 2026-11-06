@@ -169,7 +169,6 @@ async function setup(
     deck,
     adapters,
     capture,
-    licenseProvider: licensed?.provider,
     cleanup: async () => {
       capture.resolveStop?.();
       await deck.close();
@@ -2087,118 +2086,21 @@ test("recorder recovery stores the capture engine's verified AVD target instead 
   }
 });
 
-test("the explicit local development mock starts active and can reset without provider calls", async () => {
-  const mock = new LocalDevelopmentLicense();
-  await mock.init();
-  assert.equal(mock.status().tier, "pro");
-  assert.equal(mock.status().maxSessions, null);
-  assert.match(mock.status().message, /activation mock/);
-  assert.equal((await mock.deactivate()).tier, "free");
-  assert.equal((await mock.refresh()).maxSessions, 1);
-  assert.equal((await mock.activate("local")).tier, "pro");
-  assert.equal(new LocalDevelopmentLicense().status().state, "active");
-  mock.close();
-});
-test("Free admits at most one session when different-device requests race, preserving collisions and clean capture", async () => {
+test("free access allows concurrent devices and annotated recording without activation", async () => {
   const { deck, capture, cleanup } = await setup(true);
   try {
-    const results = await Promise.allSettled([
-      reserve(deck, "one"),
-      reserve(deck, "two"),
-    ]);
-    assert.equal(results.filter((r) => r.status === "fulfilled").length, 1);
-    assert.match(
-      String(
-        (results.find((r) => r.status === "rejected") as PromiseRejectedResult)
-          .reason,
-      ),
-      /Free supports one/,
-    );
-    const winner = (
-      results.find((r) => r.status === "fulfilled") as PromiseFulfilledResult<
-        Awaited<ReturnType<typeof reserve>>
-      >
-    ).value;
-    const lease = {
-      sessionId: winner.session.id,
-      leaseToken: winner.leaseToken,
-    };
-    await assert.rejects(
-      deck.execute("recordings.start", { ...lease, mode: "annotated" }),
-      /require an active Pro/,
-    );
-    const config = structuredClone(deck.config.config);
-    (config as any).license = { tier: "pro" };
-    await assert.rejects(
-      deck.execute("config.save", { config, revision: deck.config.revision }),
-    );
-    await deck.execute("recordings.start", { ...lease, mode: "clean" });
+    const sessions = await Promise.all([reserve(deck, "one"), reserve(deck, "two")]);
+    assert.equal(sessions.length, 2);
+    await assert.rejects(reserve(deck, "one"));
+    const lease = { sessionId: sessions[0].session.id, leaseToken: sessions[0].leaseToken };
+    await deck.execute("license.deactivate", {});
+    await deck.execute("sessions.renew", lease);
+    await deck.execute("recordings.start", { ...lease, mode: "annotated" });
     assert.equal(capture.starts, 1);
     capture.resolveStop = () => {};
     await deck.execute("recordings.stop", lease);
-    await deck.execute("sessions.release", lease);
-    assert.equal(
-      deck.store.sessions().filter((s) => s.state !== "closed").length,
-      0,
-    );
-  } finally {
-    await cleanup();
-  }
-});
-test("loss of Pro preserves running work until its existing lease while denying paid admission and renewal", async () => {
-  const { deck, capture, adapters, licenseProvider, cleanup } = await setup();
-  try {
-    const first = await reserve(deck, "one"),
-      second = await reserve(deck, "two");
-    const one = { sessionId: first.session.id, leaseToken: first.leaseToken },
-      two = { sessionId: second.session.id, leaseToken: second.leaseToken };
-    const original = deck.store
-      .sessions()
-      .map((s) => ({ id: s.id, expiresAt: s.expiresAt }));
-    capture.annotate = async (_source, target) => {
-      const { writeFile } = await import("node:fs/promises");
-      await writeFile(target, "unit-test recording");
-    };
-    await deck.execute("recordings.start", { ...one, mode: "annotated" });
-    licenseProvider!.mode = "invalid";
-    await deck.execute("license.refresh", {});
-    await deck.expire();
-    assert.equal(
-      capture.stops,
-      0,
-      "License events must not stop a running recording",
-    );
-    assert.equal(
-      deck.store.sessions().filter((s) => s.state === "active").length,
-      2,
-    );
-    assert.deepEqual(
-      deck.store.sessions().map((s) => ({ id: s.id, expiresAt: s.expiresAt })),
-      original,
-    );
-    await deck.execute("remote.input", { ...one, key: "Home" });
-    await deck.execute("remote.input", { ...two, key: "Home" });
-    assert.deepEqual(adapters.inputs, ["one", "two"]);
-    await assert.rejects(
-      deck.execute("sessions.renew", one),
-      /Pro access ended/,
-    );
-    await assert.rejects(
-      deck.execute("recordings.start", { ...two, mode: "annotated" }),
-      /require an active Pro/,
-    );
-    capture.resolveStop = () => {};
-    const stopped = (await deck.execute("recordings.stop", one)) as any;
-    assert.equal(stopped.status, "completed");
-    await deck.execute("sessions.release", one);
-    await deck.execute("sessions.release", two);
-    assert.equal(
-      ((await deck.execute("inventory", {})) as any).artifacts.length,
-      1,
-    );
-  } finally {
-    await cleanup();
-  }
+    for (const session of sessions) await deck.execute("sessions.release", { sessionId: session.session.id, leaseToken: session.leaseToken });
+  } finally { await cleanup(); }
 });
 test("exclusive leases across independent SQLite connections reject stale credentials", async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "deck-sqlite-"));

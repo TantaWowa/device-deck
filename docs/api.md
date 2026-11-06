@@ -10,8 +10,6 @@ Apple iOS/tvOS simulators and Android AVDs can be launched and closed directly i
 
 The **Wake** button in Devices and the remote attempts to wake a device without reserving it. It sends Android's wake key, Roku TV power-on or a Roku player's Home button, Apple TV power-on, or Home to an already running Apple simulator. Wake can be attempted while a device is reported offline; an unreachable device can still fail, and successful dispatch does not prove the screen is awake. Shut-down simulators must be launched first. Physical iOS devices and capture-only connections do not expose Wake.
 
-The `license.status`, `license.activate`, `license.refresh` and `license.deactivate` operations share the same daemon-owned entitlement state. Free allows one new active session and clean recording; concurrent sessions and recording annotations require a verified license. Existing work keeps its bounded lease when paid access ends. See [licensing commands and policy](licensing-and-billing.md).
-
 ## CLI walkthrough
 
 Use `./devdeck` in an unpacked release. From source, use `node build/devdeck.mjs` after `npm run build:local`.
@@ -291,3 +289,5 @@ Omit the environment override to use the default Application Support directory. 
 MCP uses the same validation and ownership boundary as HTTP, CLI, TUI and web. Disconnecting it does not end a valid session or recording.
 
 Capture-only devices use `platform: "Other"`, `connection: {"type":"capture"}`, and a required USB `captureSourceId`. They use the normal session and capture operations but expose no remote input capabilities. Browser authentication cookies are scoped by name to the listening port, allowing multiple local profiles to remain open together.
+
+Legacy `license.*` operations remain compatible with older clients and always report free, unrestricted access. They do not activate, contact a provider, or modify access.

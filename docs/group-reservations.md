@@ -142,7 +142,7 @@ Each runner host needs:
 1. Device Deck installed and its daemon running as the same account that owns the registered simulators and SDKs.
 2. Every eligible target registered with stable identity and explicit pool tags.
 3. Physical devices kept online; virtual runtimes/AVDs installed and launchable.
-4. A license whose concurrent-session limit covers the largest requested group.
+4. Enough available devices to satisfy the requested group. Concurrent sessions have no license limit.
 5. A unique group ID including repository, run ID, attempt, and job identity.
 6. An ephemeral manifest produced by that project's own test decision tree, one pre-test reserve, use of the returned concrete connections, and unconditional release.
 

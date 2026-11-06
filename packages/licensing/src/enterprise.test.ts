@@ -7,11 +7,11 @@ test("unlocked enterprise entitlement grants every feature with no session cap a
   const license = new UnlockedEnterpriseLicense();
   await license.init();
   const status = license.status();
-  assert.equal(status.tier, "enterprise");
+  assert.equal(status.tier, "free");
   assert.equal(status.state, "active");
   assert.equal(status.maxSessions, null);
-  assert.match(status.message, /^Monetization disabled\./);
+  assert.match(status.message, /free and open source/);
   assert.deepEqual([...status.features].sort(), Object.values(FEATURES).sort());
   assert.equal((await license.deactivate()).maxSessions, null);
-  assert.equal((await license.activate("ignored")).tier, "enterprise");
+  assert.equal((await license.activate("ignored")).tier, "free");
 });

@@ -13,14 +13,6 @@ const descriptions: Partial<Record<Operation, string>> = {
   "logs.read": "Read bounded device logs using the current lease. Apple/Android support up to ten minutes of history; Roku supports a short live developer-console capture. Results include provenance and truncation; no shared log buffer is cleared.",
   "apps.state": "Read app state through the leased device's native adapter. Omit appId to inspect the available foreground/app listing. Unknown properties remain unknown.",
   "apps.launch": "Launch or foreground an installed app on the leased device. Uses native device transport, independently of the locked desktop. Physical iOS requires a signed WDA helper and no existing touch controller.",
-  "license.status":
-    "Read the daemon's verified Free, trial or Pro entitlement state. Never returns the license key.",
-  "license.activate":
-    "Activate an issuer-provided Keygen license on this Mac. Trial and complimentary owner licenses use the same signed verification as paid licenses.",
-  "license.refresh":
-    "Refresh Keygen validation and the bounded offline certificate. Expired access falls back to Free.",
-  "license.deactivate":
-    "Deactivate this Mac in Keygen and return to Free. Existing paid work keeps its current bounded lease; new paid operations are denied.",
   "reports.get":
     "Report actual reservation overlap, capture attempts/outcomes by creation timestamp, and contention events within a local calendar range. Defaults to today. Custom start/end dates are inclusive; weeks start Monday. Includes resolved timezone, exclusive end timestamp and asOf timestamp.",
   "capture-cards.list":

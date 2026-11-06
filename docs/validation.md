@@ -4,9 +4,7 @@ Validated on 12 September 2026 on an Apple Silicon Mac. The local application is
 
 ## Version 0.4.0 licensing foundation
 
-The current suite has 44 passing tests with no skips. Added coverage verifies signed machine/license proof, online validation failures, Free admission under contention, annotation gates, and continued work through its original lease after entitlement loss. Billing tests cover signed webhooks, replay/retry/restart, current subscription state, trial conversion, manual suspension and worker-lock recovery. Installer tests check signed metadata, authenticated archive integrity and installed-app launch after download metadata expiry.
-
-An isolated fixture confirms that HTTP, CLI, TUI, MCP and Web expose the same Free status and reject a second session. Browser checks cover disabled activation before provider setup, the dismissible reminder and desktop/390-pixel license screens. No real devices or billing providers were used for this slice. The separate candidate remains unconfigured Free. See [licensing and billing](licensing-and-billing.md) for policy, setup and the real-provider work still pending.
+The free release is covered by the repository test suite, including concurrent reservations, annotations without activation, legacy configuration compatibility, and public GitHub installer integrity checks. Run `npm test`, `npm run check`, and `npm run test:distribution` for the current results.
 
 ## Version 0.3.0 reports and Capture Cards
 
