@@ -1,4 +1,5 @@
 import path from "node:path";
+import os from "node:os";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, stat, rm, readFile, copyFile, rmdir } from "node:fs/promises";
 import { constants } from "node:fs";
@@ -41,8 +42,10 @@ import {
   type Source,
   type ReservationGroup,
   type SimulatorLaunchOwnership,
+  warmPoolSettings,
   DeckError,
 } from "../../../../packages/core/src/local/types";
+import { decideWarmPool, parseMemoryPressure, type MemoryPressure, type WarmPoolReason } from "./warm-pool";
 import { Store } from "./store";
 import { InventoryCache } from "./inventory-cache";
 import { captureStorage, openCaptureFolder } from "./capture-library";
@@ -80,6 +83,7 @@ const transientGroupIdentityErrors = new Set([
 ]);
 const isTransientGroupIdentityError = (error: unknown) =>
   error instanceof DeckError && transientGroupIdentityErrors.has(error.code);
+const warmPoolLock = "Warm pool shutdown in progress";
 export class DeckService {
   readonly config: ConfigStore;
   readonly adapters: Adapters;
@@ -110,6 +114,9 @@ export class DeckService {
   private inventoryReads: Record<string, number> = {};
   private healthPending?: Promise<Device[]>;
   private timer?: ReturnType<typeof setInterval>;
+  private warmTimer?: ReturnType<typeof setInterval>;
+  private reaping?: Promise<void>;
+  private pressureWarned = false;
   private shuttingDown = false;
   private changingConfig = false;
   private simulatorActions = new Map<string, "launch" | "close">();
@@ -158,6 +165,11 @@ export class DeckService {
       void this.expire().catch((e) => this.diagnostics.push(String(e)));
     }, 1000);
     this.timer.unref();
+    this.warmTimer = setInterval(() => void this.reapWarmPool(), 60_000);
+    this.warmTimer.unref();
+  }
+  warmPool() {
+    return warmPoolSettings(this.config.config.settings, os.totalmem());
   }
   private queue(id: string) {
     let q = this.control.get(id);
@@ -215,6 +227,38 @@ export class DeckService {
       true,
       simulatorLaunch,
     );
+  }
+  private async recycleWarmDevice(
+    groupId: string,
+    sessionId: string,
+    device: DeviceConfig,
+    preparation: GroupPreparation,
+  ) {
+    const group = this.preparingGroup(groupId, preparation);
+    const entry = this.store.warmDevice(device.id);
+    if (!entry)
+      fail(
+        "device-not-offline",
+        `${device.name} is running and is not a warm-pool device Device Deck can restart for a cold start.`,
+        409,
+      );
+    this.simulatorActions.set(device.id, "close");
+    try {
+      const source = this.config.config.sources.find((s) => s.id === device.captureSourceId);
+      if (source?.kind === "native") await this.capture.closeSource(source);
+      await this.adapters.simulator(device, "close", undefined, entry.simulatorLaunch);
+      this.store.dropWarmDevice(device.id);
+      this.store.event({
+        deviceId: device.id,
+        sessionId,
+        owner: group.owner,
+        action: "simulator-close",
+        detail: `Recycled warm device for a cold start in reservation group ${groupId}`,
+      });
+    } finally {
+      this.simulatorActions.delete(device.id);
+      this.invalidateInventory(device.id);
+    }
   }
   private async readyGroupMember(
     groupId: string,
@@ -872,6 +916,13 @@ export class DeckService {
               );
               return source ? sourceIdentity(source) : undefined;
             },
+            // A cold-start (`state: offline`) request may take an idle warm
+            // device: it is shut down and started again for this group.
+            (device) =>
+              Boolean(this.store.warmDevice(device.id)) &&
+              !this.simulatorActions.has(device.id) &&
+              !this.deviceHasOpenGroup(device.id) &&
+              !this.streams.viewing(device.id),
           );
           if (!selected)
             fail(
@@ -987,7 +1038,12 @@ export class DeckService {
             });
             throw error;
           }
-          return { kind: "claimed" as const, ...acquired, selected };
+          const recycle = new Set(
+            Object.entries(selected)
+              .filter(([alias, device]) => args.requests[alias].selector.state === "offline" && device.online)
+              .map(([alias]) => alias),
+          );
+          return { kind: "claimed" as const, ...acquired, selected, recycle };
         });
         if (admission.kind === "existing")
           return replayReservation(admission.group);
@@ -998,6 +1054,13 @@ export class DeckService {
             const member = claimed.group.members.find((item) => item.alias === alias)!;
             return this.queue(observed.id).run(async () => {
               try {
+                if (claimed.recycle.has(alias))
+                  await this.recycleWarmDevice(
+                    claimed.group.id,
+                    member.sessionId,
+                    this.device(observed.id),
+                    preparation,
+                  );
                 const current = await this.readyGroupMember(
                   claimed.group.id,
                   alias,
@@ -1323,6 +1386,8 @@ export class DeckService {
             if (args.action === "close" && source?.kind === "native")
               await this.capture.closeSource(source);
             const result = await this.adapters.simulator(device, args.action);
+            // A manual close ends warm-pool ownership; a later manual boot is the user's.
+            if (args.action === "close") this.store.dropWarmDevice(device.id);
             this.store.event({
               deviceId: device.id,
               owner: origin,
@@ -2079,14 +2144,28 @@ export class DeckService {
       .run(async () => {
         const group = this.store.group(id);
         if (group.state === "closed") return group;
-        group.state = "closing";
-        group.closeReason = reason;
-        this.store.putGroup(group);
-        // Keep every member unavailable through the gap between session close
-        // and simulator restoration. A successor can reserve only after all
-        // cold-started virtual devices have been shut down.
-        for (const member of group.members)
-          this.store.lock(member.deviceId, lockReason);
+        // Only a group that became ready hands its cold-started devices to the
+        // warm pool; a failed or cancelled preparation restores them. The
+        // warm records commit with the closing state, so a crash retry
+        // shuts down exactly the members that were not kept warm.
+        const keepWarm = group.state === "active" && this.warmPool().enabled;
+        this.store.transaction(() => {
+          group.state = "closing";
+          group.closeReason = reason;
+          this.store.putGroup(group);
+          // Keep every member unavailable through the gap between session
+          // close and simulator restoration. A successor can reserve only
+          // after cold-started devices are shut down or recorded as warm.
+          for (const member of group.members) {
+            this.store.lock(member.deviceId, lockReason);
+            if (keepWarm && member.startedByGroup)
+              this.store.putWarmDevice({
+                deviceId: member.deviceId,
+                ...(member.simulatorLaunch ? { simulatorLaunch: member.simulatorLaunch } : {}),
+                lastUsedAt: Date.now(),
+              });
+          }
+        });
         return group;
       })
       .then(async (group) => {
@@ -2101,7 +2180,7 @@ export class DeckService {
             this.store
               .group(group.id)
               .members
-              .filter((member) => member.startedByGroup)
+              .filter((member) => member.startedByGroup && !this.store.warmDevice(member.deviceId))
               .map((member) => {
                 this.simulatorActions.set(member.deviceId, "close");
                 return this.queue(member.deviceId).run(async () => {
@@ -2131,6 +2210,8 @@ export class DeckService {
           completed.state = "closed";
           completed.endedAt = Date.now();
           completed.closeReason = reason;
+          for (const member of completed.members)
+            this.store.touchWarmDevice(member.deviceId);
           // Lock removal and the durable closed state commit together. A
           // crash can therefore leave either a recoverable closing group or a
           // fully closed/unlocked group, never a closed group with stale locks.
@@ -2141,6 +2222,7 @@ export class DeckService {
             action: "reservation-group-released",
             detail: `${group.id}: ${reason}`,
           });
+          void this.reapWarmPool();
           return completed;
         } catch (error) {
           const current = this.store.group(group.id);
@@ -2197,6 +2279,7 @@ export class DeckService {
         s.state = "closed";
         s.endedAt = Date.now();
         this.store.putSession(s);
+        this.store.touchWarmDevice(s.deviceId, s.endedAt);
         this.store.event({
           deviceId: s.deviceId,
           sessionId: s.id,
@@ -2373,7 +2456,95 @@ export class DeckService {
     }
     this.store.clearWorker(worker.id);
   }
+  /** One warm-pool pass: drop records of stopped devices and shut down idle
+   * ones by the idle, pool-limit and memory-pressure rules. Never throws. */
+  reapWarmPool(): Promise<void> {
+    if (this.shuttingDown) return Promise.resolve();
+    this.reaping ??= this.reapWarmPoolOnce()
+      .catch((error) => this.warmPoolDiagnostic(`Warm pool: ${(error as Error).message}`))
+      .finally(() => { this.reaping = undefined; });
+    return this.reaping;
+  }
+  private warmDeviceBusy(id: string) {
+    return this.simulatorActions.has(id) || Boolean(this.store.lockReason(id)) ||
+      this.deviceHasOpenGroup(id) || this.streams.viewing(id) ||
+      this.store.sessions().some((s) => s.deviceId === id && s.state !== "closed");
+  }
+  private async reapWarmPoolOnce() {
+    const entries = this.store.warmDevices();
+    if (!entries.length) return;
+    const settings = this.warmPool();
+    const devices = await this.devices();
+    const configured = new Map(devices.map((d) => [d.id, d]));
+    let pressure: MemoryPressure = 1;
+    if (settings.enabled && settings.memoryPressure)
+      pressure = await this.adapters.memoryPressureLevel().then(parseMemoryPressure, () => 1 as const);
+    const decision = decideWarmPool({
+      now: Date.now(),
+      settings,
+      entries,
+      booted: devices
+        .filter((d) => supportsSimulatorLifecycle(d) && (d.online || d.simulatorState === "booted"))
+        .map((d) => d.id),
+      gone: entries
+        .filter((e) => !configured.has(e.deviceId) ||
+          ["shutdown", "unavailable"].includes(configured.get(e.deviceId)!.simulatorState || ""))
+        .map((e) => e.deviceId),
+      busy: entries.filter((e) => this.warmDeviceBusy(e.deviceId)).map((e) => e.deviceId),
+      pressure,
+      warned: this.pressureWarned,
+    });
+    this.pressureWarned = decision.warned;
+    for (const id of decision.drop)
+      if (!this.warmDeviceBusy(id)) this.store.dropWarmDevice(id);
+    for (const { deviceId, reason } of decision.close)
+      await this.closeWarmDevice(deviceId, reason).catch((error) =>
+        this.warmPoolDiagnostic(`Warm pool could not close ${deviceId}: ${(error as Error).message}`));
+  }
+  private warmPoolDiagnostic(message: string) {
+    // A failing shutdown retries every minute; keep the diagnostics bounded.
+    this.diagnostics.push(message);
+    if (this.diagnostics.length > 100) this.diagnostics.shift();
+  }
+  private async closeWarmDevice(id: string, reason: WarmPoolReason) {
+    // Admission and reservation share the global queue, so a device claimed
+    // after the decision was made is skipped here rather than closed.
+    const entry = await this.global.run(async () => {
+      const current = this.store.warmDevice(id);
+      if (!current || this.shuttingDown || this.changingConfig || this.warmDeviceBusy(id)) return undefined;
+      if (!this.config.config.devices.some((d) => d.id === id)) {
+        this.store.dropWarmDevice(id);
+        return undefined;
+      }
+      this.simulatorActions.set(id, "close");
+      this.store.lock(id, warmPoolLock);
+      return current;
+    });
+    if (!entry) return;
+    await this.queue(id).run(async () => {
+      try {
+        const device = this.device(id);
+        const source = this.config.config.sources.find((s) => s.id === device.captureSourceId);
+        if (source?.kind === "native") await this.capture.closeSource(source);
+        await this.adapters.simulator(device, "close", undefined, entry.simulatorLaunch);
+        this.store.dropWarmDevice(id);
+        this.store.event({
+          deviceId: id,
+          owner: "Warm pool",
+          action: "simulator-close",
+          detail: `Warm pool closed this device: ${reason}`,
+        });
+      } finally {
+        this.simulatorActions.delete(id);
+        this.store.lock(id, null);
+        if (this.healthPending) await this.healthPending.catch(() => {});
+        this.invalidateInventory(id);
+      }
+    });
+  }
   private async recover() {
+    // A warm-pool shutdown interrupted by a crash leaves no other owner.
+    this.store.clearLocks(warmPoolLock);
     for (const owned of this.store.ownedInteractions()) {
       try {
         await this.adapters.closeOwnedWda(owned.device, owned.wdaSessionId);
@@ -2429,6 +2600,7 @@ export class DeckService {
     this.licensing.close();
     this.shuttingDown = true;
     clearInterval(this.timer);
+    clearInterval(this.warmTimer);
     await Promise.all(
       this.store
         .groups()
@@ -2446,6 +2618,9 @@ export class DeckService {
         this.queue(id).run(async () => {}),
       ),
     );
+    // Warm devices stay booted across a daemon restart; only let a pass in
+    // flight finish its current shutdown.
+    await this.reaping;
     await this.streams.close();
     await Promise.all([this.captureCardThumbnails.close(), this.capture.close()]);
     await this.adapters.close();

@@ -703,6 +703,10 @@ export class Adapters {
     if (d.connection.type === "simulator") this.idbInput.reset(d.connection.udid);
     return controlSimulator(d, action, undefined, beforeLaunch);
   }
+  /** Raw macOS memory pressure level output; callers treat failures as normal. */
+  async memoryPressureLevel() {
+    return (await this.execute("/usr/sbin/sysctl", ["-n", "kern.memorystatus_vm_pressure_level"])).stdout.toString();
+  }
   async prepareSimulator(d: DeviceConfig) {
     if (isAndroidEmulator(d)) return this.emulators.prepare(d);
     return d;

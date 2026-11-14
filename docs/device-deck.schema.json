@@ -443,6 +443,31 @@
               "minimum": 250,
               "maximum": 5000,
               "default": 750
+            },
+            "warmPool": {
+              "type": "object",
+              "properties": {
+                "enabled": {
+                  "type": "boolean",
+                  "default": true
+                },
+                "idleMinutes": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 10080,
+                  "default": 240
+                },
+                "maxBooted": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 64
+                },
+                "memoryPressure": {
+                  "type": "boolean",
+                  "default": true
+                }
+              },
+              "additionalProperties": false
             }
           },
           "required": [

@@ -29,6 +29,54 @@ devdeck call devices.simulator '{"deviceId":"YOUR_CONFIGURED_SIMULATOR_ID","acti
 
 The MCP tool is `devices_simulator`. Successful responses include `deviceId`, `action`, `state` (`booted` or `shutdown`) and `changed`; Android launch also returns its resolved `serial`. Repeating launch does not reboot an already running virtual device, and repeating close on a stopped device succeeds without another shutdown. Apple launch also attempts to bring its Simulator window forward. If only that presentation step fails, the successful response includes a `warning`; simulator lifecycle and readiness remain successful.
 
+## Warm pool
+
+Booting a simulator or emulator from cold takes time, so Device Deck keeps the
+virtual devices it starts running after their reservation ends. When a
+[reservation group](group-reservations.md) that cold-started a device is
+released or expires, the device stays booted and joins the warm pool. It is
+unlocked straight away, and the next reservation that matches it uses it without
+another boot (its `startedByGroup` is `false`, as for any device that was
+already running).
+
+Only devices that Device Deck itself started are ever in the pool. A simulator
+you booted from Xcode, or an emulator you started yourself, is never shut down
+by the pool. Closing a pool device with **Close sim** removes it from the pool.
+Stopping or restarting the daemon leaves pool devices running, and the pool is
+remembered across restarts.
+
+The pool shuts a device down only when it is not reserved, not locked, has no
+open viewer and is not already starting or closing, and one of these applies:
+
+1. **Idle**: it has not been used for `idleMinutes` (default 240).
+2. **Pool limit**: more virtual devices are booted than `maxBooted`. Every
+   booted simulator and emulator counts, including ones the pool does not own,
+   but only pool devices are shut down, least recently used first.
+3. **Memory pressure**: macOS reports memory pressure
+   (`sysctl -n kern.memorystatus_vm_pressure_level`). At the critical level
+   one pool device is shut down per minute. At the warning level one is shut
+   down only after two checks in a row report a warning. If the level cannot be
+   read it counts as normal.
+
+The pool checks these rules every minute and after each group release. Each
+shutdown is logged as a `simulator-close` event that names the reason.
+
+A request whose selector has `"state": "offline"` still gets a cold start. Device Deck uses a device that is already shut
+down when one matches. Otherwise it shuts down a matching idle pool device and
+boots it again for the reservation, which then reports `startedByGroup: true`.
+A running device that is not in the pool is never restarted this way.
+
+Configure the pool under `settings.warmPool` in the config file:
+
+```json
+"warmPool": { "enabled": true, "idleMinutes": 240, "maxBooted": 4, "memoryPressure": true }
+```
+
+All fields are optional. `maxBooted` defaults to one booted device per 6 GB of
+the Mac's memory, with a minimum of two. Set `"enabled": false` to shut
+cold-started devices down on release, as earlier versions did; devices
+already in the pool are then shut down at the next check.
+
 ## Capture while the Mac is locked
 
 A macOS desktop-control failure does not establish that simulator capture or input

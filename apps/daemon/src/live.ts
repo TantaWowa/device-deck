@@ -271,6 +271,10 @@ export class LiveStreams {
     }).catch((error) => { entry.closing = undefined; throw error; });
     return entry.closing;
   }
+  /** Whether any open viewer is watching this device (with or without a lease). */
+  viewing(deviceId: string) {
+    return [...this.entries.values()].some((entry) => !entry.closed && entry.target.device?.id === deviceId);
+  }
   async closeSession(id: string) {
     await this.stopScript(id);
     await Promise.all([...this.entries.values()].filter((entry) => entry.args.sessionId === id).map((entry) => this.dispose(entry)));
