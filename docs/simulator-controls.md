@@ -62,3 +62,38 @@ permissions are separate observations. The owning macOS account still needs its
 supported logged-in simulator environment. If a direct operation fails, retain
 its exact command/error, try a supported alternative, and report only the blocked
 journey. Do not bypass authentication, switch accounts or unlock the Mac automatically.
+
+## Simulator input stops working after a relaunch
+
+**Symptom.** Taps, swipes, text and keys on an Apple simulator fail every time
+with an error like `The dtuhidd connection (com.apple.coredevice.feature.remote.hid.digitizer)
+has been invalidated; events sent on it would be discarded`, or `The dtuhidd connection
+was interrupted during the gesture`. Screenshots, accessibility reads and
+`idb describe` still work.
+
+**Cause.** `idb` keeps one long-running `idb_companion` per simulator. Newer
+companion builds keep a dead input connection after their simulator is shut down
+and booted again, and never recover until that companion process exits. Nothing
+is delivered while it is in this state.
+
+**What Device Deck does.** Every simulator input (remote keys and text, taps,
+iOS gestures and wake) goes through one helper. When input fails with that error,
+Device Deck stops only the `idb_companion` started for that simulator's UDID,
+runs `idb disconnect UDID` so idb forgets it, and retries the input once. idb
+then starts a fresh companion. Other errors are not retried. If the retry fails
+the same way, the input returns `input-unavailable` (HTTP 503), and the device
+stops advertising key, text and touch input until an input succeeds or the
+simulator is relaunched. Restarting the companion also ends any iOS live video
+for that simulator; reopen the viewer to start a new stream.
+
+**Manual fallback.** Shut down and relaunch the simulator through its reservation,
+then send input again. If it still fails, update `idb_companion`. To stop a stale
+companion yourself, end only the process whose command line has
+`--udid YOUR_UDID`, then run `idb disconnect YOUR_UDID`. Do not use `idb kill`,
+which stops the companions of every simulator.
+
+To check a running simulator repeatedly, run
+`npm run qa:simulator-input -- --udid UDID --os ios` (or `--os tvos`). It sends
+real input to whatever is on screen, prints a pass/fail count per input and
+whether a companion restart happened, and exits non-zero on any failure. It does
+not boot, shut down or reserve the simulator.

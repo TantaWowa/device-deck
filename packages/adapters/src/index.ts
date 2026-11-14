@@ -8,6 +8,7 @@ import type { InteractiveSource, VideoProfile } from "../../core/src/live";
 import { androidKeys, rokuKeys, hidKeys, iosHardwareKeys, deviceInputMode } from "../../core/src/remote";
 import { controlSimulator, simulatorState, SimulatorInventory, wakeSimulator, SIMULATOR_UNAVAILABLE_MESSAGE } from "./simulator";
 import { AndroidEmulators, isAndroidEmulator } from "./android-emulator";
+import { idbInput as sharedIdbInput, IdbInput } from "./idb-input";
 import {
   mergeCaptureCards,
 } from "../../core/src/capture-cards";
@@ -58,6 +59,24 @@ export function appleHardwareInputMode(hardware: {
   if (hardware.platform?.toLowerCase() === "ios" || /^(?:iphone|ipad|ipod)$/i.test(hardware.deviceType || "")) return "touch";
   return deviceInputMode({ connection: { type: "apple-device", udid: "metadata" }, model: hardware.marketingName || hardware.productType || "" }) === "remote" ? "remote" : "touch";
 }
+/** The `idb ui ...` arguments for one remote key, text or tap on a simulator. */
+export function simulatorInputArgs(
+  c: { udid: string; os: "ios" | "tvos" },
+  input: { key?: string; text?: string; x?: number; y?: number },
+): string[] {
+  const args = ["--udid", c.udid];
+  if (input.text !== undefined) return ["ui", "text", input.text, ...args];
+  if (input.x !== undefined && input.y !== undefined)
+    return ["ui", "tap", String(input.x), String(input.y), ...args];
+  if (c.os === "ios" && iosHardwareKeys[input.key || ""])
+    return ["ui", "button", iosHardwareKeys[input.key!], ...args];
+  if (input.key === "Home") return ["ui", "button", "HOME", ...args];
+  if (c.os === "ios" && input.key === "Back")
+    fail("unsupported-key", "iOS has no system Back button. Use the app's on-screen navigation.");
+  const key = hidKeys[input.key || ""];
+  if (!key) fail("unsupported-key", "Unsupported simulator key.");
+  return ["ui", "key", key, ...args];
+}
 export class Adapters {
   readonly emulators: AndroidEmulators;
   readonly cameras: CameraDiscovery;
@@ -68,7 +87,7 @@ export class Adapters {
   private discoveryAt = -Infinity;
   private discoveryCounters = { requests: 0, hits: 0, shared: 0, starts: 0 };
   private inputModes = new Map<string, "touch" | "remote">();
-  constructor(private getConfig: () => Config, private execute = run, private now: () => number = Date.now) {
+  constructor(private getConfig: () => Config, private execute = run, private now: () => number = Date.now, readonly idbInput: IdbInput = sharedIdbInput) {
     this.emulators = new AndroidEmulators(getConfig, execute);
     this.probes = new ProbeScheduler(execute);
     this.cameras = new CameraDiscovery(helper, this.probes.run, now);
@@ -580,7 +599,9 @@ export class Adapters {
               : result.simulatorState === "starting" ? "Simulator booting…" : `Simulator ${result.simulatorState}`;
         if (result.online) {
           result.capabilities.push("restart");
-          if (
+          const health = this.idbInput.health(c.udid);
+          if (!health.available) result.healthDetail = "Simulator running · Input unavailable: idb_companion lost its HID connection. Relaunch the simulator.";
+          else if (
             (await available(this.tool("idb"))) &&
             (await available("idb_companion"))
           ) {
@@ -678,6 +699,8 @@ export class Adapters {
   ) {
     if (isAndroidEmulator(d))
       return this.emulators.control(d, action, beforeLaunch, ownership);
+    // A relaunch gets a fresh chance at input; the next input still recovers a stale companion.
+    if (d.connection.type === "simulator") this.idbInput.reset(d.connection.udid);
     return controlSimulator(d, action, undefined, beforeLaunch);
   }
   async prepareSimulator(d: DeviceConfig) {
@@ -803,28 +826,7 @@ export class Adapters {
     if (c.type === "simulator") {
       if (await simulatorState(d, this.execute) !== "booted")
         fail("device-not-ready", "This simulator is stopped or still booting. Wait for its system screen before sending input.", 409);
-      const args = ["--udid", c.udid];
-      if (input.text !== undefined)
-        await this.execute(this.tool("idb"), ["ui", "text", input.text, ...args]);
-      else if (input.x !== undefined && input.y !== undefined)
-        await this.execute(this.tool("idb"), [
-          "ui",
-          "tap",
-          String(input.x),
-          String(input.y),
-          ...args,
-        ]);
-      else if (c.os === "ios" && iosHardwareKeys[input.key || ""])
-        await this.execute(this.tool("idb"), ["ui", "button", iosHardwareKeys[input.key!], ...args]);
-      else if (input.key === "Home")
-        await this.execute(this.tool("idb"), ["ui", "button", "HOME", ...args]);
-      else {
-        if (c.os === "ios" && input.key === "Back")
-          fail("unsupported-key", "iOS has no system Back button. Use the app's on-screen navigation.");
-        const key = hidKeys[input.key || ""];
-        if (!key) fail("unsupported-key", "Unsupported simulator key.");
-        await this.execute(this.tool("idb"), ["ui", "key", key, ...args]);
-      }
+      await this.idbInput.run(this.tool("idb"), simulatorInputArgs(c, input), { execute: this.execute });
       return;
     }
     if (c.type === "apple-tv") {
@@ -859,7 +861,7 @@ export class Adapters {
     }
     if (d.connection.type === "simulator" && await simulatorState(d, this.execute) !== "booted")
       fail("device-not-ready", "This simulator is stopped or still booting. Wait for its system screen before opening the feed.", 409);
-    return startIdbInteractive(d, this.tool("idb"), control);
+    return startIdbInteractive(d, this.tool("idb"), control, undefined, undefined, this.idbInput);
   }
   async startAppleScreen(d: DeviceConfig) {
     const c = d.connection;
@@ -932,7 +934,7 @@ export class Adapters {
         fail("wake-failed", `Roku returned ${response.status}`, 502);
       return { method: info.isTv ? "Roku TV power on" : "Roku Home button" };
     }
-    if (c.type === "simulator") return wakeSimulator(d, this.tool("idb"));
+    if (c.type === "simulator") return wakeSimulator(d, this.tool("idb"), undefined, this.idbInput);
     if (c.type === "apple-tv") {
       await run(
         this.tool("python"),

@@ -2,6 +2,7 @@ import path from "node:path";
 import { stat } from "node:fs/promises";
 import { fail, type DeviceConfig } from "../../core/src/local/types";
 import { run } from "./process";
+import { idbInput, type IdbInput } from "./idb-input";
 
 export type SimulatorState =
   "booted" | "shutdown" | "starting" | "stopping" | "unavailable";
@@ -203,6 +204,7 @@ export async function wakeSimulator(
   device: DeviceConfig,
   idb: string,
   execute: Runner = run,
+  input: IdbInput = idbInput,
 ) {
   if ((await simulatorState(device, execute)) !== "booted")
     fail(
@@ -213,6 +215,6 @@ export async function wakeSimulator(
   if (device.connection.type !== "simulator")
     fail("unsupported-capability", "This is not an Apple simulator.");
   // HOME is intentional: LOCK and SIDE_BUTTON can put an awake screen to sleep.
-  await execute(idb, ["ui", "button", "HOME", "--udid", device.connection.udid]);
+  await input.run(idb, ["ui", "button", "HOME", "--udid", device.connection.udid], { execute });
   return { method: "Simulator Home button" };
 }
