@@ -182,7 +182,9 @@ export async function controlSimulator(
       if ((await simulatorState(device, execute)) !== "shutdown") throw error;
     }
   }
-  const current = await simulatorState(device, execute);
+  // A launch has just waited for `bootstatus -b`. Repeating the 2-second
+  // readiness probe here fails a finished boot whenever the host is busy.
+  const current = await simulatorState(device, execute, action !== "launch");
   const expected = action === "launch" ? "booted" : "shutdown";
   if (current !== expected)
     fail(
