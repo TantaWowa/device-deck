@@ -279,6 +279,11 @@ export class LiveStreams {
     await this.stopScript(id);
     await Promise.all([...this.entries.values()].filter((entry) => entry.args.sessionId === id).map((entry) => this.dispose(entry)));
   }
+  async closeDevice(id: string) {
+    await Promise.all([...this.entries.values()]
+      .filter((entry) => entry.target.device?.id === id)
+      .map((entry) => this.dispose(entry)));
+  }
   /** Hold the session's existing touch controllers without closing video or
    * its reservation. New controller setup is excluded until the key settles. */
   async withHardwareInput<T>(sessionId: string, action: () => Promise<T>): Promise<T> {

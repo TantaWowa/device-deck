@@ -119,6 +119,7 @@ test('long captures and artifact downloads retain their full deadline without re
     { operation: 'sessions.release', deadline: 180_000 },
     { operation: 'sessions.takeover', deadline: 180_000 },
     { operation: 'devices.simulator', deadline: 300_000 },
+    { operation: 'devices.cleanup', deadline: 1_800_000 },
     { path: '/v1/artifacts/synthetic/file', deadline: 600_000 },
     { path: '/v1/preview/synthetic', deadline: 30_000 },
   ];

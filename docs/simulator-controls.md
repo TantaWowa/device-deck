@@ -1,4 +1,4 @@
-# Launch and close simulators
+# Manage simulators
 
 Registered Apple iOS/tvOS simulators and Android AVDs have **Launch sim** and **Close sim** actions directly in the web Devices list. Launch boots the configured virtual device and waits for readiness. Close shuts down only that virtual device.
 
@@ -77,6 +77,26 @@ All fields are optional. `maxBooted` defaults to one booted device per 6 GB of
 the Mac's memory, with a minimum of two. Set `"enabled": false` to shut
 cold-started devices down on release, as earlier versions did; devices
 already in the pool are then shut down at the next check.
+
+## Remove apps or reset devices
+
+In **Devices**, choose **Clean up…** on a virtual device, or select several devices and choose **Clean up selected…**. The dialog lists the exact targets, including those hidden by filters, and offers two actions:
+
+- **Uninstall apps** removes user-installed apps and their app data, keeping system apps and device settings. Stopped devices start temporarily and return to shutdown afterward; running devices stay running.
+- **Reset device** removes installed apps, internal user data, settings and logins, then leaves the device shut down. The virtual-device definition and OS image remain. Android uses the SDK's `-wipe-data` reset, which preserves any separate virtual SD-card image.
+
+Both actions require confirmation. Physical devices, active or closing reservations, reservation groups awaiting cleanup, and maintenance-locked devices are protected. Cleanup closes the target's live viewers, locks all eligible selected devices before starting, and processes at most two devices at once. Results show each device's success, removed-app count or error. Partial failures do not roll back apps already removed. If the response is lost, inspect device state before retrying.
+
+These actions can reclaim app storage, but do not remove downloaded simulator runtimes or Android system images. They do not report an estimated number of bytes reclaimed.
+
+CLI and MCP use the same confirmed operation. Pass one ID for a single device:
+
+```sh
+devdeck call devices.cleanup '{"ids":["IOS_DEVICE_ID","ANDROID_DEVICE_ID"],"action":"uninstall-apps","confirmed":true}'
+devdeck call devices.cleanup '{"ids":["DEVICE_ID"],"action":"reset","confirmed":true}'
+```
+
+The MCP tool is `devices_cleanup`. The response is an array of `{id, ok, removedApps?, state?, warning?}` results or `{id, ok:false, error}` failures. The optional `revision` from `config.get` binds the request to the reviewed configuration; the browser always sends it and requires another review if configuration changes. The host audits completed and failed cleanup attempts.
 
 ## Capture while the Mac is locked
 

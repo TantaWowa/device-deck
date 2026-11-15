@@ -1,5 +1,6 @@
 import path from "node:path";
-import { stat } from "node:fs/promises";
+import os from "node:os";
+import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { fail, type DeviceConfig } from "../../core/src/local/types";
 import { run } from "./process";
 import { idbInput, type IdbInput } from "./idb-input";
@@ -222,4 +223,115 @@ export async function wakeSimulator(
   // HOME is intentional: LOCK and SIDE_BUTTON can put an awake screen to sleep.
   await input.run(idb, ["ui", "button", "HOME", "--udid", device.connection.udid], { execute });
   return { method: "Simulator Home button" };
+}
+
+async function userInstalledSimulatorApps(udid: string, execute: Runner) {
+  const listing = await execute("xcrun", ["simctl", "listapps", udid], 60000);
+  // listapps writes a property list, not JSON. Let Apple's parser handle its
+  // quoting and escapes; a private file avoids interpolating app data in a shell.
+  const directory = await mkdtemp(path.join(os.tmpdir(), "devdeck-simulator-apps-"));
+  let apps: unknown;
+  try {
+    const file = path.join(directory, "apps.plist");
+    await writeFile(file, listing.stdout, { mode: 0o600 });
+    apps = JSON.parse((await execute("/usr/bin/plutil", ["-convert", "json", "-o", "-", "--", file])).stdout.toString());
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+  if (!apps || typeof apps !== "object" || Array.isArray(apps))
+    fail("simulator-app-list-invalid", "Simulator returned an invalid installed-app list.", 502);
+  const identifiers: string[] = [];
+  for (const [identifier, metadata] of Object.entries(apps)) {
+    if (!metadata || typeof metadata !== "object" || Array.isArray(metadata) ||
+        !("ApplicationType" in metadata) || typeof metadata.ApplicationType !== "string")
+      fail("simulator-app-list-invalid", "Simulator app metadata does not identify installed-app types. No apps were removed.", 502);
+    if (metadata.ApplicationType !== "User") continue;
+    if (!("CFBundleIdentifier" in metadata) || metadata.CFBundleIdentifier !== identifier ||
+        !/^[A-Za-z0-9][A-Za-z0-9.-]*$/.test(identifier))
+      fail("simulator-app-list-invalid", "Simulator returned an invalid user-app identifier. No apps were removed.", 502);
+    identifiers.push(identifier);
+  }
+  return identifiers.sort();
+}
+
+async function shutdownSimulatorForCleanup(device: DeviceConfig, udid: string, execute: Runner) {
+  try {
+    await execute("xcrun", ["simctl", "shutdown", udid], 60000);
+  } catch (error) {
+    if ((await simulatorState(device, execute, false)) !== "shutdown") throw error;
+  }
+  const state = await simulatorState(device, execute, false);
+  if (state !== "shutdown")
+    fail("simulator-transition", `Simulator is ${state}; shutdown could not be verified.`, 409);
+}
+
+/** Remove user apps or reset one simulator without using aliases or presenting its UI. */
+export async function cleanupSimulator(
+  device: DeviceConfig,
+  action: "uninstall-apps" | "reset",
+  execute: Runner = run,
+): Promise<{ removedApps?: number; state?: "booted" | "shutdown"; warning?: string }> {
+  if (device.kind !== "virtual" || device.connection.type !== "simulator" ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(device.connection.udid))
+    fail("unsupported-cleanup", "Cleanup requires one configured Apple simulator with an exact UDID.");
+  if (action !== "uninstall-apps" && action !== "reset")
+    fail("unsupported-cleanup", "Choose uninstall-apps or reset.");
+  const udid = device.connection.udid;
+  const initial = await simulatorState(device, execute);
+  if (initial === "unavailable")
+    fail("simulator-unavailable", SIMULATOR_UNAVAILABLE_MESSAGE, 409);
+  if (initial !== "booted" && initial !== "shutdown")
+    fail("simulator-transition", `Simulator is ${initial}. Wait for it to finish before cleanup.`, 409);
+
+  if (action === "reset") {
+    if (initial === "booted") await shutdownSimulatorForCleanup(device, udid, execute);
+    await execute("xcrun", ["simctl", "erase", udid], 120000);
+    const state = await simulatorState(device, execute, false);
+    if (state !== "shutdown")
+      fail("simulator-transition", `Simulator erase finished, but its state is ${state}; shutdown could not be verified.`, 409);
+    return { state: "shutdown" };
+  }
+
+  let ownsBoot = false, removedApps = 0;
+  let totalApps: number | undefined;
+  let operationError: unknown, restorationError: unknown;
+  const failedApps: { appId: string; error: string }[] = [];
+  try {
+    if (initial === "shutdown") {
+      await execute("xcrun", ["simctl", "boot", udid]);
+      ownsBoot = true;
+      await execute("xcrun", ["simctl", "bootstatus", udid, "-b"], 240000);
+    }
+    const apps = await userInstalledSimulatorApps(udid, execute);
+    totalApps = apps.length;
+    for (const appId of apps) {
+      try {
+        await execute("xcrun", ["simctl", "uninstall", udid, appId], 60000);
+        removedApps++;
+      } catch (error) {
+        failedApps.push({ appId, error: error instanceof Error ? error.message : String(error) });
+      }
+    }
+  } catch (error) {
+    operationError = error;
+  } finally {
+    if (ownsBoot) {
+      try { await shutdownSimulatorForCleanup(device, udid, execute); }
+      catch (error) { restorationError = error; }
+    }
+  }
+  if (operationError || restorationError || failedApps.length) {
+    const errors = [
+      operationError instanceof Error ? operationError.message : operationError ? String(operationError) : "",
+      ...failedApps.map(({ appId, error }) => `${appId}: ${error}`),
+      restorationError ? `Could not restore the simulator to shutdown: ${restorationError instanceof Error ? restorationError.message : String(restorationError)}` : "",
+    ].filter(Boolean);
+    fail("simulator-cleanup-failed", `Removed ${removedApps}${totalApps === undefined ? "" : ` of ${totalApps}`} user-installed apps from ${device.name}. Cleanup failed: ${errors.join("; ")}`, 502,
+      { removedApps, totalApps, failedApps, expectedState: initial });
+  }
+  const state = await simulatorState(device, execute);
+  if (state !== initial)
+    fail("simulator-cleanup-failed", `Removed ${removedApps} user-installed apps, but the simulator is ${state}; expected ${initial}.`, 502,
+      { removedApps, expectedState: initial, state });
+  return { removedApps, state: initial };
 }

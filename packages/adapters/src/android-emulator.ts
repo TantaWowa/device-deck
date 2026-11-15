@@ -4,6 +4,7 @@ import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { run, available } from "./process";
 import { androidBootReady, androidDisplayReady } from "./android-state";
+import { freezeAdbTransport } from "./scrcpy";
 import {
   DeckError,
   fail,
@@ -367,6 +368,7 @@ export class AndroidEmulators {
     d: DeviceConfig,
     serial: string,
     ownership: SimulatorLaunchOwnership,
+    transportArgs?: string[],
   ) {
     this.validateOwnership(d, ownership);
     if (d.connection.type !== "adb") return undefined;
@@ -375,10 +377,7 @@ export class AndroidEmulators {
         await this.execute(
           this.adb(),
           [
-            "-P",
-            String(d.connection.port),
-            "-s",
-            serial,
+            ...(transportArgs || ["-P", String(d.connection.port), "-s", serial]),
             "shell",
             "getprop",
             launchProperty,
@@ -398,6 +397,7 @@ export class AndroidEmulators {
       ownership?: SimulatorLaunchOwnership,
     ) => Promise<void>,
     ownership?: SimulatorLaunchOwnership,
+    launchOptions: { wipeData?: boolean; headless?: boolean; requireStopped?: boolean; pinTransport?: boolean } = {},
   ) {
     if (!isAndroidEmulator(d) || d.connection.type !== "adb")
       fail("unsupported-lifecycle", "This target is not an Android emulator.");
@@ -433,6 +433,12 @@ export class AndroidEmulators {
         "This emulator's AVD identity is not available yet. Wait and refresh before launching or closing it.",
         409,
       );
+    if (action === "launch" && (launchOptions.wipeData || launchOptions.requireStopped) && current)
+      fail(
+        "emulator-transition",
+        "This AVD started again before cleanup. Close it before retrying; no data was erased.",
+        409,
+      );
     if (action === "close") {
       if (!current) {
         const changed = ownership
@@ -446,9 +452,12 @@ export class AndroidEmulators {
         };
       }
       const serial = current.serial;
+      const transportArgs = launchOptions.pinTransport
+        ? (await freezeAdbTransport(this.resolved(d, current), this.adb(), this.execute)).args
+        : ["-P", String(c.port), "-s", serial];
       if (
         ownership &&
-        (await this.currentOwnershipMarker(d, serial, ownership)) !==
+        (await this.currentOwnershipMarker(d, serial, ownership, transportArgs)) !==
           ownership.marker
       ) {
         const changed = await this.closeOwnedProcess(d, ownership);
@@ -467,10 +476,7 @@ export class AndroidEmulators {
       }
       try {
         await this.execute(this.adb(), [
-          "-P",
-          String(c.port),
-          "-s",
-          serial,
+          ...transportArgs,
           "emu",
           "kill",
         ]);
@@ -530,7 +536,9 @@ export class AndroidEmulators {
         [
           "-avd",
           c.avdName,
-          ...(process.env.DEVICE_DECK_HEADLESS === "1"
+          // The SDK's wipe-data removes old snapshots; avoid saving a new one during reset.
+          ...(launchOptions.wipeData ? ["-wipe-data", "-no-snapshot"] : []),
+          ...(launchOptions.headless || process.env.DEVICE_DECK_HEADLESS === "1"
             ? ["-no-window", "-gpu", "software", "-feature", "-Vulkan"] : []),
           ...(launchOwnership
             ? [
@@ -577,5 +585,107 @@ export class AndroidEmulators {
       "Android emulator is still starting or its display is not ready. Its process was left running; refresh and wait for Android to finish booting.",
       409,
     );
+  }
+
+  async cleanup(d: DeviceConfig, action: "uninstall-apps" | "reset") {
+    if (!isAndroidEmulator(d) || d.connection.type !== "adb")
+      fail("unsupported-cleanup", "Cleanup is supported only for Android emulators.");
+    const device = await this.prepare(d);
+    if (device.connection.type !== "adb" || !device.connection.avdName)
+      fail("emulator-identity-required", "Configure this emulator's exact AVD name before cleanup.", 409);
+    const initial = await this.inspect(device);
+    if (initial.state === "unavailable")
+      fail("emulator-unavailable", "This AVD is unavailable in the configured Android SDK.", 409);
+    if (initial.state !== "booted" && initial.state !== "shutdown")
+      fail("emulator-transition", "Wait for this emulator to finish starting or closing before cleanup.", 409);
+    if (action === "reset") {
+      // Validate the reset executable and configuration before stopping a live AVD.
+      if (!(await this.names()).includes(device.connection.avdName))
+        fail("emulator-unavailable", "This AVD is unavailable in the configured Android SDK.", 409);
+      await this.control(device, "close", undefined, undefined, { pinTransport: true });
+    }
+    let ownership: SimulatorLaunchOwnership | undefined;
+    let removedApps = 0;
+    let failure: unknown;
+    let restoreFailure: unknown;
+    try {
+      if (action === "reset" || initial.state === "shutdown") {
+        await this.control(device, "launch", async (owned) => {
+          ownership = owned;
+        }, undefined, { wipeData: action === "reset", headless: true, requireStopped: true });
+      }
+      const target = await this.resolve(device);
+      if (!target || target.connection.type !== "adb")
+        fail("emulator-offline", "The emulator is unavailable during cleanup.", 409);
+      // Verify identity on the same immutable transport used by every mutation.
+      // A replacement AVD reusing this serial receives a different transport ID.
+      const { args } = await freezeAdbTransport(target, this.adb(), this.execute);
+      if (ownership && (await this.currentOwnershipMarker(device, target.connection.serial, ownership, args)) !== ownership.marker)
+        fail("emulator-ownership-missing", "The temporary emulator was replaced during cleanup. No further apps will be removed.", 409);
+      if (action === "uninstall-apps") {
+        // Older Android releases silently return an empty package list for
+        // --user all. Enumerate numeric user IDs so every profile is covered.
+        const users = await this.execute(this.adb(), [...args, "shell", "pm", "list", "users"], 30000);
+        if (users.stderr.trim())
+          fail("app-list-invalid", `Android could not list all user profiles: ${users.stderr.trim().slice(-600)}`, 502);
+        const userIds = new Set<string>();
+        for (const line of users.stdout.toString().split(/\r?\n/).map((value) => value.trim()).filter(Boolean)) {
+          if (line === "Users:") continue;
+          const match = /^UserInfo\{(\d+):.*\}(?:\s+.*)?$/.exec(line);
+          if (!match)
+            fail("app-list-invalid", "Android returned an invalid user-profile list. No apps were removed.", 502);
+          userIds.add(match[1]);
+        }
+        if (!userIds.size)
+          fail("app-list-invalid", "Android returned no user profiles. No apps were removed.", 502);
+        const packages = new Set<string>();
+        for (const userId of userIds) {
+          // -3 excludes system packages; adb uninstall removes each package for all users.
+          const listed = await this.execute(this.adb(), [...args, "shell", "pm", "list", "packages", "-3", "--user", userId], 30000);
+          if (listed.stderr.trim())
+            fail("app-list-invalid", `Android could not list apps for user ${userId}: ${listed.stderr.trim().slice(-600)}`, 502);
+          for (const line of listed.stdout.toString().split(/\r?\n/).map((value) => value.trim()).filter(Boolean)) {
+            const match = /^package:([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)$/.exec(line);
+            if (!match)
+              fail("app-list-invalid", "Android returned an invalid installed-app list. No apps were removed.", 502);
+            packages.add(match[1]);
+          }
+        }
+        const errors: string[] = [];
+        for (const appId of packages) {
+          try {
+            const result = await this.execute(this.adb(), [...args, "uninstall", appId], 60000);
+            if (result.stdout.toString().trim() !== "Success")
+              throw new Error((result.stdout.toString().trim() || result.stderr.trim() || "Uninstall did not report success").slice(-400));
+            removedApps++;
+          } catch (error) {
+            errors.push(`${appId}: ${(error as Error).message}`);
+          }
+        }
+        if (errors.length)
+          fail("app-uninstall-failed", `${errors.length} app${errors.length === 1 ? "" : "s"} could not be removed. ${errors.slice(0, 5).join("; ")}`, 502);
+      }
+    } catch (error) {
+      failure = error;
+    } finally {
+      if (ownership) {
+        try {
+          await this.control(device, "close", undefined, ownership, { pinTransport: true });
+        } catch (error) {
+          restoreFailure = error;
+        }
+      }
+      this.readyBoots.delete(device.id);
+    }
+    if (failure || restoreFailure) {
+      const detail = [
+        failure && (failure as Error).message,
+        restoreFailure && `Could not close the temporary emulator: ${(restoreFailure as Error).message}`,
+      ].filter(Boolean).join(" ");
+      fail("device-cleanup-failed", `${action === "uninstall-apps" ? `Removed ${removedApps} app${removedApps === 1 ? "" : "s"}. ` : "Reset did not finish. "}${detail}`, 502);
+    }
+    return action === "reset"
+      ? { state: "shutdown" as const, warning: "Android reset clears apps, settings and internal user data. Any separate SD-card image is preserved." }
+      : { removedApps, state: initial.state };
   }
 }

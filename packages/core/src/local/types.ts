@@ -239,6 +239,12 @@ export const supportsSimulatorLifecycle = (d: DeviceConfig) =>
 export const canLaunchSimulator = (d: DeviceConfig) =>
   supportsSimulatorLifecycle(d) &&
   (d.connection.type !== "adb" || Boolean(d.connection.avdName));
+export const supportsDeviceCleanup = supportsSimulatorLifecycle;
+export const deviceCleanupActionSchema = z.enum(["uninstall-apps", "reset"]);
+export type DeviceCleanupAction = z.infer<typeof deviceCleanupActionSchema>;
+export type DeviceCleanupResult =
+  | { id: string; ok: true; removedApps?: number; state?: "booted" | "shutdown"; warning?: string }
+  | { id: string; ok: false; error: string };
 export type Source = SourceConfig & {
   status: "connected" | "missing" | "unknown";
   detail?: string;
@@ -480,6 +486,14 @@ export const operations = {
       deviceId: z.string().min(1),
       action: z.enum(["launch", "close"]),
       confirmed: z.literal(true).optional(),
+    })
+    .strict(),
+  "devices.cleanup": z
+    .object({
+      ids: z.array(z.string().min(1)).min(1).max(100),
+      action: deviceCleanupActionSchema,
+      confirmed: z.literal(true),
+      revision: z.string().min(1).optional(),
     })
     .strict(),
   "devices.wake": z
