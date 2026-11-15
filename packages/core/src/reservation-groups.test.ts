@@ -104,3 +104,21 @@ test("selectors match exact model and runtime identifiers case-insensitively", (
   assert.deepEqual(matchDevices([phone, older, tv], [], { runtime: "tvOS-26-2" }).map((d) => d.id), ["tv"]);
   assert.deepEqual(matchDevices([device("bare", "touch", [])], [], { runtime: "iOS-26-2" }), []);
 });
+
+test("an offline request recycles a running warm device only when no stopped device fits", () => {
+  const warm = device("a-warm", "touch", ["ci"], true);
+  const stopped = device("b-stopped", "touch", ["ci"]);
+  const userBooted = device("c-user", "touch", ["ci"], true);
+  const requests = { phone: { selector: { tags: ["ci"], state: "offline" as const } } };
+  const recyclable = (d: Device) => d.id === warm.id;
+  assert.equal(
+    matchReservationGroup([warm, stopped, userBooted], [], requests, undefined, recyclable)?.phone.id,
+    stopped.id,
+  );
+  assert.equal(
+    matchReservationGroup([warm, userBooted], [], requests, undefined, recyclable)?.phone.id,
+    warm.id,
+  );
+  assert.equal(matchReservationGroup([userBooted], [], requests, undefined, recyclable), undefined);
+  assert.equal(matchReservationGroup([warm], [], requests), undefined);
+});

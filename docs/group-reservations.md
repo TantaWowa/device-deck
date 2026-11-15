@@ -100,7 +100,7 @@ Always release in the job's unconditional cleanup:
 devdeck release "$RUNNER_TEMP/device-reservation.json"
 ```
 
-Release requires the group credential, is idempotent, closes every member session, and shuts down only virtual devices that this group cold-started. Virtual devices that were already running stay running. If the prewritten credential exists but admission definitely failed before creating a group, CLI release reports `not-found` successfully. An incorrect credential for an existing group still fails.
+Release requires the group credential, is idempotent, and closes every member session. Virtual devices that this group cold-started stay booted in the [warm pool](simulator-controls.md#warm-pool) for the next reservation; with the warm pool disabled they are shut down on release. Virtual devices that were already running stay running. A request with `"state": "offline"` still gets a cold start (`startedByGroup: true`). If the prewritten credential exists but admission definitely failed before creating a group, CLI release reports `not-found` successfully. An incorrect credential for an existing group still fails.
 
 Long-running agent work can extend the shared expiry:
 

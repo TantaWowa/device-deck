@@ -19,6 +19,7 @@ import {
   type Artifact,
   type ReservationGroup,
   type SimulatorLaunchOwnership,
+  type WarmDevice,
   fail,
 } from "../../../../packages/core/src/local/types";
 const hash = (token: string) =>
@@ -42,6 +43,7 @@ export class Store {
       CREATE TABLE IF NOT EXISTS workers(artifact_id TEXT PRIMARY KEY, payload TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS interaction_ownership(session_id TEXT PRIMARY KEY, payload TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS reservation_groups(id TEXT PRIMARY KEY, state TEXT NOT NULL, token_hash TEXT NOT NULL, payload TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS warm_devices(device_id TEXT PRIMARY KEY, payload TEXT NOT NULL);
       PRAGMA user_version=1;`);
   }
   transaction<T>(action: () => T) {
@@ -321,6 +323,9 @@ export class Store {
       if (!member)
         fail("group-member-not-found", "Reservation group member not found.", 404);
       member.startedByGroup = startedByGroup;
+      // A new launch supersedes any warm-pool record for the same device; the
+      // group's own ownership now decides how it is shut down.
+      if (startedByGroup) this.dropWarmDevice(member.deviceId);
       if (startedByGroup && simulatorLaunch)
         member.simulatorLaunch = simulatorLaunch;
       if (!startedByGroup) delete member.simulatorLaunch;
@@ -361,6 +366,24 @@ export class Store {
       return group;
     });
   }
+  warmDevices() {
+    return (this.db.prepare("SELECT payload FROM warm_devices").all() as { payload: string }[])
+      .map((row) => JSON.parse(row.payload) as WarmDevice);
+  }
+  warmDevice(deviceId: string) {
+    const row = this.db.prepare("SELECT payload FROM warm_devices WHERE device_id=?").get(deviceId) as { payload: string } | undefined;
+    return row ? JSON.parse(row.payload) as WarmDevice : undefined;
+  }
+  putWarmDevice(value: WarmDevice) {
+    this.db.prepare("INSERT OR REPLACE INTO warm_devices VALUES (?,?)").run(value.deviceId, JSON.stringify(value));
+  }
+  touchWarmDevice(deviceId: string, at = Date.now()) {
+    const current = this.warmDevice(deviceId);
+    if (current) this.putWarmDevice({ ...current, lastUsedAt: at });
+  }
+  dropWarmDevice(deviceId: string) {
+    this.db.prepare("DELETE FROM warm_devices WHERE device_id=?").run(deviceId);
+  }
   putSession(s: Session) {
     this.db
       .prepare("UPDATE sessions SET state=?,payload=? WHERE id=?")
@@ -371,6 +394,9 @@ export class Store {
       this.db.prepare("SELECT reason FROM locks WHERE device_id=?").get(id) as
         { reason: string } | undefined
     )?.reason;
+  }
+  clearLocks(reason: string) {
+    this.db.prepare("DELETE FROM locks WHERE reason=?").run(reason);
   }
   lock(id: string, reason: string | null) {
     if (reason === null)

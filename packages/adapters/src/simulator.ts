@@ -2,11 +2,13 @@ import path from "node:path";
 import { stat } from "node:fs/promises";
 import { fail, type DeviceConfig } from "../../core/src/local/types";
 import { run } from "./process";
+import { idbInput, type IdbInput } from "./idb-input";
 
 export type SimulatorState =
   "booted" | "shutdown" | "starting" | "stopping" | "unavailable";
 export const SIMULATOR_UNAVAILABLE_MESSAGE =
   "This simulator, its runtime, or its CoreSimulator data directory is unavailable. Check runner storage and Xcode, then rediscover devices.";
+export const READINESS_PROBE_MS = 10000;
 type Runner = typeof run;
 type SimctlDevice = {
   udid?: unknown;
@@ -67,7 +69,9 @@ export async function simulatorState(
       try {
         // CoreSimulator reports Booted before SpringBoard finishes startup.
         // Without -b this only observes the exact UDID; it cannot boot a device.
-        await execute("xcrun", ["simctl", "bootstatus", connection.udid], 2000);
+        // A ready simulator answers in well under a second, but a busy host
+        // can take several; a short limit refuses input to a ready device.
+        await execute("xcrun", ["simctl", "bootstatus", connection.udid], READINESS_PROBE_MS);
         return "booted";
       } catch { return "starting"; }
     }
@@ -181,7 +185,9 @@ export async function controlSimulator(
       if ((await simulatorState(device, execute)) !== "shutdown") throw error;
     }
   }
-  const current = await simulatorState(device, execute);
+  // A launch has just waited for `bootstatus -b`. Repeating the 2-second
+  // readiness probe here fails a finished boot whenever the host is busy.
+  const current = await simulatorState(device, execute, action !== "launch");
   const expected = action === "launch" ? "booted" : "shutdown";
   if (current !== expected)
     fail(
@@ -203,6 +209,7 @@ export async function wakeSimulator(
   device: DeviceConfig,
   idb: string,
   execute: Runner = run,
+  input: IdbInput = idbInput,
 ) {
   if ((await simulatorState(device, execute)) !== "booted")
     fail(
@@ -213,6 +220,6 @@ export async function wakeSimulator(
   if (device.connection.type !== "simulator")
     fail("unsupported-capability", "This is not an Apple simulator.");
   // HOME is intentional: LOCK and SIDE_BUTTON can put an awake screen to sleep.
-  await execute(idb, ["ui", "button", "HOME", "--udid", device.connection.udid]);
+  await input.run(idb, ["ui", "button", "HOME", "--udid", device.connection.udid], { execute });
   return { method: "Simulator Home button" };
 }

@@ -75,6 +75,10 @@ class TestAdapters extends Adapters {
     this.wakes.push(d.id);
     return { method: "Fixture wake" };
   }
+  memoryLevel = "1";
+  async memoryPressureLevel() {
+    return this.memoryLevel;
+  }
 }
 class TestCapture extends CaptureEngine {
   verifiedDevice?: DeviceConfig;
@@ -182,6 +186,12 @@ const reserve = (deck: DeckService, device = "one") =>
     owner: "same label",
     reason: "test",
   }) as Promise<{ session: { id: string }; leaseToken: string }>;
+/** These tests cover the restore-on-release path, used when the warm pool is off. */
+async function restoreOnRelease(deck: DeckService) {
+  const c = structuredClone(deck.config.config);
+  c.settings.warmPool = { enabled: false, idleMinutes: 240, memoryPressure: true };
+  await deck.execute("config.save", { config: c, revision: deck.config.revision });
+}
 async function useSimulator(deck: DeckService) {
   const c = structuredClone(deck.config.config);
   c.devices[0].platform = "Apple";
@@ -214,6 +224,7 @@ test("group reservation cold-starts, authenticates, restores and releases idempo
   let running = false;
   const actions: string[] = [];
   try {
+    await restoreOnRelease(deck);
     await useSimulator(deck);
     const current = structuredClone(deck.config.config);
     current.devices[0].tags = ["ci"];
@@ -406,6 +417,159 @@ test("group reservation waits for a warm emulator identity without owning its li
   }
 });
 
+/** Two Apple simulators whose boot state follows the fake lifecycle. */
+async function useWarmPoolSimulators(deck: DeckService, adapters: TestAdapters, running = new Set<string>()) {
+  const current = structuredClone(deck.config.config);
+  for (const [index, device] of current.devices.entries()) {
+    device.platform = "Apple";
+    device.connection = {
+      type: "simulator",
+      os: "ios",
+      udid: index ? "7829DB75-6928-4E9C-982A-4AF899FA404D" : "F4B9CA01-BA57-40A0-984D-38B7F91AB8A1",
+    };
+  }
+  await deck.execute("config.save", { config: current, revision: deck.config.revision });
+  const actions: string[] = [];
+  adapters.inspect = async (device) => ({
+    ...device,
+    online: running.has(device.id),
+    locked: false,
+    healthDetail: running.has(device.id) ? "Ready" : "Stopped",
+    capabilities: [],
+    simulatorState: running.has(device.id) ? "booted" : "shutdown",
+  });
+  adapters.simulator = async (device, action, beforeLaunch) => {
+    if (action === "launch") await beforeLaunch?.();
+    actions.push(`${action}:${device.id}`);
+    if (action === "launch") running.add(device.id);
+    else running.delete(device.id);
+    return { deviceId: device.id, action, state: action === "launch" ? "booted" as const : "shutdown" as const, changed: true };
+  };
+  return { actions, running };
+}
+const reserveWarmGroup = (deck: DeckService, groupId: string, selector: Record<string, unknown>) =>
+  deck.execute("sessions.reserveGroup", {
+    version: 1,
+    groupId,
+    leaseToken: groupId.replace(/\W/g, "x").padEnd(43, "w"),
+    owner: "CI",
+    reason: "Warm pool",
+    requests: { device: { selector } },
+  }) as Promise<any>;
+const releaseWarmGroup = (deck: DeckService, reserved: any) =>
+  deck.execute("sessions.releaseGroup", { groupId: reserved.groupId, leaseToken: reserved.leaseToken });
+
+test("warm pool keeps a released cold start booted, reuses it without a launch and refreshes its use time", async () => {
+  const { deck, adapters, cleanup } = await setup();
+  try {
+    const { actions, running } = await useWarmPoolSimulators(deck, adapters);
+    const first = await reserveWarmGroup(deck, "test/warm/first", { device: "one" });
+    assert.equal(first.devices.device.startedByGroup, true);
+    const releasedAt = Date.now();
+    await releaseWarmGroup(deck, first);
+    assert.deepEqual(actions, ["launch:one"]);
+    assert.ok(running.has("one"), "release leaves the cold-started simulator booted");
+    const entry = deck.store.warmDevice("one");
+    assert.ok(entry && entry.lastUsedAt >= releasedAt);
+    assert.equal(deck.store.lockReason("one"), undefined, "a successor can reserve immediately");
+    assert.equal(deck.store.events().some((event) => event.action === "simulator-close"), false);
+
+    deck.store.putWarmDevice({ ...entry!, lastUsedAt: 1 });
+    const second = await reserveWarmGroup(deck, "test/warm/second", { platform: "Apple" });
+    assert.equal(second.devices.device.id, "one", "a free booted device is preferred over a cold start");
+    assert.equal(second.devices.device.startedByGroup, false);
+    assert.deepEqual(actions, ["launch:one"]);
+    await deck.reapWarmPool();
+    assert.deepEqual(actions, ["launch:one"], "a reserved warm device is never reaped");
+    await releaseWarmGroup(deck, second);
+    assert.ok(deck.store.warmDevice("one")!.lastUsedAt >= releasedAt, "release refreshes the last use time");
+    assert.ok(running.has("one"));
+  } finally {
+    await cleanup();
+  }
+});
+
+test("warm pool reaper closes an idle Android emulator with its saved launch ownership", async () => {
+  const { deck, adapters, cleanup } = await setup();
+  const ownership: SimulatorLaunchOwnership = { type: "android-emulator", avdName: "Television_1080p", marker: "w".repeat(32) };
+  let running = false;
+  let closedWith: SimulatorLaunchOwnership | undefined;
+  try {
+    await useAndroidAvd(deck);
+    adapters.inspect = async (device) => ({
+      ...device,
+      online: device.id === "one" ? running : false,
+      locked: false,
+      healthDetail: "Fixture",
+      capabilities: [],
+      simulatorState: device.id === "one" && running ? "booted" : "shutdown",
+    });
+    adapters.verifyIdentity = async (device) => device;
+    adapters.simulator = async (device, action, beforeLaunch, saved) => {
+      if (action === "launch") await beforeLaunch?.(ownership);
+      else closedWith = saved;
+      running = action === "launch";
+      return { deviceId: device.id, action, state: running ? "booted" as const : "shutdown" as const, changed: true };
+    };
+    const reserved = await reserveWarmGroup(deck, "test/warm/android", { device: "one" });
+    await releaseWarmGroup(deck, reserved);
+    assert.deepEqual(deck.store.warmDevice("one")?.simulatorLaunch, ownership);
+    await deck.reapWarmPool();
+    assert.equal(running, true, "a recently used device stays warm");
+    deck.store.putWarmDevice({ ...deck.store.warmDevice("one")!, lastUsedAt: Date.now() - 241 * 60_000 });
+    await deck.reapWarmPool();
+    assert.equal(running, false);
+    assert.deepEqual(closedWith, ownership);
+    assert.equal(deck.store.warmDevice("one"), undefined);
+    assert.equal(deck.store.lockReason("one"), undefined);
+    assert.match(
+      deck.store.events().find((event) => event.action === "simulator-close")?.detail || "",
+      /idle/,
+    );
+  } finally {
+    await cleanup();
+  }
+});
+
+test("an offline request prefers a stopped simulator, then recycles an idle warm one as a cold start", async () => {
+  const { deck, adapters, cleanup } = await setup();
+  try {
+    const { actions, running } = await useWarmPoolSimulators(deck, adapters);
+    await releaseWarmGroup(deck, await reserveWarmGroup(deck, "test/warm/seed", { device: "one" }));
+    assert.ok(deck.store.warmDevice("one"));
+
+    const fresh = await reserveWarmGroup(deck, "test/warm/fresh", { platform: "Apple", state: "offline" });
+    assert.equal(fresh.devices.device.id, "two", "a genuinely shut-down device is used first");
+    assert.equal(fresh.devices.device.startedByGroup, true);
+    assert.deepEqual(actions, ["launch:one", "launch:two"]);
+    await releaseWarmGroup(deck, fresh);
+    assert.deepEqual([...running].sort(), ["one", "two"]);
+
+    const recycled = await reserveWarmGroup(deck, "test/warm/recycled", { device: "one", state: "offline" });
+    assert.equal(recycled.devices.device.id, "one");
+    assert.equal(recycled.devices.device.startedByGroup, true);
+    assert.deepEqual(actions, ["launch:one", "launch:two", "close:one", "launch:one"]);
+    assert.equal(deck.store.warmDevice("one"), undefined, "the reservation now owns the new launch");
+    assert.match(
+      deck.store.events().find((event) => event.action === "simulator-close")?.detail || "",
+      /Recycled warm device/,
+    );
+    await releaseWarmGroup(deck, recycled);
+    assert.ok(deck.store.warmDevice("one"));
+    assert.ok(running.has("one"));
+
+    // A running simulator the pool does not own is never recycled.
+    deck.store.dropWarmDevice("two");
+    await assert.rejects(
+      reserveWarmGroup(deck, "test/warm/unowned", { device: "two", state: "offline" }),
+      (error) => (error as any).code === "group-no-match",
+    );
+    assert.ok(running.has("two"));
+  } finally {
+    await cleanup();
+  }
+});
+
 test("parallel cold AVD starts retry while a sibling launch identity is pending", async () => {
   const { deck, adapters, cleanup } = await setup(false, {
     timeoutMs: 1_000,
@@ -427,6 +591,7 @@ test("parallel cold AVD starts retry while a sibling launch identity is pending"
   const actualLaunches: string[] = [];
   let secondControlAttempts = 0;
   try {
+    await restoreOnRelease(deck);
     const current = structuredClone(deck.config.config);
     current.devices[0].connection = {
       type: "adb",
@@ -537,6 +702,7 @@ test("a cold start keeps ownership while its spawned AVD identity becomes readab
   let launches = 0;
   let closes = 0;
   try {
+    await restoreOnRelease(deck);
     await useAndroidAvd(deck);
     adapters.inspect = async (device) => ({
       ...device,
@@ -1251,6 +1417,7 @@ test("failed group cleanup protects config and maintenance state until retry suc
   let running = false;
   let closeAttempts = 0;
   try {
+    await restoreOnRelease(deck);
     await useSimulator(deck);
     adapters.inspect = async (device) => ({
       ...device,
@@ -1333,6 +1500,7 @@ test("group expiry closes every member and restores only virtuals cold-started b
   const running = new Set<string>(["two"]);
   const actions: string[] = [];
   try {
+    await restoreOnRelease(deck);
     const current = structuredClone(deck.config.config);
     for (const [index, device] of current.devices.entries()) {
       device.platform = "Apple";
@@ -1455,6 +1623,7 @@ test("restart recovery restores a cold-started group and clears its cleanup lock
   let running = false;
   let recovered: DeckService | undefined;
   try {
+    await restoreOnRelease(deck);
     await useSimulator(deck);
     adapters.inspect = async (device) => ({
       ...device,
@@ -1534,6 +1703,7 @@ test("restart recovery retains Android launch ownership for offline cleanup", as
   let recovered: DeckService | undefined;
   let recoveredOwnership: SimulatorLaunchOwnership | undefined;
   try {
+    await restoreOnRelease(deck);
     await useAndroidAvd(deck);
     adapters.inspect = async (device) => ({
       ...device,

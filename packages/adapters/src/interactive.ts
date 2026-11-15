@@ -2,6 +2,7 @@ import type { DeviceConfig } from "../../core/src/local/types";
 import { DeckError } from "../../core/src/local/types";
 import type { GestureCapability, GestureInput, InteractiveSource } from "../../core/src/live";
 import { available, run } from "./process";
+import { idbInput, type IdbInput } from "./idb-input";
 import { validatePoint } from "./scrcpy-protocol";
 
 export const IOS_GESTURES: GestureCapability[] = ["tap", "swipe", "longPress"];
@@ -42,7 +43,7 @@ export function idbGestureArgs(gesture: GestureInput, screen: Screen, udid: stri
 
 export async function startIdbInteractive(
   device: DeviceConfig, idb: string, control: boolean,
-  execute = run, hasTool = available,
+  execute = run, hasTool = available, input: IdbInput = idbInput,
 ): Promise<InteractiveSource> {
   const connection = device.connection;
   if (connection.type !== "simulator" || connection.os !== "ios")
@@ -71,7 +72,7 @@ export async function startIdbInteractive(
         screen = await describe();
         if (closed) return;
         const args = idbGestureArgs(gesture, screen, connection.udid);
-        await execute(idb, args, 15000);
+        await input.run(idb, args, { timeout: 15000, execute });
       })();
       try { await pending; } finally { pending = undefined; }
     },

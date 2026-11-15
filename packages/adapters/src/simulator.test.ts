@@ -87,7 +87,6 @@ test("simulator launch boots the configured UDID, waits for readiness, and opens
     [
       ["simctl", "boot", "F4B9CA01-BA57-40A0-984D-38B7F91AB8A1"],
       ["simctl", "bootstatus", "F4B9CA01-BA57-40A0-984D-38B7F91AB8A1", "-b"],
-      ["simctl", "bootstatus", "F4B9CA01-BA57-40A0-984D-38B7F91AB8A1"],
     ],
   );
   assert.deepEqual(calls.find((c) => c.command === "/usr/bin/open")?.args, [
@@ -156,13 +155,38 @@ test("parallel simulator launches are not failed by independent GUI presentation
   assert.match(results[0].warning || "", /-600/);
   assert.match(results[1].warning || "", /EINVAL/);
 });
+test("a launch that finished booting succeeds when the short readiness probe is slow", async () => {
+  for (const initial of ["Shutdown", "Booted"]) {
+    const base = fixture(initial);
+    const execute: typeof run = async (command, args, timeout) => {
+      // A busy host can exceed the 2-second observation limit after the boot wait completed.
+      if (args[1] === "bootstatus" && args.length === 3) throw new Error("Timed out after 2 seconds.");
+      return base.execute(command, args, timeout);
+    };
+    const result = await controlSimulator(simulator, "launch", execute);
+    assert.equal(result.state, "booted");
+    assert.equal(result.changed, initial === "Shutdown");
+  }
+});
+test("a launch still fails when CoreSimulator does not report the simulator booted", async () => {
+  const base = fixture();
+  let waited = false;
+  const execute: typeof run = async (command, args, timeout) => {
+    const result = await base.execute(command, args, timeout);
+    if (args[1] === "bootstatus") { waited = true; return result; }
+    if (waited && args[1] === "list")
+      return { stdout: Buffer.from(result.stdout.toString().replace('"state":"Booted"', '"state":"Shutting Down"')), stderr: "" };
+    return result;
+  };
+  await assert.rejects(controlSimulator(simulator, "launch", execute), /Simulator is stopping/);
+});
 test("an externally booted simulator remains starting until its system apps are ready", async () => {
   const base = fixture("Booted");
   let ready = false;
   const execute: typeof run = async (command, args, timeout) => {
     if (args[1] === "bootstatus") {
       assert.equal(args.length, 3, "health checks must not use the boot flag");
-      assert.equal(timeout, 2000);
+      assert.equal(timeout, 10000);
       if (!ready) throw new Error("System apps still starting");
     }
     return base.execute(command, args, timeout);

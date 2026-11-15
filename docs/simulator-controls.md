@@ -29,6 +29,55 @@ devdeck call devices.simulator '{"deviceId":"YOUR_CONFIGURED_SIMULATOR_ID","acti
 
 The MCP tool is `devices_simulator`. Successful responses include `deviceId`, `action`, `state` (`booted` or `shutdown`) and `changed`; Android launch also returns its resolved `serial`. Repeating launch does not reboot an already running virtual device, and repeating close on a stopped device succeeds without another shutdown. Apple launch also attempts to bring its Simulator window forward. If only that presentation step fails, the successful response includes a `warning`; simulator lifecycle and readiness remain successful.
 
+## Warm pool
+
+Booting a simulator or emulator from cold takes time, so Device Deck keeps the
+virtual devices it starts running after their reservation ends. When a
+[reservation group](group-reservations.md) that cold-started a device is
+released or expires, the device stays booted and joins the warm pool. It is
+unlocked straight away, and the next reservation that matches it uses it without
+another boot (its `startedByGroup` is `false`, as for any device that was
+already running).
+
+Only devices that Device Deck itself started are ever in the pool. A simulator
+you booted from Xcode, or an emulator you started yourself, is never shut down
+by the pool. Closing a pool device with **Close sim** removes it from the pool.
+Stopping or restarting the daemon leaves pool devices running, and the pool is
+remembered across restarts.
+
+The pool shuts a device down only when it is not reserved, not locked, has no
+open viewer and is not already starting or closing, and one of these applies:
+
+1. **Idle**: it has not been used for `idleMinutes` (default 240).
+2. **Pool limit**: more virtual devices are booted than `maxBooted`. Every
+   booted simulator and emulator counts, including ones the pool does not own,
+   but only pool devices are shut down, least recently used first.
+3. **Memory pressure**: macOS reports memory pressure
+   (`sysctl -n kern.memorystatus_vm_pressure_level`). At the critical level
+   one pool device is shut down per minute. At the warning level, which a busy
+   development Mac can report for hours, only a pool device unused for 30
+   minutes is shut down, one per minute. If the level cannot be
+   read it counts as normal.
+
+The pool checks these rules every minute and after each group release. Each
+shutdown is logged as a `simulator-close` event that names the reason.
+
+A request whose selector has `"state": "offline"` still gets a cold start. Device Deck uses a device that is already shut
+down when one matches. Otherwise it shuts down a matching idle pool device and
+boots it again for the reservation, which then reports `startedByGroup: true`.
+A running device that is not in the pool is never restarted this way.
+
+Configure the pool under `settings.warmPool` in the config file:
+
+```json
+"warmPool": { "enabled": true, "idleMinutes": 240, "maxBooted": 4, "memoryPressure": true }
+```
+
+All fields are optional. `maxBooted` defaults to one booted device per 6 GB of
+the Mac's memory, with a minimum of two. Set `"enabled": false` to shut
+cold-started devices down on release, as earlier versions did; devices
+already in the pool are then shut down at the next check.
+
 ## Capture while the Mac is locked
 
 A macOS desktop-control failure does not establish that simulator capture or input
@@ -62,3 +111,38 @@ permissions are separate observations. The owning macOS account still needs its
 supported logged-in simulator environment. If a direct operation fails, retain
 its exact command/error, try a supported alternative, and report only the blocked
 journey. Do not bypass authentication, switch accounts or unlock the Mac automatically.
+
+## Simulator input stops working after a relaunch
+
+**Symptom.** Taps, swipes, text and keys on an Apple simulator fail every time
+with an error like `The dtuhidd connection (com.apple.coredevice.feature.remote.hid.digitizer)
+has been invalidated; events sent on it would be discarded`, or `The dtuhidd connection
+was interrupted during the gesture`. Screenshots, accessibility reads and
+`idb describe` still work.
+
+**Cause.** `idb` keeps one long-running `idb_companion` per simulator. Newer
+companion builds keep a dead input connection after their simulator is shut down
+and booted again, and never recover until that companion process exits. Nothing
+is delivered while it is in this state.
+
+**What Device Deck does.** Every simulator input (remote keys and text, taps,
+iOS gestures and wake) goes through one helper. When input fails with that error,
+Device Deck stops only the `idb_companion` started for that simulator's UDID,
+runs `idb disconnect UDID` so idb forgets it, and retries the input once. idb
+then starts a fresh companion. Other errors are not retried. If the retry fails
+the same way, the input returns `input-unavailable` (HTTP 503), and the device
+stops advertising key, text and touch input until an input succeeds or the
+simulator is relaunched. Restarting the companion also ends any iOS live video
+for that simulator; reopen the viewer to start a new stream.
+
+**Manual fallback.** Shut down and relaunch the simulator through its reservation,
+then send input again. If it still fails, update `idb_companion`. To stop a stale
+companion yourself, end only the process whose command line has
+`--udid YOUR_UDID`, then run `idb disconnect YOUR_UDID`. Do not use `idb kill`,
+which stops the companions of every simulator.
+
+To check a running simulator repeatedly, run
+`npm run qa:simulator-input -- --udid UDID --os ios` (or `--os tvos`). It sends
+real input to whatever is on screen, prints a pass/fail count per input and
+whether a companion restart happened, and exits non-zero on any failure. It does
+not boot, shut down or reserve the simulator.

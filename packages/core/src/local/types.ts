@@ -100,8 +100,35 @@ export const settingsSchema = z
     captureMode: z.enum(["clean", "annotated"]).default("clean"),
     maxRecordingMinutes: z.number().int().min(1).max(120).default(15),
     previewIntervalMs: z.number().int().min(250).max(5000).default(750),
+    /** Virtual devices Device Deck cold-started stay booted after release. */
+    warmPool: z
+      .object({
+        enabled: z.boolean().default(true),
+        idleMinutes: z.number().int().min(1).max(10080).default(240),
+        // Unset: one booted virtual device per 6 GiB of RAM, at least two.
+        maxBooted: z.number().int().min(1).max(64).optional(),
+        memoryPressure: z.boolean().default(true),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
+export type WarmPoolSettings = {
+  enabled: boolean;
+  idleMinutes: number;
+  maxBooted: number;
+  memoryPressure: boolean;
+};
+export const warmPoolSettings = (
+  settings: z.infer<typeof settingsSchema>,
+  totalMemoryBytes: number,
+): WarmPoolSettings => ({
+  enabled: settings.warmPool?.enabled ?? true,
+  idleMinutes: settings.warmPool?.idleMinutes ?? 240,
+  maxBooted: settings.warmPool?.maxBooted ??
+    Math.max(2, Math.floor(totalMemoryBytes / 2 ** 30 / 6)),
+  memoryPressure: settings.warmPool?.memoryPressure ?? true,
+});
 export const tailscaleSchema = z
   .object({
     origin: z.string().refine((value) => {
@@ -235,6 +262,13 @@ export type SimulatorLaunchOwnership = {
   type: "android-emulator";
   avdName: string;
   marker: string;
+};
+/** A booted virtual device Device Deck started and kept running after its
+ * reservation ended. Only these devices are ever shut down by the warm pool. */
+export type WarmDevice = {
+  deviceId: string;
+  simulatorLaunch?: SimulatorLaunchOwnership;
+  lastUsedAt: number;
 };
 export type ReservationGroupMember = {
   alias: string;
@@ -587,6 +621,9 @@ export function matchReservationGroup(
   requests: ReservationGroupManifest["requests"],
   resourceIdentity: (device: Device) => string | null | undefined =
     (device) => device.captureSourceId,
+  /** Running devices an `offline` request may take by shutting them down and
+   * cold-starting them again. Genuinely stopped devices are preferred. */
+  recyclable: (device: Device) => boolean = () => false,
 ) {
   const busy = new Set(
     sessions.filter((session) => session.state !== "closed").map((session) => session.deviceId),
@@ -595,9 +632,13 @@ export function matchReservationGroup(
     const selector = request.selector.state === "free"
       ? { ...request.selector, state: undefined }
       : request.selector;
-    const candidates = matchDevices(devices, sessions, selector)
+    const recycled = selector.state === "offline"
+      ? matchDevices(devices.filter((device) => device.online && recyclable(device)), sessions, { ...selector, state: undefined })
+      : [];
+    const candidates = [...matchDevices(devices, sessions, selector), ...recycled]
       .filter((device) => !busy.has(device.id) && !device.locked)
-      .sort((a, b) => Number(b.online) - Number(a.online) || a.id.localeCompare(b.id));
+      .sort((a, b) => Number(recycled.includes(a)) - Number(recycled.includes(b)) ||
+        Number(b.online) - Number(a.online) || a.id.localeCompare(b.id));
     return { alias, candidates };
   }).sort((a, b) => a.candidates.length - b.candidates.length || a.alias.localeCompare(b.alias));
   const selected = new Map<string, Device>();
