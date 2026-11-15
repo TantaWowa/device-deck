@@ -142,13 +142,21 @@ npm run package:mac -- --release \
 
 Repeat for `arm64`. Intel imports on Apple silicon require working Rosetta to run the bundled Node and encoder checks. The command checks the clean source commit, version, architecture, size, SHA-256, embedded metadata, package identity, installer scripts, source pins, app layout, library dependencies and ad-hoc code signatures before executing imported code. It rejects linked or writable payloads and unexpected native executables. It preserves the compiled native binaries, signs them locally, refreshes media checksums, seals the app and rebuilds the installer with this checkout's verified scripts. The signed metadata records the original package filename, size, SHA-256 and commit under `sourcePackage`.
 
-Prove each signed result with its own bundled Node, so Intel checks use the Intel runtime even on an Apple silicon signing Mac:
+Prove each signed result with a temporary copy of its bundled Node, so Intel checks use the Intel runtime even on an Apple silicon signing Mac. Run the verifier outside the app bundle: otherwise the installer's running-app check sees the verifier itself and correctly refuses replacement after the test daemon stops. A regular copy preserves the runtime and leaves the signed app unchanged; do not use a symlink.
 
 ```sh
+(
+set -eu
 SIGNED_APP="$HOME/hope-scratch/device-deck-signed/x64/staging/x64/payload/Applications/Device Deck.app"
-"$SIGNED_APP/Contents/Resources/runtime/bin/node" scripts/proof-mac-package.mjs \
+mkdir -p "$HOME/hope-scratch"
+PROOF_RUNTIME=$(mktemp -d "$HOME/hope-scratch/device-deck-proof-runtime.XXXXXX")
+trap 'rm -rf "$PROOF_RUNTIME"' EXIT
+cp "$SIGNED_APP/Contents/Resources/runtime/bin/node" "$PROOF_RUNTIME/node"
+cmp "$SIGNED_APP/Contents/Resources/runtime/bin/node" "$PROOF_RUNTIME/node"
+"$PROOF_RUNTIME/node" scripts/proof-mac-package.mjs \
   --app "$SIGNED_APP" \
   --package "$HOME/hope-scratch/device-deck-signed/x64/device-deck-VERSION-macos-x64.pkg"
+)
 ```
 
 Retain both native CI proof results, local signed-package proof results and GitHub artifact receipts with the release evidence. Run the release artifact integrity gate against the final commit before uploading the two signed installers and their matching sidecars. A translated Intel proof does not replace the native Intel CI proof or clean-Mac acceptance.
