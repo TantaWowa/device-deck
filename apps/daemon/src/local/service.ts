@@ -116,7 +116,6 @@ export class DeckService {
   private timer?: ReturnType<typeof setInterval>;
   private warmTimer?: ReturnType<typeof setInterval>;
   private reaping?: Promise<void>;
-  private pressureWarned = false;
   private shuttingDown = false;
   private changingConfig = false;
   private simulatorActions = new Map<string, "launch" | "close">();
@@ -2492,9 +2491,7 @@ export class DeckService {
         .map((e) => e.deviceId),
       busy: entries.filter((e) => this.warmDeviceBusy(e.deviceId)).map((e) => e.deviceId),
       pressure,
-      warned: this.pressureWarned,
     });
-    this.pressureWarned = decision.warned;
     for (const id of decision.drop)
       if (!this.warmDeviceBusy(id)) this.store.dropWarmDevice(id);
     for (const { deviceId, reason } of decision.close)

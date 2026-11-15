@@ -186,7 +186,7 @@ test("an externally booted simulator remains starting until its system apps are 
   const execute: typeof run = async (command, args, timeout) => {
     if (args[1] === "bootstatus") {
       assert.equal(args.length, 3, "health checks must not use the boot flag");
-      assert.equal(timeout, 2000);
+      assert.equal(timeout, 10000);
       if (!ready) throw new Error("System apps still starting");
     }
     return base.execute(command, args, timeout);

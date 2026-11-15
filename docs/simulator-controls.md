@@ -54,8 +54,9 @@ open viewer and is not already starting or closing, and one of these applies:
    but only pool devices are shut down, least recently used first.
 3. **Memory pressure**: macOS reports memory pressure
    (`sysctl -n kern.memorystatus_vm_pressure_level`). At the critical level
-   one pool device is shut down per minute. At the warning level one is shut
-   down only after two checks in a row report a warning. If the level cannot be
+   one pool device is shut down per minute. At the warning level, which a busy
+   development Mac can report for hours, only a pool device unused for 30
+   minutes is shut down, one per minute. If the level cannot be
    read it counts as normal.
 
 The pool checks these rules every minute and after each group release. Each

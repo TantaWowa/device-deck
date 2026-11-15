@@ -94,6 +94,8 @@ export class IdbInput {
     } catch (error) { problems.push(message(error)); }
     // `idb disconnect UDID` removes only this UDID from idb's companion set.
     try { await execute(idb, ["disconnect", udid], 10000); } catch (error) { problems.push(message(error)); }
+    // The daemon log is the only record of a recovery that then succeeds.
+    console.error(`Restarted idb_companion for simulator ${udid} after a stale HID connection${problems.length ? ` (${problems.join("; ")})` : ""}.`);
     return problems.length ? problems.join("; ") : undefined;
   }
 }

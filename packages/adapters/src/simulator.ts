@@ -8,6 +8,7 @@ export type SimulatorState =
   "booted" | "shutdown" | "starting" | "stopping" | "unavailable";
 export const SIMULATOR_UNAVAILABLE_MESSAGE =
   "This simulator, its runtime, or its CoreSimulator data directory is unavailable. Check runner storage and Xcode, then rediscover devices.";
+export const READINESS_PROBE_MS = 10000;
 type Runner = typeof run;
 type SimctlDevice = {
   udid?: unknown;
@@ -68,7 +69,9 @@ export async function simulatorState(
       try {
         // CoreSimulator reports Booted before SpringBoard finishes startup.
         // Without -b this only observes the exact UDID; it cannot boot a device.
-        await execute("xcrun", ["simctl", "bootstatus", connection.udid], 2000);
+        // A ready simulator answers in well under a second, but a busy host
+        // can take several; a short limit refuses input to a ready device.
+        await execute("xcrun", ["simctl", "bootstatus", connection.udid], READINESS_PROBE_MS);
         return "booted";
       } catch { return "starting"; }
     }

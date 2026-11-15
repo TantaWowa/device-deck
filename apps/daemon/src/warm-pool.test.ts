@@ -18,12 +18,11 @@ const input = (overrides: Partial<WarmPoolInput> = {}): WarmPoolInput => ({
   gone: [],
   busy: [],
   pressure: 1,
-  warned: false,
   ...overrides,
 });
 
 test("warm pool keeps recent devices and closes those idle past the limit", () => {
-  assert.deepEqual(decideWarmPool(input()), { drop: [], close: [], warned: false });
+  assert.deepEqual(decideWarmPool(input()), { drop: [], close: [] });
   const decision = decideWarmPool(input({ entries: [entry("a", 10), entry("b", 241), entry("c", 500)] }));
   assert.deepEqual(decision.close, [
     { deviceId: "c", reason: "idle" },
@@ -79,13 +78,14 @@ test("warm pool drops records of stopped or removed devices and ignores devices 
   assert.deepEqual(decision.close, [{ deviceId: "a", reason: "idle" }]);
 });
 
-test("critical memory pressure closes one device per tick; warning needs two consecutive ticks", () => {
+test("critical memory pressure closes one device per tick; warning closes only a device unused for 30 minutes", () => {
   assert.deepEqual(decideWarmPool(input({ pressure: 4 })).close, [{ deviceId: "c", reason: "memory pressure" }]);
-  const first = decideWarmPool(input({ pressure: 2 }));
-  assert.deepEqual(first, { drop: [], close: [], warned: true });
-  const second = decideWarmPool(input({ pressure: 2, warned: first.warned }));
-  assert.deepEqual(second, { drop: [], close: [{ deviceId: "c", reason: "memory pressure" }], warned: false });
-  assert.deepEqual(decideWarmPool(input({ pressure: 1, warned: true })), { drop: [], close: [], warned: false });
+  // A recently used device survives sustained warning-level pressure.
+  assert.deepEqual(decideWarmPool(input({ pressure: 2 })), { drop: [], close: [] });
+  assert.deepEqual(
+    decideWarmPool(input({ pressure: 2, entries: [entry("a", 10), entry("b", 31), entry("c", 45)] })).close,
+    [{ deviceId: "c", reason: "memory pressure" }],
+  );
   assert.deepEqual(
     decideWarmPool(input({ pressure: 4, settings: { enabled: true, idleMinutes: 240, maxBooted: 4, memoryPressure: false } })).close,
     [],

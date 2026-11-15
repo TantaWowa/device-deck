@@ -14,13 +14,14 @@ export type WarmPoolInput = {
   /** Reserved, locked, viewed, or changing devices. These are never closed. */
   busy: string[];
   pressure: MemoryPressure;
-  /** Whether the previous tick observed warning-level pressure. */
-  warned: boolean;
 };
+/** A busy development Mac reports warning-level pressure for hours. At that
+ * level only a device unused for this long is closed, so warm devices stay
+ * quick to reuse; critical pressure closes one device per tick. */
+export const WARNING_PRESSURE_IDLE_MS = 30 * 60_000;
 export type WarmPoolDecision = {
   drop: string[];
   close: { deviceId: string; reason: WarmPoolReason }[];
-  warned: boolean;
 };
 
 /** Decide which warm-pool devices to shut down this tick, least recently used
@@ -40,17 +41,16 @@ export function decideWarmPool(input: WarmPoolInput): WarmPoolDecision {
   };
   if (!input.settings.enabled) {
     while (take("warm pool disabled"));
-    return { drop, close, warned: false };
+    return { drop, close };
   }
   while (candidates[0] && input.now - candidates[0].lastUsedAt > input.settings.idleMinutes * 60_000)
     take("idle");
   let excess = booted.size - close.length - input.settings.maxBooted;
   while (excess-- > 0 && take("pool limit"));
   const pressure = input.settings.memoryPressure ? input.pressure : 1;
-  let warned = pressure === 2;
-  if (pressure === 4) take("memory pressure");
-  else if (pressure === 2 && input.warned && take("memory pressure")) warned = false;
-  return { drop, close, warned };
+  if (pressure === 4 || (pressure === 2 && candidates[0] &&
+    input.now - candidates[0].lastUsedAt > WARNING_PRESSURE_IDLE_MS)) take("memory pressure");
+  return { drop, close };
 }
 
 /** Parse `sysctl -n kern.memorystatus_vm_pressure_level`; anything unexpected is normal. */
