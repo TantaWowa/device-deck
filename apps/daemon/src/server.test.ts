@@ -2027,6 +2027,11 @@ test("reset removes warm-pool ownership before a later manual boot", async () =>
     const results = await deck.execute("devices.cleanup", { ids: ["one"], action: "reset", confirmed: true }) as any[];
     assert.equal(results[0].ok, true);
     assert.equal(deck.store.warmDevice("one"), undefined);
+    deck.store.putWarmDevice({ deviceId: "one", lastUsedAt: Date.now() });
+    adapters.cleanupDevice = async () => { throw new Error("Erase failed after shutdown"); };
+    const failed = await deck.execute("devices.cleanup", { ids: ["one"], action: "reset", confirmed: true }) as any[];
+    assert.equal(failed[0].ok, false);
+    assert.equal(deck.store.warmDevice("one"), undefined);
   } finally { await cleanup(); }
 });
 

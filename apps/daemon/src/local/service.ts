@@ -1464,6 +1464,9 @@ export class DeckService {
               await this.streams.closeDevice(target.id);
               const source = this.config.config.sources.find((s) => s.id === target.captureSourceId);
               if (source?.kind === "native") await this.capture.closeSource(source);
+              // Reset may stop the device before a later erase step fails.
+              // A subsequent manual boot must not inherit old pool ownership.
+              if (args.action === "reset") this.store.dropWarmDevice(target.id);
               const result = await this.adapters.cleanupDevice(target, args.action);
               if (result.state === "shutdown") this.store.dropWarmDevice(target.id);
               this.store.event({
