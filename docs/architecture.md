@@ -73,8 +73,14 @@ under separate keys. See [Deck sharing](deck-sharing.md) for setup and lifecycle
 
 The `/app/` PWA uses Firebase Auth and the Cloud Run registry in `apps/cloud`. Firestore stores account-owned machine addresses and public identities. Pairing requires a one-use code issued locally and a receipt signed by the machine. The host pins the configured portal key and validates separate 60-second, machine-scoped grants. Firebase ID tokens never go to machines. The cloud does not probe, proxy or tunnel machine traffic; feeds, artifacts and commands travel directly between browser and daemon. Stable machine IDs and in-memory grants isolate clients on machine switches. See [remote access](remote-access.md) for deployment, browser HTTPS requirements and revocation bounds.
 
-## Licensing
+## License and access
+
+Device Deck is MIT licensed and all features are available without activation. Legacy `license.*` operations remain for older clients and report unrestricted access. Local use needs no Device Deck account. The optional portal uses Firebase sign-in for its machine registry.
 
 ## Distribution
 
-The local build bundles the Node entry points and browser assets, plus the Mac helper for the build architecture. The package runs without source checkouts or npm at runtime, using Node 24 and the configured external platform tools. A per-user launchd job runs the daemon at login. The independent website build produces marketing, demo and portal assets for Firebase Hosting. The cloud registry is built and deployed separately; local daemon bundles contain no cloud credentials.
+The local build bundles the Node entry points and browser assets, plus the Mac helper for the build architecture. Mac installers also bundle Node; the application runs without source checkouts or npm at runtime. Device SDKs and pairing tools remain platform-specific dependencies.
+
+Service and media packaging differ between the current public unsigned beta and the next signed release. The [install guide](install.md) records that boundary, and [Mac distribution](macos-distribution.md) describes the build, shared service and update behavior.
+
+The independent website build produces marketing, documentation, demo and portal assets for Firebase Hosting. It renders the Markdown in `docs/` into static pages under `dist/docs/`. The cloud registry is built and deployed separately; local daemon bundles contain no cloud credentials.

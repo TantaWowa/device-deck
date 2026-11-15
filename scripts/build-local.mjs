@@ -27,10 +27,15 @@ execFileSync(
     "native/Info.plist",
     "native/camera.swift",
     "-o",
-    "build/native/deck-camera",
+    "build/native/deck-camera-native",
   ],
   { stdio: "inherit" },
 );
+execFileSync("clang", [
+  "-std=c11", "-D_DARWIN_C_SOURCE", "-Wall", "-Wextra", "-Werror", "-O2", "-target",
+  `${process.arch === "arm64" ? "arm64" : "x86_64"}-apple-macosx14.0`,
+  "native/macos/camera-bridge.c", "-o", "build/native/deck-camera",
+], { stdio: "inherit" });
 await bundle({
   entryPoints: {
     daemon: "apps/daemon/src/index.ts",

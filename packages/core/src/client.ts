@@ -9,14 +9,23 @@ import {
 import { dataDirectory } from "./local/paths";
 import { endpointSchema } from "./hub";
 import { deckRoute } from "./decks";
+import { hasExplicitProfile, readAccountEndpoint, readSharedHost } from "./shared-host";
 export const selectedDeck = () => process.env.DEVICE_DECK_TARGET || "local";
 export async function serviceRequest(route: string, init: RequestInit = {}, deck = selectedDeck()) {
   const ep = await endpoint();
   const headers = new Headers(init.headers);
   headers.set("Authorization", `Bearer ${ep.token}`);
+  headers.set("X-Device-Deck", "local");
   return fetch(`${ep.url}${deckRoute(route, deck)}`, { ...init, headers, redirect: "error" });
 }
 export async function endpoint() {
+  if (process.platform === "darwin" && !hasExplicitProfile()) {
+    const host = await readSharedHost();
+    if (host) {
+      if (host.uid !== process.getuid!()) return validateEndpoint(await readAccountEndpoint(host));
+      return validateEndpoint(JSON.parse(await readFile(path.join(host.profile, "endpoint.json"), "utf8")));
+    }
+  }
   return validateEndpoint(JSON.parse(
     await readFile(path.join(dataDirectory(), "endpoint.json"), "utf8"),
   ));
@@ -55,6 +64,7 @@ export async function callOperation(
       Authorization: `Bearer ${ep.token}`,
       "Content-Type": "application/json",
       "X-Device-Deck-Client": origin,
+      "X-Device-Deck": "local",
     },
     body: JSON.stringify(args),
     signal: AbortSignal.any([AbortSignal.timeout(operation === "devices.cleanup" ? 1_800_000 : operation === "sessions.reserveGroup" ? 600000 : operation === "devices.simulator" ? 300000 : operation === "inventory" ? 30_000 : 180000), ...(signal ? [signal] : [])]),
@@ -138,6 +148,7 @@ export async function browserUrl(query?: URLSearchParams, address?: string) {
     headers: {
       Authorization: `Bearer ${ep.token}`,
       "Content-Type": "application/json",
+      "X-Device-Deck": "local",
     },
     body: JSON.stringify(address ? { address: origin } : {}),
     signal: AbortSignal.timeout(3000),

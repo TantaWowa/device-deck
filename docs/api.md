@@ -14,7 +14,9 @@ Web Devices also offers **Clean up…** per virtual device and **Clean up select
 
 ## CLI walkthrough
 
-Use `./devdeck` in an unpacked release. From source, use `node build/devdeck.mjs` after `npm run build:local`.
+Use `devdeck` with the installed Mac app. Complete [Mac setup](install.md) before connecting a client. If another command with that name is already in your PATH, use `/Applications/Device Deck.app/Contents/MacOS/devdeck` explicitly.
+
+The examples below use `./devdeck` from an unpacked source-build release. From a checkout, use `node build/devdeck.mjs` after `npm run build:local`, with the separate profile described in [development setup](development.md#build-from-source). The installed shared service is started through the app; `./devdeck start` below is for the separate development daemon.
 
 ```sh
 ./devdeck start
@@ -27,7 +29,7 @@ Use `./devdeck` in an unpacked release. From source, use `node build/devdeck.mjs
 
 `remote` with no selector offers an interactive device list. Enter a number or filter text/platform. Arrow keys control the chosen device, Enter selects, `b` goes back, `h` goes home, `t` sends text, `s` saves a screenshot, and `v` toggles recording. `u` renews; `q` asks to release the session and exit. A noninteractive invocation never waits for a picker. Use a unique name or ID in scripts.
 
-The separate `tui` command opens fixed-screen Devices, Feeds, Captures, Sessions, History, Reports, Settings and License menus. Keys 1–8 switch views, arrows select items, Enter opens item actions, and C opens a credential-owned remote. O launches or closes a selected Apple simulator or Android AVD.
+The separate `tui` command opens fixed-screen Devices, Feeds, Captures, Sessions, History, Reports and Settings menus. Keys 1–7 switch views, arrows select items, Enter opens item actions, and C opens a credential-owned remote. O launches or closes a selected Apple simulator or Android AVD.
 
 ```sh
 ./devdeck reserve --device 'Desk TV' --owner 'Agent A' --reason 'Playback regression' --ttl 15 --json
@@ -266,7 +268,22 @@ MCP exposes the same operations as `streams_open`, `streams_ping`, `streams_clos
 
 ## MCP walkthrough
 
-Launch the packaged stdio server using Node 24. Diagnostics go to stderr and protocol messages to stdout.
+For the installed Mac app, configure your MCP client to run the bundled launcher. It uses the app's Node runtime, so no separate Node installation or build-directory path is needed. Clients that accept an `mcpServers` object can use:
+
+```json
+{
+  "mcpServers": {
+    "device-deck": {
+      "command": "/Applications/Device Deck.app/Contents/MacOS/devdeck",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+Complete [Mac setup](install.md) and start the host service first. The shared installation discovers the current Mac account's granted access automatically. Omit `DEVICE_DECK_HOME` and `DEVICE_DECK_CONFIG` to use that installation. Other MCP clients may use a different configuration format; use the same command and argument in their stdio-server settings.
+
+For a source build or isolated development profile, use your own Node 24 executable and built server instead:
 
 ```json
 {
@@ -280,7 +297,7 @@ Launch the packaged stdio server using Node 24. Diagnostics go to stderr and pro
 }
 ```
 
-Omit the environment override to use the default Application Support directory. Start the daemon separately. MCP tool names replace operation dots with underscores, for example `sessions_reserve`, `sessions_reserveGroup`, `remote_input` and `recordings_stop`.
+Set the source-build `DEVICE_DECK_HOME` to the same directory used by your development daemon and start that daemon separately. Diagnostics go to stderr and protocol messages to stdout. MCP tool names replace operation dots with underscores, for example `sessions_reserve`, `sessions_reserveGroup`, `remote_input` and `recordings_stop`.
 
 1. Call `inventory`, then `sessions_reserve` with one selector, owner and reason.
 2. Retain its session ID and lease token. Send them to `remote_input` or `captures_screenshot`.

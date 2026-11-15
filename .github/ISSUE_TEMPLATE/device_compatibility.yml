@@ -1,0 +1,63 @@
+name: Tested-device report
+description: Share what worked and what failed on a specific device or capture card.
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Report only the operations you actually tried. Partial results are useful. If you found a reproducible bug, you can link its bug report here.
+  - type: input
+    id: device-deck
+    attributes:
+      label: Device Deck version and installation method
+      placeholder: "Release version and installer, or source commit"
+    validations:
+      required: true
+  - type: input
+    id: mac
+    attributes:
+      label: macOS version and Mac architecture
+      placeholder: "macOS version, Apple silicon or Intel"
+    validations:
+      required: true
+  - type: textarea
+    id: target
+    attributes:
+      label: Device, OS and connection
+      description: Name the device or simulator model, OS or runtime, and control/capture transport. For a USB capture card, include its make and model and the connected video source. Serial numbers are not needed.
+    validations:
+      required: true
+  - type: input
+    id: date
+    attributes:
+      label: Date tested
+      placeholder: YYYY-MM-DD
+    validations:
+      required: true
+  - type: textarea
+    id: setup
+    attributes:
+      label: Setup and steps
+      description: Describe how someone could repeat the check. Include relevant external tool versions or settings.
+    validations:
+      required: true
+  - type: textarea
+    id: results
+    attributes:
+      label: Operations tried and results
+      description: List what passed, what failed and what you did not try. For a failure, explain the expected and actual behavior.
+      placeholder: |
+        Discovery:
+        Reservation and release:
+        Remote input or touch:
+        Live video:
+        Screenshot:
+        Recording and playback:
+        Disconnect and reconnect:
+        Not tried:
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Relevant diagnostics, captures or linked issues
+      description: Optional. Share redacted devdeck doctor output or a short capture showing the result. Remove tokens, pairing credentials, private addresses, account names and sensitive app content.

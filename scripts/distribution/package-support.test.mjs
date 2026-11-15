@@ -5,7 +5,7 @@ import { promisify } from "node:util";
 import { mkdtemp, mkdir, readFile, readlink, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { appInfo, applicationBuildPayload, numericVersion, postinstall, preinstall, requireReleaseSettings, validateMediaBundle } from "./package-support.mjs";
+import { appInfo, applicationBuildPayload, notaryAuthentication, numericVersion, postinstall, preinstall, requireReleaseSettings, validateMediaBundle } from "./package-support.mjs";
 const exec = promisify(execFile);
 
 test("every application package includes the public reservation client", () => {
@@ -17,7 +17,31 @@ test("public packages cannot silently fall back to unsigned signing", () => {
   const complete = { release: true, mode: "live", applicationIdentity: "Developer ID Application: Team (123)", installerIdentity: "Developer ID Installer: Team (123)", notaryProfile: "device-deck" };
   assert.doesNotThrow(() => requireReleaseSettings(complete));
   for (const field of ["applicationIdentity", "installerIdentity", "notaryProfile"]) assert.throws(() => requireReleaseSettings({ ...complete, [field]: undefined }));
+  assert.throws(() => requireReleaseSettings({ ...complete, installerIdentity: "Developer ID Installer: Another Team (456)" }), /same Apple team/);
+  assert.throws(() => requireReleaseSettings({ ...complete, applicationIdentity: "Developer ID Application: Team" }), /same Apple team/);
   assert.doesNotThrow(() => requireReleaseSettings({ release: false, mode: "test" }));
+});
+
+test("notarization selects exactly one authentication method, preferring a complete API key", () => {
+  const apiKey = { notaryKeyId: "TESTKEY123", notaryIssuer: "test-issuer", notaryKeyPath: "/private/notary/AuthKey.p8" };
+  assert.deepEqual(notaryAuthentication({ notaryProfile: "device-deck" }), ["--keychain-profile", "device-deck"]);
+  const expected = ["--key", apiKey.notaryKeyPath, "--key-id", apiKey.notaryKeyId, "--issuer", apiKey.notaryIssuer];
+  assert.deepEqual(notaryAuthentication(apiKey), expected);
+  assert.deepEqual(notaryAuthentication({ ...apiKey, notaryProfile: "old-profile" }), expected);
+  assert.doesNotThrow(() => requireReleaseSettings({ release: true,
+    applicationIdentity: "Developer ID Application: Team (123)", installerIdentity: "Developer ID Installer: Team (123)", ...apiKey }));
+});
+
+test("partial API key configuration fails even when a saved profile is present", () => {
+  const apiKey = { notaryKeyId: "TESTKEY123", notaryIssuer: "test-issuer", notaryKeyPath: "/private/notary/AuthKey.p8" };
+  const fields = Object.entries(apiKey);
+  for (let mask = 1; mask < 7; mask++) {
+    const partial = Object.fromEntries(fields.filter((_entry, index) => mask & (1 << index)));
+    assert.throws(() => notaryAuthentication(partial), /Set DEVICE_DECK_NOTARY_KEY_ID.*together/);
+    assert.throws(() => notaryAuthentication({ ...partial, notaryProfile: "device-deck" }), /Set DEVICE_DECK_NOTARY_KEY_ID.*together/);
+  }
+  assert.throws(() => notaryAuthentication({ ...apiKey, notaryKeyPath: "AuthKey.p8" }), /absolute path/);
+  assert.throws(() => notaryAuthentication({}), /Public releases require/);
 });
 
 test("prerelease versions preserve release identity and valid Mac numeric versions", () => {

@@ -23,11 +23,26 @@ export function numericVersion(version) {
   return match[1];
 }
 
-export function requireReleaseSettings({ release, mode, applicationIdentity, installerIdentity, notaryProfile }) {
+export function notaryAuthentication({ notaryProfile, notaryKeyId, notaryIssuer, notaryKeyPath }) {
+  if (notaryKeyId || notaryIssuer || notaryKeyPath) {
+    if (!notaryKeyId || !notaryIssuer || !notaryKeyPath)
+      throw new Error("Set DEVICE_DECK_NOTARY_KEY_ID, DEVICE_DECK_NOTARY_ISSUER and DEVICE_DECK_NOTARY_KEY_PATH together for a team App Store Connect API key.");
+    if (!path.isAbsolute(notaryKeyPath)) throw new Error("DEVICE_DECK_NOTARY_KEY_PATH must be an absolute path to the private P8 file.");
+    return ["--key", notaryKeyPath, "--key-id", notaryKeyId, "--issuer", notaryIssuer];
+  }
+  if (notaryProfile) return ["--keychain-profile", notaryProfile];
+  throw new Error("Public releases require DEVICE_DECK_NOTARY_PROFILE or the DEVICE_DECK_NOTARY_KEY_ID, DEVICE_DECK_NOTARY_ISSUER and DEVICE_DECK_NOTARY_KEY_PATH settings.");
+}
+
+export function requireReleaseSettings({ release, mode, applicationIdentity, installerIdentity, ...notary }) {
   if (!release) return;
   if (!applicationIdentity?.startsWith("Developer ID Application:")) throw new Error("Public releases require DEVICE_DECK_APPLICATION_IDENTITY (Developer ID Application).");
   if (!installerIdentity?.startsWith("Developer ID Installer:")) throw new Error("Public releases require DEVICE_DECK_INSTALLER_IDENTITY (Developer ID Installer).");
-  if (!notaryProfile) throw new Error("Public releases require DEVICE_DECK_NOTARY_PROFILE, saved with xcrun notarytool store-credentials.");
+  const applicationTeam = applicationIdentity.match(/ \(([A-Z0-9]+)\)$/)?.[1];
+  const installerTeam = installerIdentity.match(/ \(([A-Z0-9]+)\)$/)?.[1];
+  if (!applicationTeam || !installerTeam || applicationTeam !== installerTeam)
+    throw new Error("Developer ID Application and Installer identities must identify the same Apple team.");
+  notaryAuthentication(notary);
 }
 
 export function appInfo(version) {
@@ -45,6 +60,7 @@ export function appInfo(version) {
 <key>LSUIElement</key><true/>
 <key>NSHighResolutionCapable</key><true/>
 <key>NSCameraUsageDescription</key><string>Device Deck previews and records the capture cards you select.</string>
+<key>NSLocalNetworkUsageDescription</key><string>Device Deck discovers and controls the devices you choose on your local network.</string>
 <key>NSCameraUseContinuityCameraDeviceType</key><true/>
 </dict></plist>\n`;
 }
@@ -66,7 +82,7 @@ if [ -e "$DEVICE_DECK_INSTALLED" ]; then
   # Refuse even idle running instances. Never terminate a capture for an upgrade.
   DEVICE_DECK_PROCESSES=$(/bin/ps -axo command=)
   if echo "$DEVICE_DECK_PROCESSES" | /usr/bin/awk -v app="$DEVICE_DECK_INSTALLED/Contents/" 'index($0, app "MacOS/Device Deck") == 1 || index($0, app "Resources/runtime/bin/node") == 1 { found=1 } END { exit !found }'; then
-    echo "Device Deck is running. Finish reservations and recordings, quit Device Deck, then run devdeck stop before installing this update." >&2
+    echo "Device Deck is running. Open its menu-bar app and choose Check for updates to install safely for all Mac accounts." >&2
     exit 1
   fi
 fi
@@ -93,11 +109,12 @@ exit 0
 
 export function captureSetup(media) {
   return `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Device Deck capture setup</title><style>body{font:17px/1.6 system-ui;max-width:750px;margin:50px auto;padding:0 25px;color:#173048}h1{line-height:1.2}code,pre{background:#edf3f8;border-radius:6px;padding:3px 7px}pre{padding:16px;overflow:auto}a{color:#06709a}</style><h1>Device Deck capture setup</h1>
-<p>Device Deck includes its own Node runtime and Mac camera helper. Open the app, allow Camera access when asked, then use <strong>Devices → Discover → Add selected</strong>.</p>
-${media === "external" ? `<h2>Enable recording and image conversion</h2><p>This team package uses a separate FFmpeg installation for recording, screenshots from USB feeds, and annotations. Live previews work without it. If <code>ffmpeg</code> and <code>ffprobe</code> are missing, install <a href="https://brew.sh">Homebrew</a>, then run:</p><pre>brew install ffmpeg</pre><p>Quit and reopen Device Deck afterwards. Check readiness in the web app’s Settings diagnostics. Homebrew’s standard Apple Silicon and Intel install locations are detected automatically. For a custom installation, set the absolute <code>ffmpeg</code> and <code>ffprobe</code> paths in Settings.</p>` : `<p>This package includes the capture encoder and its dependencies. Their notices and matching source material are in <code>Contents/Resources/media</code> inside the application.</p>`}
-<h2>Only add the platform tools you need</h2><p>Roku control and USB preview require no additional SDK. Android and Fire TV control need <code>adb</code>: install <code>brew install --cask android-platform-tools</code>, enable developer debugging on the device, and accept its authorization prompt. Apple simulators require Xcode and the appropriate downloaded runtimes. Physical Apple TV control requires a Python environment with <a href="https://pyatv.dev/documentation/">pyatv</a>; set that environment’s Python executable in Settings and pair the TV.</p>
-<h2>Keep your work</h2><p>Configuration, licenses and history stay in <code>~/Library/Application Support/Device Deck</code>. Captures default to <code>~/Movies/Device Deck</code>. App installation and removal preserve both. Finish reservations and recordings before upgrading.</p>
-<h2>Command line</h2><pre>devdeck start\ndevdeck ui\ndevdeck tui\ndevdeck service install</pre><p>The installer adds <code>/usr/local/bin/devdeck</code> when that name is available. An existing development launcher is preserved; use <code>/Applications/Device Deck.app/Contents/MacOS/devdeck</code> directly until you explicitly replace your old launcher.</p></html>`;
+<p>Open <strong>Mac setup</strong> from the menu bar. Choose <strong>Start shared service</strong> and approve the macOS administrator prompt. The service starts at boot under the hosting account. Allow other Mac accounts in <strong>Mac account access</strong>.</p>
+${media === "external" ? `<h2>Development build</h2><p>This build uses an external FFmpeg installation. Public installers include the encoder. For developer setup, see the repository's <a href="https://github.com/TantaWowa/device-deck/blob/main/docs/macos-distribution.md">build guide</a>.</p>` : `<p>Recording, screenshots and keypress overlays include their encoder. No Node, Homebrew or Python installation is needed for USB capture or Roku control. Encoder notices and matching source are included inside the application.</p>`}
+<h2>Your first device</h2><p>Choose <strong>Allow Camera access</strong> for USB capture cards, then <strong>Open dashboard</strong>. Choose <strong>Devices → Discover / add devices</strong> and add your devices. Allow Local Network access when macOS asks. Keep the hosting account's menu-bar app open for USB capture.</p>
+<h2>Additional device types</h2><p>Android and Fire TV need <a href="https://developer.android.com/tools/releases/platform-tools">Android platform tools</a> and device debugging approval. Apple simulators need Xcode and the selected runtimes. Physical Apple TV needs pyatv and pairing. These tools are only needed for their device types. Follow the <a href="https://github.com/TantaWowa/device-deck/blob/main/docs/install.md">device setup guide</a>.</p>
+<h2>Updates</h2><p>Choose <strong>Check for updates</strong> in the menu bar, then <strong>Download update</strong>. Choose <strong>Install and reopen</strong>, or <strong>Install when idle</strong> to wait for device sessions. An administrator approves the update for every account on this Mac. Captures and settings are preserved.</p>
+<h2>Where your work lives</h2><p>The hosting account owns configuration and history in <code>~/Library/Application Support/Device Deck</code>. Captures default to its <code>~/Movies/Device Deck</code>. Other allowed accounts connect to the same service without reading the host's private files. The optional CLI, terminal UI and MCP server use that same access automatically.</p></html>`;
 }
 
 export async function walk(directory) {

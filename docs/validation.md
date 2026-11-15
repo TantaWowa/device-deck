@@ -1,18 +1,20 @@
 # Validation and coverage
 
-Validated on 12 September 2026 on an Apple Silicon Mac. The local application is separate from the public simulated demo.
+This page preserves validation recorded for earlier versions, beginning on 12 September 2026 on an Apple Silicon Mac. Test counts and device proofs below apply to those versions. They are not a validation receipt for the current release.
 
-## Version 0.4.0 licensing foundation
+For current behavior, see [live video and touch](live-video-and-touch.md), [physical iOS setup](physical-ios.md), [Deck sharing](deck-sharing.md) and the [install guide](install.md). The local application is separate from the public simulated demo.
 
-The free release is covered by the repository test suite, including concurrent reservations, annotations without activation, legacy configuration compatibility, and public GitHub installer integrity checks. Run `npm test`, `npm run check`, and `npm run test:distribution` for the current results.
+## Automated access checks
+
+The repository includes tests for concurrent reservations, annotations without activation, legacy configuration compatibility and public GitHub installer integrity. Run `npm test`, `npm run check` and `npm run test:distribution` to obtain results for the revision being released. Record that revision alongside the results when reporting current coverage.
 
 ## Version 0.3.0 reports and Capture Cards
 
 Version 0.3.0 had 32 passing tests with no skips. The eight added tests cover local calendar boundaries and daylight saving changes, actual reservation overlap, full-history aggregation, stable USB identities, persisted assignments and reservation guards.
 
-Scoped browser checks cover day/week/month/custom reports, invalid and empty ranges, saved range preferences, hovered and focused selected-period contrast, capture-card assignment conflicts, refresh/reload persistence, device selector consistency and 390-pixel layouts. Local HTTP, CLI and MCP return the same custom-range totals. All 16 public demo QA checks also pass.
+Scoped browser checks covered day/week/month/custom reports, invalid and empty ranges, saved range preferences, hovered and focused selected-period contrast, capture-card assignment conflicts, refresh/reload persistence, device selector consistency and 390-pixel layouts. Local HTTP, CLI and MCP returned the same custom-range totals. All 16 public demo QA checks also passed.
 
-Capture-card assignment was exercised against an isolated service fixture and the simulated demo. No physical card was opened or reassigned for this update. The native helper compiles on the Mac. The real-device evidence below belongs to version 0.2.0 and was not repeated for this scoped update.
+Capture-card assignment was exercised against an isolated service fixture and the simulated demo. No physical card was opened or reassigned for that update. The native helper compiled on the Mac. The real-device evidence below belongs to version 0.2.0 and was not repeated for that scoped update.
 
 ## Version 0.2.0 real device sessions
 
@@ -53,12 +55,14 @@ The fixture test caught and corrected a missing explicit MJPEG input decoder in 
 
 The web configuration test kept an unsaved form open while another API client changed JSON. The stale browser draft was rejected after polling the newer state, and the newer configuration remained intact.
 
-TypeScript and the local/public production builds pass. Generated configuration and operation schemas use the same Zod contracts as the running daemon.
+TypeScript and the local/public production builds passed for that version. Generated configuration and operation schemas used the same Zod contracts as the daemon.
 
-## Untested hardware and limits
+## Hardware proof boundaries
 
-No idle physical target was confirmed for this work. Physical Roku, Android/Android TV/Fire TV, USB capture-card permissions/disconnect/reorder behavior, and Apple TV Companion pairing were not exercised on physical hardware. Those adapter paths are implemented, and their unsupported/missing dependency states are explicit, but their hardware coverage remains unverified. The existing `lab-android-tv` emulator was deliberately left alone because ownership could not be established.
+No idle physical target was confirmed for the version 0.2.0 proof. Physical Roku, Android/Android TV/Fire TV, USB capture-card permissions/disconnect/reorder behavior and Apple TV Companion pairing were not exercised on physical hardware in that run. The existing `lab-android-tv` emulator was left alone because ownership could not be established.
 
-Physical iPhones and iPads now have an optional [WebDriverAgent touch and native snapshot adapter](physical-ios.md). Protocol, USB-forwarding lifecycle, WebRTC and encoder fixtures cover this integration; physical-device touch and performance remain unverified. Other physical Apple devices have discovery only. USB and native captures are silent. Preview is periodic image refresh rather than a full-motion browser stream. Native Android recording is limited to 175 seconds; other recorders use the configured maximum. Input overlays use dispatch timestamps, not an assertion that the device rendered a frame at the instant a command was sent.
+Later [live video validation](live-video-and-touch.md#setup-and-supported-versions) records read-only UGREEN/Roku USB browser playback at about 13 fps, emulator launch/control checks and an iPhone simulator swipe. The [production iOS video check](live-video-and-touch.md#repeatable-browser-validation) records about 15 fps on the tested Mac. Each result has its own scope and limits; none establishes every device model, disconnect scenario or remote-network performance claim. The [physical iOS adapter](physical-ios.md) has protocol and lifecycle fixtures; physical-device touch and performance remain unverified by the evidence recorded here.
 
-Installer/service lifecycle and package relocation checks are recorded in [local delivery](local-delivery.md). The external delivery receipt includes the revision and archive checksum. Version 0.4.0 adds a private, undeployed billing bridge. Cloud runtime, user accounts and multi-host scheduling remain outside the local application.
+Current preview transports and recording limits are documented in [live video and touch](live-video-and-touch.md). Input overlays record dispatch timestamps; they do not establish when a device rendered the result of a command.
+
+Historical installer/service lifecycle and package relocation checks are recorded in [local delivery](local-delivery.md). Use the [Mac distribution checks](macos-distribution.md) for a new release. The optional [portal](remote-access.md) and [Deck sharing](deck-sharing.md) are separate from the early local-only proofs; neither makes this page evidence of current cloud or cross-host validation.

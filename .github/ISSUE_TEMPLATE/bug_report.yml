@@ -1,0 +1,57 @@
+name: Bug report
+description: Report a problem with installation, devices, captures or a client.
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe one reproducible problem. Check existing issues first. Share only relevant diagnostics, with tokens, credentials, private addresses and sensitive app content removed.
+  - type: input
+    id: device-deck
+    attributes:
+      label: Device Deck version and installation method
+      placeholder: "0.9.0-beta.1, GitHub Mac installer; or source commit and build command"
+    validations:
+      required: true
+  - type: input
+    id: mac
+    attributes:
+      label: macOS version and Mac architecture
+      placeholder: "macOS version, Apple silicon or Intel"
+    validations:
+      required: true
+  - type: textarea
+    id: target
+    attributes:
+      label: Device and connection
+      description: Include model, OS and transport. For a client problem, name the browser, CLI, TUI or MCP client. Write "not applicable" for installation problems.
+      placeholder: "Device model / OS; USB, ADB, simulator, Roku ECP, Apple TV Companion, WebDriverAgent or capture card; local or remote access"
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open ...
+        2. Select ...
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include the error message and whether this happens every time.
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Relevant diagnostics or captures
+      description: Optional. Redacted output from devdeck doctor, a short log excerpt or a screenshot can help. Do not post full configuration files or credentials.

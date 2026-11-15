@@ -8,11 +8,20 @@ import { dataDirectory } from "../../../packages/core/src/local/paths";
 import { atomicWrite, expand } from "../../../packages/config/src";
 import { root } from "../../../packages/adapters/src";
 import { DeckConnections } from "./decks";
+import { LocalAccounts } from "./local-accounts";
+import { readSharedHost } from "../../../packages/core/src/shared-host";
 export async function runDaemon(
   licensing?: import("../../../packages/licensing/src").EntitlementService,
 ) {
   const directory = dataDirectory(),
     lock = path.join(directory, "daemon.lock");
+  const registeredHost = process.platform === "darwin" ? await readSharedHost() : undefined;
+  const sharedHost = registeredHost && path.resolve(registeredHost.profile) === directory ? registeredHost : undefined;
+  if (sharedHost && sharedHost.uid !== process.getuid!())
+    throw new Error("Only the hosting Mac account can run this shared Device Deck profile.");
+  if (process.env.DEVICE_DECK_SYSTEM_SERVICE === "1" &&
+    (!sharedHost || sharedHost.uid !== process.getuid!() || Number(process.env.DEVICE_DECK_HOST_UID) !== sharedHost.uid))
+    throw new Error("The shared service's account does not match its protected Mac setup. Reconfigure it from Device Deck.");
   await mkdir(directory, { recursive: true, mode: 0o700 });
   try {
     await mkdir(lock, { mode: 0o700 });
@@ -60,7 +69,9 @@ export async function runDaemon(
     await authority.init();
     const credentials = createBrowserCredentials();
     const decks = new DeckConnections(directory);
-    const server = createService(deck, token, path.join(root, "build/web"), { bindHost, tls, authority, credentials, decks });
+    const accounts = new LocalAccounts(directory, sharedHost);
+    const maintenance = { updating: false, active: 0 };
+    const server = createService(deck, token, path.join(root, "build/web"), { bindHost, tls, authority, credentials, decks, accounts, maintenance });
     servers.push(server);
     const port = Number(
       process.env.DEVICE_DECK_PORT ?? deck.config.config.port,
@@ -76,7 +87,7 @@ export async function runDaemon(
     // management when the external listener uses TLS or a specific interface.
     let control = server;
     if (tls || !["127.0.0.1", "0.0.0.0"].includes(bindHost)) {
-      control = createService(deck, token, path.join(root, "build/web"), { authority, credentials, decks, networkPort: address.port, bindHost });
+      control = createService(deck, token, path.join(root, "build/web"), { authority, credentials, decks, accounts, maintenance, networkPort: address.port, bindHost });
       servers.push(control);
       await new Promise<void>((resolve, reject) => {
         control.once("error", reject);
@@ -84,6 +95,8 @@ export async function runDaemon(
       });
     }
     const controlPort = (control.address() as { port: number }).port;
+    const startedAt = Date.now();
+    await accounts.start({ port: controlPort, pid: process.pid, startedAt });
     await atomicWrite(
       path.join(directory, "endpoint.json"),
       JSON.stringify({
@@ -93,7 +106,7 @@ export async function runDaemon(
         networkProtocol: tls ? "https:" : "http:",
         token,
         pid: process.pid,
-        startedAt: Date.now(),
+        startedAt,
       }),
     );
     console.error(

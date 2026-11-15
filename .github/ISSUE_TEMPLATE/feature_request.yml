@@ -1,0 +1,32 @@
+name: Feature request
+description: Describe a workflow Device Deck could support better.
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: Describe the task and where the current workflow gets in your way.
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: What would a useful result look like?
+      description: Include a concrete example. A proposed implementation is optional.
+    validations:
+      required: true
+  - type: textarea
+    id: workaround
+    attributes:
+      label: Current workaround
+      description: Optional. How do you handle this today?
+  - type: textarea
+    id: setup
+    attributes:
+      label: Relevant setup
+      description: Optional. Include Device Deck version and installation method, macOS version and Mac architecture, device model and OS, and connection method if they affect the request.
+  - type: textarea
+    id: context
+    attributes:
+      label: Examples or other context
+      description: Optional. Remove credentials, private addresses and sensitive app content from any attached diagnostics or captures.

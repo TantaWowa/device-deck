@@ -1,12 +1,12 @@
-# Website and interactive preview delivery
+# Historical website and preview delivery
 
-This records the earlier public demo milestone. See [local application delivery](local-delivery.md) for the subsequent real daemon, clients and capture implementation.
+This records the September 2026 public demo milestone and screenshot refresh. It does not describe current release status. Use the [documentation index](README.md) for the current app, [install guide](install.md) for packages and [remote access](remote-access.md) for current portal deployment. The subsequent [local application delivery](local-delivery.md) is another historical receipt.
 
 Delivered 11 September 2026. The product name and repository name were available as requested.
 
-## Resources
+## Resources recorded at delivery
 
-- Private GitHub repository: https://github.com/TantaWowa/device-deck
+- GitHub repository, private at that milestone: https://github.com/TantaWowa/device-deck
 - Google account: `george@tantawowa.com`
 - Organization: `tantawowa.com`, ID `375503269979`
 - Google Cloud / Firebase project: `tantawowa-device-deck`
@@ -21,25 +21,25 @@ Delivered 11 September 2026. The product name and repository name were available
 - Preview expiry: 14 October 2026 at 09:17 UTC, as returned by Firebase
 - Billing: `billingEnabled: false`, no billing account attached
 
-The source repository is private. Firebase Hosting previews are accessible to anyone holding the URL. No live-channel release was made. No analytics, functions, database, storage bucket, payment system, or user account backend was added.
+At that milestone, the source repository was private and the Firebase Hosting preview was accessible to anyone holding its URL. The recorded preview has expired. No live-channel release was made, and no analytics, functions, database, storage bucket, payment system or user account backend was added in that work.
 
-## What works
+## Behavior at that milestone
 
-The responsive website links to a light React workspace with eight sample devices. The primary devices table includes combined filtering, saved views, multi-row selection, validated add/edit forms, source binding conflicts, and simulated bulk lock/unlock/restart results. Focused and multi-device viewers keep remote control scoped to one selected device.
+The responsive website linked to a React workspace with eight sample devices. The primary devices table included combined filtering, saved views, multi-row selection, validated add/edit forms, source binding conflicts and simulated bulk lock/unlock/restart results. Focused and multi-device viewers kept remote control scoped to one selected device.
 
-Capture metadata, tags, editing, removal/undo, input timelines, session history, seeded reports and local settings are interactive. Browser clipboard and download actions create a labelled sample PNG. No login is required. See [the readable workspace revision](redesign.md) for complete behavior and validation scope.
+Capture metadata, tags, editing, removal/undo, input timelines, session history, seeded reports and local settings were interactive. Browser clipboard and download actions created a labelled sample PNG. The demo required no login. See [the readable workspace revision](redesign.md) for that milestone's behavior and validation scope.
 
-The local service has health and inventory endpoints. The CLI supports help, human output, JSON and exit codes. MCP has two working tools. All three read the same empty inventory from the service. No sample data is injected into the service.
+The local service had health and inventory endpoints. The CLI supported help, human output, JSON and exit codes. MCP had two working tools. All three read the same empty inventory from the service. No sample data was injected into the service.
 
-## What remains simulated or unimplemented
+## Simulated and unimplemented behavior at that milestone
 
-The dashboard persists demo configuration and metadata in browser localStorage. This does not write to the configured Mac folder or synchronize tabs and hosts. All devices, owners and USB discovery entries are samples. Captures are metadata; there are no actual device frames or playable recordings. Reloading records a simulated recording interruption. Report metrics are explicitly seeded.
+The dashboard persisted demo configuration and metadata in browser localStorage. It did not write to the configured Mac folder or synchronize tabs and hosts. All devices, owners and USB discovery entries were samples. Captures were metadata, with no actual device frames or playable recordings. Reloading recorded a simulated recording interruption. Report metrics were seeded.
 
-Hardware discovery, actual remote input, live preview, screenshots, video capture, durable credentials and leases, config loading/writes, shared-source arbitration, background capture persistence, service installation, and packaging remain unimplemented. These are described in the build brief and architecture docs. No physical hardware was touched or validated in this milestone.
+Hardware discovery, actual remote input, live preview, screenshots, video capture, durable credentials and leases, config loading/writes, shared-source arbitration, background capture persistence, service installation and packaging were unimplemented at that milestone. Later versions added those features. No physical hardware was touched or validated in this milestone.
 
 ## Validation
 
-The readable workspace revision passes 13 model/service tests and 16 browser acceptance checks locally. The revision's commands and coverage are documented in [redesign.md](redesign.md). Evidence includes actual rendered table, focused viewer, multi-device, mobile and marketing screenshots. Browser QA runs against both a combined local production build and the existing Firebase preview. The local service tests continue to prove that no seeded hardware leaks into the real service.
+The readable workspace revision passed 13 model/service tests and 16 browser acceptance checks locally. The revision's commands and coverage are documented in [redesign.md](redesign.md). Evidence included rendered table, focused viewer, multi-device, mobile and marketing screenshots. Browser QA ran against both a combined local production build and the Firebase preview. The local service tests checked that no seeded hardware leaked into the real service.
 
 `scripts/qa.mjs` repeats browser checks against `QA_URL`, defaulting to port 5175. Set `PLAYWRIGHT_CHANNEL=chrome` for installed Google Chrome, or install Playwright Chromium. `QA_OUTPUT` chooses the ignored evidence output directory.
 
@@ -51,7 +51,9 @@ Run `PLAYWRIGHT_CHANNEL=chrome npm run screenshots:website` after changing the l
 
 The 14 September 2026 refresh passed the screenshot generator's image, layout and fixture-isolation checks, TypeScript checking, the production website/demo build and all 16 existing browser acceptance checks. The generator writes its browser version, source commit and screenshot details to ignored `work/marketing-screenshots/report.json`; browser evidence for this refresh is in ignored `outputs/website-refresh/`.
 
-## Refresh the preview
+## Historical preview deployment procedure
+
+The following commands were used for the static preview. Use [current deployment instructions](remote-access.md#build-and-deploy) when publishing the website and portal together.
 
 ```sh
 npm ci
@@ -62,4 +64,4 @@ npm run build
 npx firebase-tools hosting:channel:deploy product-preview --project tantawowa-device-deck --expires 30d
 ```
 
-Deployment uses only `dist/`, as specified in `firebase.json`. Keep the project on the no-billing setup for this static preview. The generated Firebase web app registration is retained; the static site does not need the Firebase client SDK or its API configuration.
+That deployment used only `dist/`, as specified in `firebase.json`. The static preview did not need billing, the Firebase client SDK or its API configuration. These historical conditions do not describe the later portal and Cloud Run deployment.

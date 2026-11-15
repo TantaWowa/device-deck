@@ -12,6 +12,7 @@ import { root } from "../../../packages/adapters/src";
 import { run } from "../../../packages/adapters/src/process";
 import { atomicWrite } from "../../../packages/config/src";
 import { existsSync } from "node:fs";
+import { hasExplicitProfile, readSharedHost } from "../../../packages/core/src/shared-host";
 const plist = path.join(
   os.homedir(),
   "Library/LaunchAgents/com.tantawowa.device-deck.plist",
@@ -40,6 +41,15 @@ export function applicationArgs(bundle: string, directory: string, environment =
 export async function lifecycle(command: string, launchArgs?: string[]) {
   const directory = dataDirectory(),
     entry = path.join(root, "build/daemon.mjs");
+  const host = process.platform === "darwin" ? await readSharedHost() : undefined;
+  if (host && (!hasExplicitProfile() || path.resolve(host.profile) === directory)) {
+    if (command === "start") {
+      try { await callService("health"); return "The shared Device Deck service is running."; } catch {}
+    } else if (command === "logs" && host.uid === process.getuid!()) {
+      return readFile("/Library/Logs/Device Deck/daemon.log", "utf8").then(text => text.slice(-24000));
+    }
+    throw new Error(`This Mac uses a shared service hosted by ${host.username}. Open Device Deck to manage startup, restart or removal.`);
+  }
   await mkdir(directory, { recursive: true, mode: 0o700 });
   if (command === "start") {
     try {
