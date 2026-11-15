@@ -6,7 +6,7 @@ import { observationAdapter, type ObservationHost } from "./device-observation";
 import type { DeviceInteraction } from "../../core/src/device-interaction";
 import type { InteractiveSource, VideoProfile } from "../../core/src/live";
 import { androidKeys, rokuKeys, hidKeys, iosHardwareKeys, deviceInputMode } from "../../core/src/remote";
-import { controlSimulator, simulatorState, SimulatorInventory, wakeSimulator, SIMULATOR_UNAVAILABLE_MESSAGE } from "./simulator";
+import { cleanupSimulator, controlSimulator, simulatorState, SimulatorInventory, wakeSimulator, SIMULATOR_UNAVAILABLE_MESSAGE } from "./simulator";
 import { AndroidEmulators, isAndroidEmulator } from "./android-emulator";
 import { idbInput as sharedIdbInput, IdbInput } from "./idb-input";
 import {
@@ -31,6 +31,7 @@ import {
   type Source,
   type SourceConfig,
   type SimulatorLaunchOwnership,
+  type DeviceCleanupAction,
   fail,
 } from "../../core/src/local/types";
 let location = path.dirname(fileURLToPath(import.meta.url));
@@ -710,6 +711,10 @@ export class Adapters {
   async prepareSimulator(d: DeviceConfig) {
     if (isAndroidEmulator(d)) return this.emulators.prepare(d);
     return d;
+  }
+  async cleanupDevice(d: DeviceConfig, action: DeviceCleanupAction) {
+    if (isAndroidEmulator(d)) return this.emulators.cleanup(d, action);
+    return cleanupSimulator(d, action, this.execute);
   }
   async verifyIdentity(d: DeviceConfig, execute?: typeof run) {
     if (isAndroidEmulator(d)) d = (await this.emulators.resolve(d, true, execute))!;

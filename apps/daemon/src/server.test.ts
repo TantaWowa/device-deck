@@ -1917,6 +1917,133 @@ test("failed group renewal changes no member or group expiry", async () => {
     await cleanup();
   }
 });
+test("device cleanup requires confirmation and rejects physical, reserved and locked targets", async () => {
+  const { deck, adapters, cleanup } = await setup();
+  const calls: string[] = [];
+  adapters.cleanupDevice = async (device) => { calls.push(device.id); return { removedApps: 2, state: "booted" as const }; };
+  try {
+    await useSimulator(deck);
+    await assert.rejects(deck.execute("devices.cleanup", { ids: ["one"], action: "reset" }));
+    await assert.rejects(deck.execute("devices.cleanup", { ids: ["one"], action: "reset", confirmed: true, revision: "stale" }), /Configuration changed/);
+    const lease = await reserve(deck);
+    const reserved = await deck.execute("devices.cleanup", { ids: ["one", "two"], action: "reset", confirmed: true }) as any[];
+    assert.deepEqual(reserved.map((r) => r.ok), [false, false]);
+    assert.match(reserved[0].error, /reservation/);
+    assert.match(reserved[1].error, /only available/);
+    await deck.execute("sessions.release", { sessionId: lease.session.id, leaseToken: lease.leaseToken });
+    deck.store.lock("one", "Other maintenance");
+    const locked = await deck.execute("devices.cleanup", { ids: ["one"], action: "uninstall-apps", confirmed: true }) as any[];
+    assert.match(locked[0].error, /locked/);
+    assert.equal(deck.store.lockReason("one"), "Other maintenance");
+    assert.deepEqual(calls, []);
+  } finally { await cleanup(); }
+});
+
+test("device cleanup locks the selection, preserves ordered partial results and releases failed maintenance", async () => {
+  const { deck, adapters, capture, cleanup } = await setup();
+  let release!: () => void, started!: () => void;
+  const barrier = new Promise<void>((resolve) => { release = resolve; });
+  const ready = new Promise<void>((resolve) => { started = resolve; });
+  const calls: string[] = [], closedSources: string[] = [];
+  capture.closeSource = async (source) => { closedSources.push(source.id); };
+  adapters.cleanupDevice = async (device, action) => {
+    calls.push(device.id);
+    assert.equal(action, "uninstall-apps");
+    assert.ok(closedSources.includes(device.captureSourceId!));
+    if (device.id === "one") { started(); await barrier; return { removedApps: 3, state: "booted" as const }; }
+    throw new Error("Uninstalled 1 of 2 apps; one app failed.");
+  };
+  try {
+    await useSimulator(deck);
+    const config = structuredClone(deck.config.config);
+    config.devices[1].connection = { type: "adb", serial: "emulator-5554", avdName: "Test_AVD", port: 5037 };
+    await deck.execute("config.save", { config, revision: deck.config.revision });
+    const pending = deck.execute("devices.cleanup", { ids: ["one", "two", "one", "missing"], action: "uninstall-apps", confirmed: true });
+    await ready;
+    await assert.rejects(reserve(deck), /Uninstalling apps/);
+    const duplicate = await deck.execute("devices.cleanup", { ids: ["one"], action: "reset", confirmed: true }) as any[];
+    assert.equal(duplicate[0].ok, false);
+    const changed = structuredClone(deck.config.config);
+    changed.devices[0].name = "Changed during cleanup";
+    await assert.rejects(deck.execute("config.save", { config: changed, revision: deck.config.revision }), /maintenance/);
+    const rebound = structuredClone(deck.config.config);
+    rebound.sources[0].name = "Changed source";
+    await assert.rejects(deck.execute("config.save", { config: rebound, revision: deck.config.revision }), /maintenance/);
+    release();
+    const results = await pending as any[];
+    assert.deepEqual(results.map((r) => [r.id, r.ok]), [["one", true], ["two", false], ["missing", false]]);
+    assert.equal(results[0].removedApps, 3);
+    assert.match(results[1].error, /Uninstalled 1 of 2/);
+    assert.deepEqual(calls.sort(), ["one", "two"]);
+    assert.equal(deck.store.lockReason("one"), undefined);
+    assert.equal(deck.store.lockReason("two"), undefined);
+    assert.ok(deck.store.events().some((e) => e.action === "cleanup-uninstall-apps-failed"));
+    await reserve(deck);
+  } finally { release(); await cleanup(); }
+});
+
+test("service shutdown waits for cleanup devices beyond the first two", async () => {
+  const { deck, adapters, cleanup } = await setup();
+  const calls: string[] = [];
+  let release!: () => void, started!: () => void, closed = false;
+  const barrier = new Promise<void>((resolve) => { release = resolve; });
+  const ready = new Promise<void>((resolve) => { started = resolve; });
+  const closeAdapters = adapters.close.bind(adapters);
+  adapters.close = async () => { closed = true; await closeAdapters(); };
+  adapters.cleanupDevice = async (device) => {
+    assert.equal(closed, false, "adapters must remain available throughout cleanup");
+    calls.push(device.id);
+    if (calls.length === 2) started();
+    if (device.id !== "three") await barrier;
+    return { state: "shutdown" as const };
+  };
+  try {
+    await useSimulator(deck);
+    const config = structuredClone(deck.config.config);
+    config.devices[1].connection = { type: "adb", serial: "emulator-5554", avdName: "Test_AVD", port: 5037 };
+    config.devices.push({ ...config.devices[1], id: "three", name: "three", captureSourceId: null,
+      connection: { type: "adb", serial: "emulator-5556", avdName: "Other_AVD", port: 5037 } });
+    await deck.execute("config.save", { config, revision: deck.config.revision });
+    const pending = deck.execute("devices.cleanup", { ids: ["one", "two", "three"], action: "reset", confirmed: true });
+    await ready;
+    const stopping = deck.close();
+    deck.close = () => stopping;
+    assert.equal(calls.length, 2);
+    release();
+    const results = await pending as any[];
+    await stopping;
+    assert.deepEqual(calls, ["one", "two", "three"]);
+    assert.ok(results.every((result) => result.ok));
+    assert.equal(closed, true);
+  } finally { release(); await cleanup(); }
+});
+
+test("reset removes warm-pool ownership before a later manual boot", async () => {
+  const { deck, adapters, cleanup } = await setup();
+  adapters.cleanupDevice = async () => ({ state: "shutdown" as const });
+  try {
+    await useSimulator(deck);
+    deck.store.putWarmDevice({ deviceId: "one", lastUsedAt: Date.now() });
+    const results = await deck.execute("devices.cleanup", { ids: ["one"], action: "reset", confirmed: true }) as any[];
+    assert.equal(results[0].ok, true);
+    assert.equal(deck.store.warmDevice("one"), undefined);
+  } finally { await cleanup(); }
+});
+
+test("device cleanup revalidates access before any adapter mutation", async () => {
+  const { deck, adapters, cleanup } = await setup();
+  let checks = 0, calls = 0;
+  adapters.cleanupDevice = async () => { calls++; return { state: "shutdown" as const }; };
+  try {
+    await useSimulator(deck);
+    const results = await deck.execute("devices.cleanup", { ids: ["one"], action: "reset", confirmed: true }, "API", async () => ++checks === 1) as any[];
+    assert.equal(results[0].ok, false);
+    assert.match(results[0].error, /access expired/);
+    assert.equal(calls, 0);
+    assert.equal(deck.store.lockReason("one"), undefined);
+  } finally { await cleanup(); }
+});
+
 test("simulator lifecycle refuses occupied/recording devices and requires close confirmation", async () => {
   const { deck, adapters, capture, cleanup } = await setup();
   const actions: string[] = [];

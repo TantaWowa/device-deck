@@ -57,7 +57,7 @@ export async function callOperation(
       "X-Device-Deck-Client": origin,
     },
     body: JSON.stringify(args),
-    signal: AbortSignal.any([AbortSignal.timeout(operation === "sessions.reserveGroup" ? 600000 : operation === "devices.simulator" ? 300000 : operation === "inventory" ? 30_000 : 180000), ...(signal ? [signal] : [])]),
+    signal: AbortSignal.any([AbortSignal.timeout(operation === "devices.cleanup" ? 1_800_000 : operation === "sessions.reserveGroup" ? 600000 : operation === "devices.simulator" ? 300000 : operation === "inventory" ? 30_000 : 180000), ...(signal ? [signal] : [])]),
     redirect: "error",
   });
   const body = await response.json();

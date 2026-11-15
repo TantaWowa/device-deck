@@ -10,6 +10,7 @@ import { DeviceControls } from "./DeviceControls";
 import { CaptureLibrary } from "./CaptureLibrary";
 import { CaptureToasts, useCaptureFeedback } from "./capture-feedback";
 import { SimulatorControls } from "./SimulatorControls";
+import { DeviceCleanupDialog, cleanupBlockedReason, type CleanupTarget } from "./DeviceCleanupDialog";
 import { FeedActions, type FeedAction } from "./FeedActions";
 import { DiscoveryDevices } from "./DiscoveryDevices";
 import { deviceEditorMetadata } from "../../../../packages/core/src/device-editor";
@@ -86,6 +87,7 @@ import type {
   SourceConfig,
   Operation,
 } from "../../../../packages/core/src/local/types";
+import { supportsDeviceCleanup } from "../../../../packages/core/src/local/types";
 import { api, bootstrap, activeDeck, serviceUrl, leaseStorageKey } from "./api";
 import "../style.css";
 import "./style.css";
@@ -219,6 +221,7 @@ function App() {
     [showDiscovery, setShowDiscovery] = useState(false),
     [editing, setEditing] = useState<DeviceConfig | false | null>(null);
   const [deviceEditRevision, setDeviceEditRevision] = useState("");
+  const [cleanupTargets, setCleanupTargets] = useState<CleanupTarget[] | null>(null);
   useEffect(() => {
     if (editing !== null && data) setDeviceEditRevision(data.configRevision);
   }, [editing]);
@@ -773,6 +776,13 @@ function App() {
                         <Columns2 size={16} />
                         View selected
                       </button>
+                      <button
+                        type="button"
+                        disabled={busy || !data.devices.some((device) => selected.includes(device.id) && !cleanupBlockedReason(device, data.sessions))}
+                        onClick={() => setCleanupTargets(data.devices.filter((device) => selected.includes(device.id)).map((device) => ({ device, hidden: !devices.some((visible) => visible.id === device.id) })))}
+                      >
+                        Clean up selected…
+                      </button>
                       {(["lock", "unlock", "restart"] as const).map((a) => (
                         <button
                           key={a}
@@ -937,6 +947,15 @@ function App() {
                                 refresh={refresh}
                                 manageSession={(anchor) => openControls(d, "reserve", anchor)}
                               />
+                              {supportsDeviceCleanup(d) && <button
+                                type="button"
+                                aria-label={`Clean up ${d.name}`}
+                                disabled={busy || Boolean(cleanupBlockedReason(d, data.sessions))}
+                                title={cleanupBlockedReason(d, data.sessions) || "Uninstall apps or reset this virtual device"}
+                                onClick={() => setCleanupTargets([{ device: d, hidden: false }])}
+                              >
+                                Clean up…
+                              </button>}
                               <button onClick={() => openViewer([d.id])}>
                                 View
                               </button>
@@ -1325,6 +1344,14 @@ function App() {
           </form>
         </Modal>
       )}
+      {cleanupTargets && <DeviceCleanupDialog
+        targets={cleanupTargets}
+        devices={data.devices}
+        sessions={data.sessions}
+        configRevision={data.configRevision}
+        refresh={refresh}
+        onClose={() => setCleanupTargets(null)}
+      />}
       {maintenance && (
         <Modal
           title={`${maintenance} selected devices`}

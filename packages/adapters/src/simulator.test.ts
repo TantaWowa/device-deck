@@ -1,11 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { configSchema, deviceSchema } from "../../core/src/local/types";
 import { Adapters } from "./index";
-import { controlSimulator, simulatorState, wakeSimulator, SimulatorInventory } from "./simulator";
+import { cleanupSimulator, controlSimulator, simulatorState, wakeSimulator, SimulatorInventory } from "./simulator";
 import type { run } from "./process";
 
 const simulator = deviceSchema.parse({
@@ -405,4 +405,158 @@ test("readiness finishing after invalidation cannot restore the old simulator ca
   finish(); await pending;
   await inventory.state(simulator, execute);
   assert.equal(bootstatus, 2);
+});
+
+function cleanupFixture(initial = "Shutdown", apps: unknown = {
+  "com.apple.TVWatchList": { ApplicationType: "System", CFBundleIdentifier: "com.apple.TVWatchList" },
+  "com.example.first": { ApplicationType: "User", CFBundleIdentifier: "com.example.first" },
+  "com.example.second": { ApplicationType: "User", CFBundleIdentifier: "com.example.second" },
+}) {
+  const base = fixture(initial);
+  const files: string[] = [];
+  const listing = '{ "com.example.first" = { ApplicationType = User; }; }';
+  const execute: typeof run = async (command, args, timeout) => {
+    const result = await base.execute(command, args, timeout);
+    if (args[1] === "listapps") return { stdout: Buffer.from(listing), stderr: "" };
+    if (command === "/usr/bin/plutil") {
+      assert.deepEqual(args.slice(0, -1), ["-convert", "json", "-o", "-", "--"]);
+      const file = args.at(-1)!;
+      assert.equal(await readFile(file, "utf8"), listing);
+      assert.equal((await stat(file)).mode & 0o777, 0o600);
+      files.push(file);
+      return { stdout: Buffer.from(JSON.stringify(apps)), stderr: "" };
+    }
+    return result;
+  };
+  return { ...base, execute, files };
+}
+
+test("app cleanup preserves system apps and settings, targets one UDID, and restores a stopped simulator", async () => {
+  const current = cleanupFixture();
+  const result = await cleanupSimulator(simulator, "uninstall-apps", current.execute);
+  assert.deepEqual(result, { removedApps: 2, state: "shutdown" });
+  assert.deepEqual(current.calls.filter((call) => call.args[1] === "uninstall").map((call) => call.args), [
+    ["simctl", "uninstall", "F4B9CA01-BA57-40A0-984D-38B7F91AB8A1", "com.example.first"],
+    ["simctl", "uninstall", "F4B9CA01-BA57-40A0-984D-38B7F91AB8A1", "com.example.second"],
+  ]);
+  assert.equal(current.calls.filter((call) => call.args[1] === "boot").length, 1);
+  assert.equal(current.calls.filter((call) => call.args[1] === "shutdown").length, 1);
+  for (const call of current.calls.filter((call) => call.command === "xcrun" && call.args[1] !== "list"))
+    assert.equal(call.args[2], "F4B9CA01-BA57-40A0-984D-38B7F91AB8A1");
+  assert(!current.calls.some((call) => call.command === "/usr/bin/open" || call.args[1] === "erase"));
+  for (const file of current.files) await assert.rejects(stat(file), { code: "ENOENT" });
+});
+
+test("app cleanup leaves an originally booted simulator running", async () => {
+  const current = cleanupFixture("Booted");
+  assert.deepEqual(await cleanupSimulator(simulator, "uninstall-apps", current.execute), { removedApps: 2, state: "booted" });
+  assert(!current.calls.some((call) => ["boot", "shutdown", "erase"].includes(call.args[1])));
+});
+
+test("an empty installed-app list completes with zero removals", async () => {
+  const current = cleanupFixture("Shutdown", {});
+  assert.deepEqual(await cleanupSimulator(simulator, "uninstall-apps", current.execute), { removedApps: 0, state: "shutdown" });
+  assert(!current.calls.some((call) => call.args[1] === "uninstall"));
+});
+
+test("partial uninstall reports removed count and failed app, continues other apps, and restores shutdown", async () => {
+  const current = cleanupFixture();
+  const execute: typeof run = async (command, args, timeout) => {
+    const result = await current.execute(command, args, timeout);
+    if (args[1] === "uninstall" && args[3] === "com.example.first") throw new Error("Application is busy");
+    return result;
+  };
+  await assert.rejects(cleanupSimulator(simulator, "uninstall-apps", execute), (error: unknown) => {
+    assert(error instanceof Error);
+    assert.match(error.message, /Removed 1 of 2.*com.example.first: Application is busy/);
+    return true;
+  });
+  assert.equal(current.calls.filter((call) => call.args[1] === "uninstall").length, 2);
+  assert.equal(await simulatorState(simulator, execute), "shutdown");
+});
+
+test("ambiguous app metadata fails before any uninstall and restores shutdown", async () => {
+  for (const apps of [
+    { "com.example.first": { CFBundleIdentifier: "com.example.first" } },
+    { "com.example.first": { ApplicationType: "User", CFBundleIdentifier: "com.example.other" } },
+    [],
+  ]) {
+    const current = cleanupFixture("Shutdown", apps);
+    await assert.rejects(cleanupSimulator(simulator, "uninstall-apps", current.execute), /Removed 0.*Cleanup failed/);
+    assert(!current.calls.some((call) => call.args[1] === "uninstall"));
+    assert.equal(await simulatorState(simulator, current.execute), "shutdown");
+    for (const file of current.files) await assert.rejects(stat(file), { code: "ENOENT" });
+  }
+});
+
+test("temporary boot readiness failure closes the simulator without uninstalling apps", async () => {
+  const current = cleanupFixture();
+  const execute: typeof run = async (command, args, timeout) => {
+    if (args[1] === "bootstatus" && args.includes("-b")) throw new Error("Startup timed out");
+    return current.execute(command, args, timeout);
+  };
+  await assert.rejects(cleanupSimulator(simulator, "uninstall-apps", execute), /Removed 0.*Startup timed out/);
+  assert(!current.calls.some((call) => ["listapps", "uninstall"].includes(call.args[1])));
+  assert.equal(await simulatorState(simulator, execute), "shutdown");
+});
+
+test("shutdown restoration failure reports removal counts without claiming cleanup success", async () => {
+  const current = cleanupFixture();
+  const execute: typeof run = async (command, args, timeout) => {
+    if (args[1] === "shutdown") throw new Error("CoreSimulator unavailable during shutdown");
+    return current.execute(command, args, timeout);
+  };
+  await assert.rejects(cleanupSimulator(simulator, "uninstall-apps", execute), /Removed 2 of 2.*Could not restore.*CoreSimulator unavailable/);
+  assert.equal(await simulatorState(simulator, execute), "booted");
+});
+
+test("reset shuts down and erases only the configured simulator, leaving it stopped", async () => {
+  for (const initial of ["Booted", "Shutdown"]) {
+    const current = cleanupFixture(initial);
+    assert.deepEqual(await cleanupSimulator(simulator, "reset", current.execute), { state: "shutdown" });
+    const mutations = current.calls.filter((call) => ["shutdown", "erase"].includes(call.args[1])).map((call) => call.args);
+    assert.deepEqual(mutations, [
+      ...(initial === "Booted" ? [["simctl", "shutdown", "F4B9CA01-BA57-40A0-984D-38B7F91AB8A1"]] : []),
+      ["simctl", "erase", "F4B9CA01-BA57-40A0-984D-38B7F91AB8A1"],
+    ]);
+    assert(!current.calls.some((call) => ["boot", "listapps", "uninstall"].includes(call.args[1]) || call.command === "/usr/bin/open"));
+  }
+});
+
+test("reset never erases after failed shutdown and propagates erase failures", async () => {
+  const booted = cleanupFixture("Booted");
+  const failedShutdown: typeof run = async (command, args, timeout) => {
+    if (args[1] === "shutdown") throw new Error("Shutdown refused");
+    return booted.execute(command, args, timeout);
+  };
+  await assert.rejects(cleanupSimulator(simulator, "reset", failedShutdown), /Shutdown refused/);
+  assert(!booted.calls.some((call) => call.args[1] === "erase"));
+  const stopped = cleanupFixture();
+  const failedErase: typeof run = async (command, args, timeout) => {
+    if (args[1] === "erase") throw new Error("Erase failed");
+    return stopped.execute(command, args, timeout);
+  };
+  await assert.rejects(cleanupSimulator(simulator, "reset", failedErase), /Erase failed/);
+});
+
+test("cleanup rejects physical, alias, unavailable, and transitioning targets before mutation", async () => {
+  for (const action of ["uninstall-apps", "reset"] as const) {
+    for (const target of [
+      { ...simulator, kind: "physical" as const },
+      { ...simulator, connection: { type: "simulator" as const, os: "tvos" as const, udid: "all" } },
+      { ...simulator, connection: { type: "simulator" as const, os: "tvos" as const, udid: "booted" } },
+    ]) {
+      const current = cleanupFixture();
+      await assert.rejects(cleanupSimulator(target, action, current.execute), /exact UDID/);
+      assert.equal(current.calls.length, 0);
+    }
+    for (const state of ["Booting", "Shutting Down", "Unknown"]) {
+      const current = cleanupFixture(state);
+      await assert.rejects(cleanupSimulator(simulator, action, current.execute), /Wait for it to finish|unavailable/);
+      assert(current.calls.every((call) => call.args[1] === "list"));
+    }
+    const unavailable = fixture("Shutdown", simulator, "missing-directory");
+    await assert.rejects(cleanupSimulator(simulator, action, unavailable.execute), /unavailable/);
+    assert(unavailable.calls.every((call) => call.args[1] === "list"));
+  }
 });

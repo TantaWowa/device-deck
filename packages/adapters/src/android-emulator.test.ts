@@ -33,6 +33,7 @@ type Entry = {
   bootAnimation?: boolean;
   bootId?: string;
   launchMarker?: string;
+  transportId?: string;
 };
 function fixture(initial: Entry[] = []) {
   const state = {
@@ -46,6 +47,15 @@ function fixture(initial: Entry[] = []) {
     onSignal: undefined as
       | ((pid: number, signal: NodeJS.Signals) => void)
       | undefined,
+    packages: ["com.example.first", "com.example.second"],
+    packageOutput: undefined as string | undefined,
+    packageError: "",
+    users: ["0"],
+    userPackages: new Map<string, string[]>(),
+    uninstallFailures: new Set<string>(),
+    onUninstall: undefined as (() => void) | undefined,
+    onPackageList: undefined as (() => void) | undefined,
+    onKill: undefined as (() => void) | undefined,
   };
   const calls: { command: string; args: string[] }[] = [],
     launches: { binary: string; args: string[]; port: number }[] = [],
@@ -69,15 +79,16 @@ function fixture(initial: Entry[] = []) {
     else if (args[2] === "devices")
       output =
         "List of devices attached\nphysical-usb\tdevice\n" +
-        state.entries.map((e) => `${e.serial}\t${e.state}`).join("\n");
+        state.entries.map((e) => `${e.serial}\t${e.state}${args.includes("-l") ? ` transport_id:${e.transportId || e.serial.slice(9)}` : ""}`).join("\n");
     else {
       assert.deepEqual(
-        args.slice(0, 3),
-        ["-P", "5038", "-s"],
-        "Every device command addresses the configured ADB server and exact serial",
+        args.slice(0, 2),
+        ["-P", "5038"],
+        "Every device command addresses the configured ADB server",
       );
-      const entry = state.entries.find((e) => e.serial === args[3]);
-      assert(entry, "A command must never address a stale or guessed serial");
+      assert(["-s", "-t"].includes(args[2]), "A device command must select an exact serial or transport");
+      const entry = state.entries.find((e) => args[2] === "-s" ? e.serial === args[3] : (e.transportId || e.serial.slice(9)) === args[3]);
+      if (!entry) throw new Error("The selected Android transport disconnected");
       if (args.slice(4).join(" ") === "emu avd name") {
         if (!entry.consoleEmpty && !entry.name)
           throw new Error("Identity still unavailable");
@@ -102,7 +113,26 @@ function fixture(initial: Entry[] = []) {
       }
       else if (args.slice(4).join(" ") === "emu kill") {
         state.entries = state.entries.filter((e) => e !== entry);
+        state.onKill?.();
         output = "OK\n";
+      } else if (args.slice(4).join(" ") === "shell pm list users") {
+        output = "Users:\n" + state.users.map((id) => `UserInfo{${id}:User ${id}:13} running`).join("\n");
+      } else if (args.slice(4, -1).join(" ") === "shell pm list packages -3 --user") {
+        const userId = args.at(-1)!;
+        assert(state.users.includes(userId), "List apps using a verified numeric user ID");
+        output = state.packageOutput ?? (state.userPackages.get(userId) ?? state.packages).map((id) => `package:${id}`).join("\n");
+        state.onPackageList?.();
+        return { stdout: Buffer.from(output), stderr: state.packageError };
+      } else if (args[4] === "uninstall") {
+        assert.equal(args.length, 6, "Uninstall must not preserve app data or use a shell command");
+        const appId = args[5];
+        if (state.uninstallFailures.has(appId)) output = "Failure [DELETE_FAILED_INTERNAL_ERROR]";
+        else {
+          assert(state.packages.includes(appId), "Only listed third-party packages may be removed");
+          state.packages = state.packages.filter((id) => id !== appId);
+          output = "Success\n";
+        }
+        state.onUninstall?.();
       } else throw new Error(`Unexpected command ${args.join(" ")}`);
     }
     return { stdout: Buffer.from(output), stderr: "" };
@@ -734,4 +764,109 @@ test("headless Android launch uses software rendering without an emulator window
   assert.deepEqual(f.launches[0].args.slice(0, 7), ["-avd", "TV_API_35", "-no-window", "-gpu", "software", "-feature", "-Vulkan"]);
   assert.equal(f.launches[0].port, 5038);
   assert(f.launches[0].args.some(argument => argument.startsWith("qemu.devdeck_launch=")));
+});
+
+test("Android app cleanup removes only third-party packages across profiles on the exact AVD", async () => {
+  const f = fixture([
+    { serial: "emulator-5554", state: "device", name: "Pixel_35", booted: true },
+    { serial: "emulator-5562", state: "device", name: "TV_API_35", booted: true },
+  ]);
+  f.state.users = ["0", "10"];
+  f.state.userPackages.set("0", ["com.example.first"]);
+  f.state.userPackages.set("10", ["com.example.first", "com.example.second"]);
+  assert.deepEqual(await f.emulator.cleanup(device, "uninstall-apps"), { removedApps: 2, state: "booted" });
+  assert.deepEqual(f.calls.filter((call) => call.args[4] === "uninstall").map((call) => call.args), [
+    ["-P", "5038", "-t", "5562", "uninstall", "com.example.first"],
+    ["-P", "5038", "-t", "5562", "uninstall", "com.example.second"],
+  ]);
+  assert.deepEqual(f.calls.filter((call) => call.args.includes("packages")).map((call) => call.args.at(-1)), ["0", "10"]);
+  assert.equal(f.launches.length, 0);
+  assert(!f.calls.some((call) => call.args.includes("kill")));
+  assert.equal(f.state.entries.length, 2);
+});
+
+test("Android app cleanup temporarily boots a stopped AVD and restores shutdown", async () => {
+  const f = fixture([{ serial: "emulator-5554", state: "device", name: "Pixel_35", booted: true }]);
+  assert.deepEqual(await f.emulator.cleanup(device, "uninstall-apps"), { removedApps: 2, state: "shutdown" });
+  assert.equal(f.launches.length, 1);
+  assert(f.launches[0].args.includes("-no-window"));
+  assert(!f.launches[0].args.includes("-wipe-data"));
+  assert(f.launches[0].args.some((arg) => arg.startsWith("qemu.devdeck_launch=")));
+  assert.deepEqual(f.state.entries.map((entry) => entry.name), ["Pixel_35"]);
+});
+
+test("Android cleanup reports partial uninstall failures and still restores a stopped AVD", async () => {
+  const f = fixture();
+  f.state.uninstallFailures.add("com.example.first");
+  await assert.rejects(f.emulator.cleanup(device, "uninstall-apps"), /Removed 1 app\. 1 app could not be removed.*com\.example\.first/);
+  assert.deepEqual(f.state.packages, ["com.example.first"]);
+  assert.equal(f.state.entries.length, 0);
+});
+
+test("Android cleanup rejects malformed app lists before any uninstall", async () => {
+  const f = fixture([{ serial: "emulator-5554", state: "device", name: "TV_API_35", booted: true }]);
+  f.state.packageOutput = "package:com.example.first\nError: permission denied";
+  await assert.rejects(f.emulator.cleanup(device, "uninstall-apps"), /invalid installed-app list/);
+  assert(!f.calls.some((call) => call.args[4] === "uninstall"));
+});
+
+test("Android cleanup rejects profile enumeration errors even when pm exits successfully", async () => {
+  const f = fixture([{ serial: "emulator-5554", state: "device", name: "TV_API_35", booted: true }]);
+  f.state.users = ["0", "10"];
+  f.state.packageError = "Error: java.lang.SecurityException: Shell cannot access user 10";
+  await assert.rejects(f.emulator.cleanup(device, "uninstall-apps"), /could not list apps for user.*SecurityException/);
+  assert(!f.calls.some((call) => call.args[4] === "uninstall"));
+});
+
+test("Android cleanup pins its transport even when another AVD reuses the serial before uninstall", async () => {
+  const f = fixture([{ serial: "emulator-5554", state: "device", name: "TV_API_35", booted: true }]);
+  f.state.onPackageList = () => { f.state.entries = [{ serial: "emulator-5554", transportId: "8888", state: "device", name: "Pixel_35", booted: true }]; };
+  await assert.rejects(f.emulator.cleanup(device, "uninstall-apps"), /Removed 0 apps.*transport disconnected/);
+  assert(f.calls.filter((call) => call.args[4] === "uninstall").every((call) => call.args[2] === "-t" && call.args[3] === "5554"));
+  assert.deepEqual(f.state.packages, ["com.example.first", "com.example.second"]);
+  assert.equal(f.state.entries[0].name, "Pixel_35");
+});
+
+test("Android reset wipes only the configured AVD, starts without loading a snapshot, then closes it", async () => {
+  const f = fixture([
+    { serial: "emulator-5554", state: "device", name: "Pixel_35", booted: true },
+    { serial: "emulator-5562", state: "device", name: "TV_API_35", booted: true },
+  ]);
+  const result = await f.emulator.cleanup(device, "reset");
+  assert.equal(result.state, "shutdown");
+  assert.match(result.warning || "", /SD-card image is preserved/);
+  assert.equal(f.launches.length, 1);
+  assert.deepEqual(f.launches[0].args.slice(0, 4), ["-avd", "TV_API_35", "-wipe-data", "-no-snapshot"]);
+  assert(f.launches[0].args.includes("-no-window"));
+  assert.deepEqual(f.calls.filter((call) => call.args.includes("kill")).map((call) => call.args.slice(2, 4)), [["-t", "5562"], ["-t", "5560"]]);
+  assert.deepEqual(f.state.entries.map((entry) => entry.name), ["Pixel_35"]);
+  assert(!f.calls.some((call) => call.args[4] === "uninstall"));
+});
+
+test("Android reset fails if the AVD is restarted by another process before the wipe launch", async () => {
+  const f = fixture([{ serial: "emulator-5554", state: "device", name: "TV_API_35", booted: true }]);
+  f.state.onKill = () => { f.state.entries.push({ serial: "emulator-5562", state: "device", name: "TV_API_35", booted: true }); };
+  await assert.rejects(f.emulator.cleanup(device, "reset"), /started again before cleanup/);
+  assert.equal(f.launches.length, 0);
+  assert.equal(f.state.entries[0].serial, "emulator-5562");
+});
+
+test("Android cleanup rejects physical, ambiguous and transitional targets before mutation", async () => {
+  const f = fixture([{ serial: "emulator-5554", state: "device", name: "TV_API_35", booted: true }]);
+  await assert.rejects(f.emulator.cleanup({ ...device, kind: "physical" }, "reset"), /only for Android emulators/);
+  f.state.entries.push({ serial: "emulator-5556", state: "device", name: "TV_API_35", booted: true });
+  await assert.rejects(f.emulator.cleanup(device, "uninstall-apps"), /Multiple running emulator/);
+  f.state.entries.pop();
+  f.state.entries[0].booted = false;
+  await assert.rejects(f.emulator.cleanup(device, "reset"), /finish starting or closing/);
+  assert.equal(f.launches.length, 0);
+  assert(!f.calls.some((call) => call.args.includes("kill") || call.args[4] === "uninstall"));
+});
+
+test("Android cleanup stops its marked temporary process when launch fails", async () => {
+  const f = fixture();
+  f.state.launchError = "System image failed to boot";
+  await assert.rejects(f.emulator.cleanup(device, "reset"), /Reset did not finish.*System image failed to boot/);
+  assert.deepEqual(f.signals, [{ pid: 4123, signal: "SIGTERM" }]);
+  assert.equal(f.state.processes.length, 0);
 });

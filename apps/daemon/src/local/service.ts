@@ -29,6 +29,7 @@ import {
   matchDevices,
   matchReservationGroup,
   supportsSimulatorLifecycle,
+  supportsDeviceCleanup,
   canLaunchSimulator,
   fail,
   type Config,
@@ -43,6 +44,8 @@ import {
   type ReservationGroup,
   type SimulatorLaunchOwnership,
   warmPoolSettings,
+  type DeviceCleanupAction,
+  type DeviceCleanupResult,
   DeckError,
 } from "../../../../packages/core/src/local/types";
 import { decideWarmPool, parseMemoryPressure, type MemoryPressure, type WarmPoolReason } from "./warm-pool";
@@ -118,7 +121,7 @@ export class DeckService {
   private reaping?: Promise<void>;
   private shuttingDown = false;
   private changingConfig = false;
-  private simulatorActions = new Map<string, "launch" | "close">();
+  private simulatorActions = new Map<string, "launch" | "close" | DeviceCleanupAction>();
   private readonly groupReadiness: GroupReadinessPolicy;
   diagnostics: string[] = [];
   inventoryDiagnostics() {
@@ -409,11 +412,13 @@ export class DeckService {
       if (id === lifecycleDevice) continue;
       if (
         JSON.stringify(this.device(id)) !==
-        JSON.stringify(next.devices.find((d) => d.id === id))
+        JSON.stringify(next.devices.find((d) => d.id === id)) ||
+        JSON.stringify(this.config.config.sources.find((s) => s.id === this.device(id).captureSourceId)) !==
+        JSON.stringify(next.sources.find((s) => s.id === this.device(id).captureSourceId))
       )
         fail(
           "device-busy",
-          "Wait for simulator launch or shutdown before changing this device.",
+          "Wait for simulator maintenance to finish before changing this device.",
           409,
         );
     }
@@ -442,7 +447,7 @@ export class DeckService {
     )
       fail(
         "device-busy",
-        "Release sessions and wait for simulator launch or shutdown before changing adapter executables.",
+        "Release sessions and wait for simulator maintenance before changing adapter executables.",
         409,
       );
   };
@@ -540,7 +545,11 @@ export class DeckService {
             healthDetail:
               this.simulatorActions.get(d.id) === "launch"
                 ? "Simulator booting…"
-                : "Closing simulator…",
+                : this.simulatorActions.get(d.id) === "uninstall-apps"
+                  ? "Uninstalling apps…"
+                  : this.simulatorActions.get(d.id) === "reset"
+                    ? "Resetting device…"
+                    : "Closing simulator…",
           }
         : {}),
       locked: !!this.store.lockReason(d.id),
@@ -1405,6 +1414,81 @@ export class DeckService {
           }
         });
       }
+      case "devices.cleanup": {
+        await this.refresh();
+        // Admit and lock the entire eligible selection before any adapter work.
+        // A concurrent reservation or second cleanup cannot claim a later member.
+        const targets = await this.global.run(async () => {
+          if (this.changingConfig || this.shuttingDown)
+            fail("configuration-changing", "Wait for the current configuration change.", 409);
+          if (authorize && !await authorize())
+            fail("unauthorized", "Machine access expired before cleanup could start.", 401);
+          if (args.revision !== undefined && args.revision !== this.config.revision)
+            fail("configuration-changed", "Configuration changed. Review the devices again before cleanup.", 409);
+          return [...new Set<string>(args.ids)].map((id): DeviceConfig | DeviceCleanupResult => {
+            try {
+              const device = this.device(id);
+              if (!supportsDeviceCleanup(device))
+                fail("unsupported-cleanup", "Cleanup is only available for Apple simulators and Android emulators.");
+              const session = this.store.sessions().find((s) => s.deviceId === id && s.state !== "closed");
+              if (session || this.deviceHasOpenGroup(id))
+                fail("device-reserved", "Release this device and finish reservation cleanup before removing apps or resetting it.", 409);
+              if (this.store.lockReason(id) || this.simulatorActions.has(id))
+                fail("device-locked", "This device is locked or already undergoing maintenance.", 409);
+              this.simulatorActions.set(id, args.action);
+              this.store.lock(id, args.action === "reset" ? "Device reset in progress" : "App uninstall in progress");
+              return structuredClone(device);
+            } catch (error) {
+              return { id, ok: false, error: (error as Error).message };
+            }
+          });
+        });
+        let active = 0;
+        const waiting: (() => void)[] = [];
+        const acquireSlot = () => new Promise<void>((resolve) => {
+          if (active < 2) { active++; resolve(); }
+          else waiting.push(resolve);
+        });
+        const releaseSlot = () => {
+          const next = waiting.shift();
+          if (next) next();
+          else active--;
+        };
+        const clean = (target: DeviceConfig | DeviceCleanupResult): Promise<DeviceCleanupResult> => {
+          if ("ok" in target) return Promise.resolve(target);
+          return this.queue(target.id).run(async () => {
+            await acquireSlot();
+            try {
+              if (authorize && !await authorize())
+                fail("unauthorized", "Machine access expired before this device's cleanup started.", 401);
+              await this.streams.closeDevice(target.id);
+              const source = this.config.config.sources.find((s) => s.id === target.captureSourceId);
+              if (source?.kind === "native") await this.capture.closeSource(source);
+              const result = await this.adapters.cleanupDevice(target, args.action);
+              if (result.state === "shutdown") this.store.dropWarmDevice(target.id);
+              this.store.event({
+                deviceId: target.id, owner: origin, action: `cleanup-${args.action}`,
+                detail: args.action === "reset" ? "Reset device" : `Uninstalled ${result.removedApps ?? 0} user apps`,
+              });
+              return { id: target.id, ok: true, ...result };
+            } catch (error) {
+              const message = (error as Error).message;
+              this.store.event({ deviceId: target.id, owner: origin, action: `cleanup-${args.action}-failed`, detail: message });
+              return { id: target.id, ok: false, error: message };
+            } finally {
+              this.simulatorActions.delete(target.id);
+              this.store.lock(target.id, null);
+              if (this.healthPending) await this.healthPending.catch(() => {});
+              this.invalidateInventory(target.id);
+              releaseSlot();
+            }
+          });
+        };
+        // Cold cleanup can boot a device. Limit simultaneous boots while keeping
+        // every admitted target queued immediately, so service shutdown drains
+        // the full selection before closing adapters or the store.
+        return Promise.all(targets.map(clean));
+      }
       case "devices.bulk":
         return Promise.all(
           [...new Set<string>(args.ids)].map((id) =>
@@ -1414,7 +1498,7 @@ export class DeckService {
                 if (this.simulatorActions.has(id))
                   fail(
                     "device-busy",
-                    "Wait for simulator launch or close to finish.",
+                    "Wait for simulator maintenance to finish.",
                     409,
                   );
                 if (
