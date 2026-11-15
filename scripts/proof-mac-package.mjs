@@ -5,7 +5,7 @@ import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import { parseArgs } from "node:util";
-import { digest, preinstall, verifyMachOClosure, walk } from "./distribution/package-support.mjs";
+import { digest, preinstall, validateMediaBundle, verifyMachOClosure, walk } from "./distribution/package-support.mjs";
 
 const { values } = parseArgs({ options: { app: { type: "string" }, package: { type: "string" } } });
 if (!values.app) throw new Error("Use --app PATH/Device Deck.app; this proof never installs into /Applications.");
@@ -19,6 +19,13 @@ const command = (args) => exec(cli, args, { env, timeout: 90000, maxBuffer: 4 * 
 let started = false, passed = false;
 try {
   const distribution = JSON.parse(await readFile(path.join(app, "Contents/Resources/distribution.json"), "utf8"));
+  if (distribution.media === "bundled") await validateMediaBundle(path.join(app, "Contents/Resources/media"), process.arch);
+  const servicePlan = JSON.parse((await exec(path.join(app, "Contents/MacOS/device-deck-service"), ["--plan", String(process.getuid())])).stdout);
+  assert.equal(servicePlan.host.uid, process.getuid());
+  assert.equal(servicePlan.launchDaemon.UserName, servicePlan.host.username);
+  assert.equal(servicePlan.launchDaemon.RunAtLoad, true);
+  assert.equal(servicePlan.launchDaemon.KeepAlive, true);
+  assert.equal(servicePlan.launchDaemon.EnvironmentVariables.DEVICE_DECK_SYSTEM_SERVICE, "1");
   if (values.package) {
     const packageFile = path.resolve(values.package);
     const metadata = JSON.parse(await readFile(packageFile.replace(/\.pkg$/, ".json"), "utf8"));
@@ -86,7 +93,7 @@ try {
   started = false;
   assert.equal(await readFile(path.join(directory, "config.json"), "utf8"), licensedConfig);
   console.log(JSON.stringify({ application: app, version: distribution.version, mode: distribution.mode,
-    signing: distribution.signing, media: distribution.media, checks: [...(values.package ? ["installer checksum, signed payload and preflight contents"] : []), "relocatable Mach-O closure", "CLI with no Node on PATH", "LaunchServices app-owned daemon", "all features free", "bundled web assets", "headless bundled runtime with unrestricted free access", "upgrade refuses running app", "clean shutdown preserves config"] }, null, 2));
+    signing: distribution.signing, media: distribution.media, checks: [...(values.package ? ["installer checksum, signed payload and preflight contents"] : []), ...(distribution.media === "bundled" ? ["signed media hashes, encoder capabilities and license/source closure"] : []), "non-root boot service configuration", "relocatable Mach-O closure", "CLI with no Node on PATH", "LaunchServices app-owned isolated daemon", "all features free", "bundled web assets", "headless bundled runtime with unrestricted free access", "upgrade refuses running app", "clean shutdown preserves config"] }, null, 2));
   passed = true;
 } finally {
   if (started) await command(["stop"]).catch(() => {});

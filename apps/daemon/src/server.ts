@@ -7,6 +7,7 @@ import { readFile, stat } from "node:fs/promises";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { pipeline } from "node:stream/promises";
 import { DeckConnections, assertSharedRoute } from "./decks";
+import { LocalAccounts, localMacUsers } from "./local-accounts";
 import { ZodError } from "zod";
 import { DeckService } from "./local/service";
 import { artifactDisposition } from "./local/capture-library";
@@ -17,6 +18,7 @@ import {
   operations,
   type Operation,
   type Artifact,
+  type Snapshot,
 } from "../../../packages/core/src/local/types";
 const equal = (a: string, b: string) => {
   const left = Buffer.from(a),
@@ -44,11 +46,15 @@ export function createService(
     authority?: MachineAuthority;
     credentials?: ReturnType<typeof createBrowserCredentials>;
     decks?: DeckConnections;
+    accounts?: LocalAccounts;
+    maintenance?: { updating: boolean; active: number };
   } = {},
 ) {
   const { tickets, browsers } = options.credentials || createBrowserCredentials();
   const authority = options.authority || new MachineAuthority(deck.directory);
   const connections = options.decks || new DeckConnections(deck.directory);
+  const accounts = options.accounts || new LocalAccounts(deck.directory);
+  const maintenance = options.maintenance || { updating: false, active: 0 };
   const handler: http.RequestListener = async (req, res) => {
     const reply = (status: number, body: unknown) => {
       res.writeHead(status, { "Content-Type": "application/json" });
@@ -134,7 +140,7 @@ export function createService(
     const native = !remote && equal(apiToken, token);
     const localNative = native && local && loopback;
     const session = browsers.get(cookie);
-    const browser = !apiToken && (Boolean(remote) || Boolean(session && session.host === req.headers.host && session.expiresAt > Date.now()));
+    const browserCandidate = !apiToken && (Boolean(remote) || Boolean(session && session.host === req.headers.host && session.expiresAt > Date.now()));
     const json = async () => {
       if (!req.headers["content-type"]?.startsWith("application/json"))
         throw new DeckError("content-type", "Use application/json.", 415);
@@ -153,6 +159,10 @@ export function createService(
       }
     };
     try {
+      const account = !native && !remote && local && loopback && apiToken ? await accounts.authorize(apiToken) : undefined;
+      const browser = browserCandidate && (!session?.accountGrantId ||
+        (local && loopback && !remote && await accounts.active(session.accountGrantId)));
+      const accountGrantId = account?.id || (browser ? session?.accountGrantId : undefined);
       if (url.pathname === "/v1/machine" && req.method === "GET") {
         reply(200, await authority.metadata());
         return;
@@ -179,7 +189,8 @@ export function createService(
         const { ticket } = await json();
         const launch = tickets.get(ticket);
         tickets.delete(ticket);
-        if (!launch || launch.expiresAt <= Date.now() || launch.host !== req.headers.host)
+        if (!launch || launch.expiresAt <= Date.now() || launch.host !== req.headers.host ||
+          (launch.accountGrantId && (!local || !loopback || !await accounts.active(launch.accountGrantId))))
           throw new DeckError(
             "invalid-ticket",
             "Open this dashboard with devdeck ui.",
@@ -188,7 +199,7 @@ export function createService(
         const credential = randomBytes(32).toString("base64url");
         for (const [key, session] of browsers) if (session.expiresAt <= Date.now()) browsers.delete(key);
         if (browsers.size >= 1000) throw new DeckError("too-many-browsers", "Too many active dashboard sessions. Restart Device Deck to clear them.", 429);
-        browsers.set(credential, { expiresAt: Date.now() + 24 * 60 * 60000, host: req.headers.host! });
+        browsers.set(credential, { expiresAt: Date.now() + 24 * 60 * 60000, host: req.headers.host!, accountGrantId: launch.accountGrantId });
         res.setHeader(
           "Set-Cookie",
           `${cookieName}=${credential}; HttpOnly; SameSite=Strict; Path=/; Max-Age=86400${options.tls ? "; Secure" : ""}`,
@@ -197,9 +208,9 @@ export function createService(
         return;
       }
       if (url.pathname.startsWith("/v1/")) {
-        const peer = !native && !browser && apiToken ? await connections.authorize(apiToken) : false;
-        const hub = !native && !browser && !peer && apiToken ? await authority.authorizeClaims(apiToken) : undefined;
-        if (!native && !browser && !hub && !peer)
+        const peer = !native && !account && !browser && apiToken ? await connections.authorize(apiToken) : false;
+        const hub = !native && !account && !browser && !peer && apiToken ? await authority.authorizeClaims(apiToken) : undefined;
+        if (!native && !account && !browser && !hub && !peer)
           throw new DeckError(
             "unauthorized",
             "Open the dashboard with devdeck ui, or supply the local API token.",
@@ -212,6 +223,33 @@ export function createService(
         )
           throw new DeckError("csrf", "Missing local client header.", 403);
         if (peer) assertSharedRoute(req.method || "GET", url.pathname);
+        if (accountGrantId && url.pathname !== "/v1/browser-ticket") assertSharedRoute(req.method || "GET", url.pathname);
+        if (["/v1/service/prepare-update", "/v1/service/cancel-update"].includes(url.pathname) && req.method === "POST") {
+          if (!localNative) throw new DeckError("host-account-required", "Update the shared service from the hosting Mac account.", 403);
+          await json();
+          if (url.pathname.endsWith("cancel-update")) { maintenance.updating = false; reply(200, { ready: false }); return; }
+          maintenance.updating = true;
+          try {
+            if (maintenance.active) throw new DeckError("service-busy", "Device Deck is finishing an operation. Try the update again shortly.", 409);
+            const inventory = await deck.execute("inventory", {}) as Snapshot;
+            if (inventory.recordings.length || inventory.sessions.some(s => s.state !== "closed"))
+              throw new DeckError("service-busy", "Finish active reservations and recordings before updating Device Deck.", 409);
+            reply(200, { ready: true });
+          } catch (error) { maintenance.updating = false; throw error; }
+          return;
+        }
+        if (url.pathname.startsWith("/v1/local-accounts/") && req.method === "POST") {
+          if (!localNative) throw new DeckError("host-account-required", "Manage Mac account access from the hosting account in Device Deck setup.", 403);
+          const value = await json();
+          if (url.pathname.endsWith("/list")) reply(200, await accounts.list());
+          else if (url.pathname.endsWith("/grant")) {
+            const selected = (await localMacUsers()).find(user => user.username === value.username);
+            if (!selected) throw new DeckError("account-not-found", "Choose an existing local Mac account.", 400);
+            reply(200, await accounts.grant(selected));
+          } else if (url.pathname.endsWith("/revoke")) reply(200, await accounts.revoke(value.uid));
+          else throw new DeckError("not-found", "Unknown Mac account action.", 404);
+          return;
+        }
         if (url.pathname === "/v1/decks" && req.method === "GET") {
           reply(200, await connections.list());
           return;
@@ -253,6 +291,8 @@ export function createService(
             version,
             mode: "local",
             pid: process.pid,
+            sharedService: accounts.host ? { uid: accounts.host.uid, username: accounts.host.username, startsAtBoot: true } : undefined,
+            updating: maintenance.updating,
             operations: Object.keys(operations),
             diagnostics: deck.diagnostics,
             inventory: deck.inventoryDiagnostics?.(),
@@ -264,13 +304,15 @@ export function createService(
           return;
         }
         if (req.method === "POST" && url.pathname === "/v1/browser-ticket") {
-          if (!localNative)
+          if (!localNative && !account)
             throw new DeckError(
               "unauthorized",
               "A local command must open the dashboard.",
               403,
             );
           const request = await json();
+          if (account && request.address !== undefined)
+            throw new DeckError("local-client-required", "Shared Mac accounts open the dashboard on this Mac's local address.", 403);
           let ticketHost = req.headers.host!;
           if (request.address !== undefined) {
             const address = new URL(request.address);
@@ -283,7 +325,7 @@ export function createService(
             if (launch.expiresAt <= Date.now()) tickets.delete(key);
           if (tickets.size >= 100) throw new DeckError("too-many-tickets", "Too many unused launch tickets. Wait one minute before retrying.", 429);
           const ticket = randomBytes(32).toString("base64url");
-          tickets.set(ticket, { expiresAt: Date.now() + 60000, host: ticketHost });
+          tickets.set(ticket, { expiresAt: Date.now() + 60000, host: ticketHost, accountGrantId: account?.id });
           reply(200, { ticket });
           return;
         }
@@ -306,7 +348,7 @@ export function createService(
           if (operation === "config.save" && !localNative &&
             (JSON.stringify(value.config?.network) !== JSON.stringify(deck.config.config.network) ||
               JSON.stringify(value.config?.tailscale) !== JSON.stringify(deck.config.config.tailscale) ||
-              (peer && (JSON.stringify(value.config?.tools) !== JSON.stringify(deck.config.config.tools) || value.config?.settings?.folder !== deck.config.config.settings.folder))))
+              ((peer || accountGrantId) && (JSON.stringify(value.config?.tools) !== JSON.stringify(deck.config.config.tools) || value.config?.settings?.folder !== deck.config.config.settings.folder))))
             throw new DeckError("local-client-required", "Change network and portal trust settings with the local Device Deck CLI.", 403);
           // A caller can delay uploading its body. Check the same hub credential
           // again after that wait so expiry or local revocation prevents dispatch.
@@ -314,12 +356,15 @@ export function createService(
             throw new DeckError("unauthorized", "Machine access expired or was revoked before the request completed. Reconnect from your machines page.", 401);
           if (peer && !await connections.authorize(apiToken))
             throw new DeckError("unauthorized", "Deck access was revoked before the request completed.", 401);
+          if (accountGrantId && !await accounts.active(accountGrantId))
+            throw new DeckError("unauthorized", "This Mac account's access was revoked. Ask the host to allow it again.", 401);
           const authorize: LiveAuthorization = async () => {
             // Only input dispatch is tied to this HTTP request's lifetime.
             // Stream authorizers must outlive their completed signaling request.
             if (operation === "remote.input" && res.destroyed) return false;
             if (hub) return authority.authorize(apiToken);
             if (peer) return connections.authorize(apiToken);
+            if (accountGrantId) return accounts.active(accountGrantId);
             if (remote) return Boolean(deck.config.config.tailscale?.origin === tailscale.origin &&
               typeof login === "string" && deck.config.config.tailscale.allowedUsers.includes(login));
             if (native) return true;
@@ -327,7 +372,11 @@ export function createService(
             return Boolean(current && current.host === req.headers.host && current.expiresAt > Date.now());
           };
           authorize.access = hub;
-          reply(200, await deck.execute(operation as Operation, value, origin, authorize));
+          const readOnly = ["inventory", "api.describe", "config.get", "reports.get", "captures.storage", "license.status"].includes(operation);
+          if (maintenance.updating && !readOnly) throw new DeckError("service-updating", "Device Deck is preparing an update. Try again after it reopens.", 503);
+          if (!readOnly) maintenance.active++;
+          try { reply(200, await deck.execute(operation as Operation, value, origin, authorize)); }
+          finally { if (!readOnly) maintenance.active--; }
           return;
         }
         if (req.method === "GET" && url.pathname.startsWith("/v1/capture-card-thumbnail/")) {
@@ -483,5 +532,5 @@ export function createService(
 }
 
 export function createBrowserCredentials() {
-  return { tickets: new Map<string, { expiresAt: number; host: string }>(), browsers: new Map<string, { expiresAt: number; host: string }>() };
+  return { tickets: new Map<string, { expiresAt: number; host: string; accountGrantId?: string }>(), browsers: new Map<string, { expiresAt: number; host: string; accountGrantId?: string }>() };
 }

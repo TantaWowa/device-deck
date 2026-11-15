@@ -40,11 +40,14 @@ import { releaseMode } from "../../../packages/licensing/src/trust";
 import { version } from "../../../packages/core/src/version";
 import { decksCommand, downloadCapture } from "./decks";
 import { deckNameSchema } from "../../../packages/core/src/decks";
+import { sharingCommand, serviceMaintenanceCommand } from "./sharing";
 const help = `Device Deck · local Mac device manager
 Usage: devdeck <command> [options]
 
   decks list|add|remove         Manage remote Deck connections on this Mac
   decks grant|grants|revoke     Grant or revoke another Deck's access to this Mac
+  sharing status|users         Inspect the shared Mac service and local accounts
+  sharing grant USER|revoke UID Allow or revoke a local Mac account
   --deck NAME                  Use a connected Deck through the local daemon
   download ID --output FILE     Save a capture from the selected Deck on this Mac
 
@@ -163,10 +166,10 @@ try {
   const targetDeck = process.env.DEVICE_DECK_TARGET;
   if (targetDeck && targetDeck !== "local") {
     deckNameSchema.parse(targetDeck);
-    if (["start", "stop", "install", "uninstall", "logs", "init", "network", "pair", "tailscale", "update", "decks"].includes(command || ""))
+    if (["start", "stop", "install", "uninstall", "logs", "init", "network", "pair", "tailscale", "update", "decks", "sharing", "prepare-update", "cancel-update"].includes(command || ""))
       throw new DeckError("arguments", "This command manages the local Mac. Use --deck local or run it on the host Mac.", 400);
   }
-  if (p[0] === "service" && !["start", "stop", "status", "logs", "install", "uninstall"].includes(command)) throw new DeckError("arguments", "Use service start, stop, status, logs, install or uninstall.", 400);
+  if (p[0] === "service" && !["start", "stop", "status", "logs", "install", "uninstall", "prepare-update", "cancel-update"].includes(command)) throw new DeckError("arguments", "Use service start, stop, status, logs, install or uninstall.", 400);
   if (!command || v.help) {
     console.log(help);
   } else {
@@ -190,7 +193,9 @@ try {
       return String(v.reason);
     };
     let result: unknown;
-    if (command === "decks") result = await decksCommand(p[1] || "list", p[2], { address: v.address as string | undefined, tokenFile: v["token-file"] as string | undefined, output: v.output as string | undefined });
+    if (command === "sharing") result = await sharingCommand(p[1] || "status", p[2]);
+    else if (command === "prepare-update" || command === "cancel-update") result = await serviceMaintenanceCommand(command);
+    else if (command === "decks") result = await decksCommand(p[1] || "list", p[2], { address: v.address as string | undefined, tokenFile: v["token-file"] as string | undefined, output: v.output as string | undefined });
     else if (command === "download") result = await downloadCapture(p[1], v.output as string | undefined);
     else if (command === "version") result = { version, mode: releaseMode, platform: process.platform, arch: process.arch };
     else if (command === "doctor") {
@@ -207,12 +212,12 @@ try {
       const action = p[1] || "check";
       if (!["check", "download"].includes(action) || (v.channel && !["beta", "stable"].includes(String(v.channel)))) throw new DeckError("arguments", "Use update check|download with --channel beta|stable.", 400);
       const release = await checkMacUpdates({ ...(v.channel ? { channel: String(v.channel) as "beta" | "stable" } : {}) });
-      if (!release) result = { currentVersion: version, available: false, message: "No matching GitHub installer is available yet. Build from source or visit https://github.com/TantaWowa/device-deck/releases." };
+      if (!release) result = { currentVersion: version, available: false, message: "No verified signed installer with bundled recording tools is available for this Mac yet. Try again later." };
       else if (action === "check") result = { currentVersion: version, available: compareVersions(release.manifest.version, version) > 0, release: release.manifest };
       else {
         if (compareVersions(release.manifest.version, version) < 0) throw new Error("The available package is older than this version. Automatic downgrade is not supported.");
         const file = await downloadMacUpdate(release, path.resolve(String(v.output || path.join(dataDirectory(), "updates"))));
-        result = { file, version: release.manifest.version, signing: release.manifest.signing, next: "Finish reservations and recordings, quit Device Deck, then open this installer. Homebrew users should upgrade through Homebrew." };
+        result = { file, version: release.manifest.version, signing: release.manifest.signing, next: "Open Device Deck and choose Check for updates to install safely for all Mac accounts." };
       }
     } else if (command === "status") result = await callService("health");
     else if (

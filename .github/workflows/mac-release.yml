@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       publish:
-        description: Publish free installers to GitHub Releases
+        description: Publish signed, notarized installers with bundled media from main
         type: boolean
         default: false
 permissions:
@@ -23,7 +23,7 @@ jobs:
           - architecture: x64
             runner: macos-15-intel
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 45
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -32,22 +32,66 @@ jobs:
         with:
           node-version: 24.17.0
           package-manager-cache: false
-      - run: brew install ffmpeg-full
-      - run: echo "$(brew --prefix ffmpeg-full)/bin" >> "$GITHUB_PATH"
+      - name: Check publication branch
+        if: github.event_name == 'workflow_dispatch' && inputs.publish
+        run: test "$GITHUB_REF" = refs/heads/main
+      - name: Install media build tools
+        run: brew install cmake pkgconf nasm
       - run: npm ci
+      - name: Build pinned media dependencies
+        run: |
+          media="$HOME/hope-scratch/device-deck-media/${{ matrix.architecture }}/bundle"
+          node scripts/distribution/build-media.mjs --output "$media"
+          echo "DEVICE_DECK_MEDIA_BUNDLE=$media" >> "$GITHUB_ENV"
+          echo "$media/bin" >> "$GITHUB_PATH"
       - run: npm run check
+      - run: npm run check:docs
+      - run: npm run test:docs
+      - run: npm run build
       - run: npm test
       - run: npm run test:distribution
-      - run: npm run package:mac
+      - name: Prepare temporary release signing keychain
+        if: github.event_name == 'workflow_dispatch' && inputs.publish && github.ref == 'refs/heads/main'
+        env:
+          DEVICE_DECK_APPLICATION_P12: ${{ secrets.DEVICE_DECK_APPLICATION_P12 }}
+          DEVICE_DECK_INSTALLER_P12: ${{ secrets.DEVICE_DECK_INSTALLER_P12 }}
+          DEVICE_DECK_P12_PASSWORD: ${{ secrets.DEVICE_DECK_P12_PASSWORD }}
+          DEVICE_DECK_APPLE_ID: ${{ secrets.DEVICE_DECK_APPLE_ID }}
+          DEVICE_DECK_APPLE_TEAM_ID: ${{ secrets.DEVICE_DECK_APPLE_TEAM_ID }}
+          DEVICE_DECK_APPLE_APP_PASSWORD: ${{ secrets.DEVICE_DECK_APPLE_APP_PASSWORD }}
+          DEVICE_DECK_NOTARY_KEY_ID: ${{ secrets.DEVICE_DECK_NOTARY_KEY_ID }}
+          DEVICE_DECK_NOTARY_ISSUER: ${{ secrets.DEVICE_DECK_NOTARY_ISSUER }}
+          DEVICE_DECK_NOTARY_PRIVATE_KEY: ${{ secrets.DEVICE_DECK_NOTARY_PRIVATE_KEY }}
+        run: node scripts/distribution/ci-signing.mjs
+      - name: Build installer
+        env:
+          PUBLIC_RELEASE: ${{ github.event_name == 'workflow_dispatch' && inputs.publish && github.ref == 'refs/heads/main' }}
+        run: |
+          flags=(--media-bundle "$DEVICE_DECK_MEDIA_BUNDLE")
+          if [[ "$PUBLIC_RELEASE" == true ]]; then flags+=(--release); fi
+          npm run package:mac -- "${flags[@]}"
       - name: Prove staged application lifecycle
-        run: npm run proof:mac -- --app "work/distribution/staging/${{ matrix.architecture }}/payload/Applications/Device Deck.app"
+        run: |
+          version=$(node -p 'require("./package.json").version')
+          npm run proof:mac -- --app "work/distribution/staging/${{ matrix.architecture }}/payload/Applications/Device Deck.app" --package "work/distribution/device-deck-$version-macos-${{ matrix.architecture }}.pkg"
+      - name: Collect release files
+        run: |
+          version=$(node -p 'require("./package.json").version')
+          name="device-deck-$version-macos-${{ matrix.architecture }}"
+          mkdir release-assets
+          cp "work/distribution/$name.pkg" "work/distribution/$name.pkg.sha256" "work/distribution/$name.json" release-assets/
+      - name: Verify public release metadata and checksums
+        if: github.event_name == 'workflow_dispatch' && inputs.publish && github.ref == 'refs/heads/main'
+        run: |
+          version=$(node -p 'require("./package.json").version')
+          node scripts/distribution/verify-release.mjs --directory release-assets --version "$version" --commit "$GITHUB_SHA" --arch "${{ matrix.architecture }}"
+      - name: Remove temporary signing credentials
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.publish && github.ref == 'refs/heads/main'
+        run: node scripts/distribution/ci-signing.mjs --cleanup
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: device-deck-${{ matrix.architecture }}
-          path: |
-            work/distribution/*.pkg
-            work/distribution/*.sha256
-            work/distribution/*.json
+          path: release-assets/*
           if-no-files-found: error
   publish:
     needs: package
@@ -59,16 +103,36 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.17.0
+          package-manager-cache: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           pattern: device-deck-*
           merge-multiple: true
           path: installers
-      - name: Publish free installers
+      - name: Verify both public installers
+        run: |
+          version=$(node -p 'require("./package.json").version')
+          node scripts/distribution/verify-release.mjs --directory installers --version "$version" --commit "$GITHUB_SHA"
+      - name: Publish signed installers
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           version=$(node -p 'require("./package.json").version')
           flags=()
           [[ "$version" != *-* ]] || flags+=(--prerelease)
-          gh release create "v$version" installers/* --target "$GITHUB_SHA" --title "Device Deck $version" --notes "Free and open source under MIT. All features included. These installers are unsigned with ad-hoc app signatures. See the README for source builds and platform dependencies." "${flags[@]}"
+          cat > "$RUNNER_TEMP/device-deck-release-notes.md" <<'NOTES'
+          Device Deck is free and open source under MIT. Local use needs no account or license.
+
+          These Mac installers are signed with Developer ID and notarized by Apple. They include Node, FFmpeg and ffprobe. Download the arm64 installer for Apple silicon or the x64 installer for Intel, install it, then open Device Deck from Applications.
+
+          Already using the shared Mac service? Keep the menu-bar app open and choose Check for updates → Download update → Install and reopen. Finish active reservations and recordings first, or choose Install when idle. The app safely stops and restarts the shared service for all allowed accounts. Quitting the menu-bar app alone does not stop that service.
+
+          Upgrading from an unsigned beta? Download this signed installer manually once. Finish reservations and recordings, quit the old Device Deck app, then open the installer and complete Mac setup. Future updates use the menu-bar app. Your configuration and captures are preserved.
+
+          Additional platform tools are needed for Android, Apple simulators and physical Apple devices; see the Mac install guide in the repository.
+          NOTES
+          gh release create "v$version" installers/* --draft --target "$GITHUB_SHA" --title "Device Deck $version" --notes-file "$RUNNER_TEMP/device-deck-release-notes.md" "${flags[@]}"
+          gh release edit "v$version" --draft=false

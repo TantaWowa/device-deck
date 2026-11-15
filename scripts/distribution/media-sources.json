@@ -1,0 +1,53 @@
+{
+  "schemaVersion": 1,
+  "components": [
+    {
+      "name": "freetype",
+      "version": "2.15.0",
+      "url": "https://downloads.sourceforge.net/project/freetype/freetype2/2.15.0/freetype-2.15.0.tar.xz",
+      "sha256": "93cd47eb719c325107f2d3cf087d06299e944c3b48a40b55537302304dea1dd5",
+      "license": "GPL-2.0-or-later",
+      "notices": ["LICENSE.TXT", "docs/GPLv2.TXT", "src/bdf/README", "src/pcf/README"]
+    },
+    {
+      "name": "fribidi",
+      "version": "1.0.18",
+      "url": "https://github.com/fribidi/fribidi/releases/download/v1.0.18/fribidi-1.0.18.tar.xz",
+      "sha256": "1de5e8073d035388b71d0b2d452b1da1f8caeea8a7702997b401fe1b6250727f",
+      "license": "LGPL-2.1-or-later",
+      "notices": ["COPYING", "AUTHORS"]
+    },
+    {
+      "name": "harfbuzz",
+      "version": "15.1.0",
+      "url": "https://github.com/harfbuzz/harfbuzz/releases/download/15.1.0/harfbuzz-15.1.0.tar.xz",
+      "sha256": "0fc7c565443a5f4be7da65ac5ee5bd737d9b158dc908708b7689a0a5796b0c8d",
+      "license": "MIT",
+      "notices": ["COPYING", "AUTHORS"]
+    },
+    {
+      "name": "libass",
+      "version": "0.17.5",
+      "url": "https://github.com/libass/libass/releases/download/0.17.5/libass-0.17.5.tar.xz",
+      "sha256": "2dca25c0e0c837ddf00b52011b3f82cac1e4ddd3ad018227806b0c2288864acc",
+      "license": "ISC",
+      "notices": ["COPYING"]
+    },
+    {
+      "name": "x264",
+      "version": "r3222-b35605a",
+      "url": "https://code.videolan.org/videolan/x264/-/archive/b35605ace3ddf7c1a5d67a2eb553f034aef41d55/x264-b35605ace3ddf7c1a5d67a2eb553f034aef41d55.tar.gz",
+      "sha256": "cd71a7515b0e9a012e1ac9b1f8415bebcaf6fc97d4db32286642ac4c0fbe24f9",
+      "license": "GPL-2.0-or-later",
+      "notices": ["COPYING", "AUTHORS"]
+    },
+    {
+      "name": "ffmpeg",
+      "version": "9.0.2",
+      "url": "https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz",
+      "sha256": "8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e",
+      "license": "GPL-2.0-or-later",
+      "notices": ["COPYING.GPLv2", "COPYING.LGPLv2.1", "LICENSE.md"]
+    }
+  ]
+}

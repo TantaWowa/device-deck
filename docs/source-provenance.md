@@ -18,8 +18,9 @@ On 13 September 2026, Tawi's `src/tui.tsx` at `0878018401c03d5cc1495ad12ef126579
 
 No separate iOS simulator remote script was found in the inspected shell sources. Simulator capture reuses the verified simctl route. Simulator input uses [Meta's idb](https://github.com/facebook/idb), whose [UI command documentation](https://fbidb.io/docs/idb/ui/) describes HID keys, taps and text. Both the official companion and Python client were installed for the dedicated proof simulators.
 
-Device Deck's code is available under the MIT license. Third-party runtime code keeps its original licenses. The package includes dependency license texts. ffmpeg, idb, pyatv and Xcode remain separately installed tools. Mac application distributions include Node with its own license; bundled scrcpy is described below.
+Device Deck's code is available under the MIT license. Third-party runtime code keeps its original licenses. Mac application distributions include Node with its own license; bundled scrcpy is described below. Dependency license texts are included in the release notices.
 
+FFmpeg packaging depends on the release. The current public unsigned beta requires a separate installation; packages built with the new media bundle include FFmpeg, ffprobe, component notices and matching source archives. See the [install guide](install.md) for published release status and [Mac distribution](macos-distribution.md) for bundle details. idb, pyatv and Xcode remain separately installed tools.
 
 ## Live Android video and touch
 

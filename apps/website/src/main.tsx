@@ -19,7 +19,6 @@ import {
 } from "lucide-react";
 import { Brand } from "../../../packages/ui/src";
 import "./style.css";
-const demo = "/demo/";
 function App() {
   const [menu, setMenu] = useState(false);
   const [tab, setTab] = useState("CLI");
@@ -95,6 +94,7 @@ Content-Type: application/json
             ["#workspace", "Workspace"],
             ["#capture", "Capture & evidence"],
             ["#cli", "CLI & agents"],
+            ["/docs/", "Docs"],
             ["/install", "Install"],
             ["https://github.com/TantaWowa/device-deck", "GitHub"],
           ].map(([href, label]) => (
@@ -118,16 +118,16 @@ Content-Type: application/json
       <main id="top">
         <section className="hero wrap">
           <div className="release-label">
-            <span /> A local Mac workspace for TV app development
+            <span /> Open source · macOS · MIT
           </div>
           <h1>
-            Every device.
+            A device workspace
             <br />
-            One clear view.
+            for you and your agents.
           </h1>
           <p className="hero-copy">
-            Find your Roku, Android and Apple devices. See who’s using them,
-            open a remote, and keep your captures together on your Mac.
+            Control TVs, phones and simulators. Reserve devices, capture bugs,
+            and use the same workspace from your browser, coding agents and CI.
           </p>
           <div className="hero-actions">
             <a className="button primary" href="/install">
@@ -181,7 +181,7 @@ Content-Type: application/json
           <strong>Android & Android TV</strong>
           <strong>Apple simulators</strong>
           <strong>USB / HDMI inputs</strong>
-          <span>Capabilities vary by device.</span>
+          <a href="/docs/compatibility/">Check device support</a>
         </div>
         <section id="workspace" className="wrap section">
           <div className="section-intro">
@@ -437,6 +437,10 @@ Content-Type: application/json
                   ambiguous match are explicit errors.
                 </li>
                 <li>
+                  <Check /> Reserve a complete device group, start its virtual
+                  devices, and pass their identifiers to your existing test runner.
+                </li>
+                <li>
                   <Check /> No account login. Human, agent and job names are
                   owner labels; session credentials protect control.
                 </li>
@@ -446,6 +450,11 @@ Content-Type: application/json
                 names with your own. HTTP uses the local endpoint and API token;
                 control and capture require the reservation’s session ID and
                 lease token. The earlier browser prototype is separate.
+              </p>
+              <p>
+                <a href="/docs/api/#mcp-walkthrough">Connect an MCP client</a>
+                {" · "}
+                <a href="/docs/group-reservations/">Set up device groups for CI</a>
               </p>
             </div>
             <div className="code-window">
@@ -535,9 +544,13 @@ Content-Type: application/json
             </article>
           </div>
           <p className="status-footnote">
-            Current scope is one Mac. Recording requires FFmpeg; simulator and
-            remote support depend on the platform tools and pairing. Device Deck is free and open source under the MIT license.
-            Multi-host coordination is future work.
+            Device Deck is free under MIT. Platform tools, pairing and capture
+            support depend on the device and release. Read the{" "}
+            <a href="/docs/install/">install guide</a> and{" "}
+            <a href="/docs/compatibility/">compatibility notes</a> before setting
+            up your hardware. You can{" "}
+            <a href="/docs/deck-sharing/">connect another Mac&apos;s Deck</a>;
+            each host owns its reservations and captures.
           </p>
         </section>
         <section className="closing">
@@ -548,10 +561,10 @@ Content-Type: application/json
                 <br />
                 Start a session.
               </h2>
-              <p>Explore the earlier browser prototype with simulated devices.</p>
+              <p>Follow the setup guide and save your first device capture.</p>
             </div>
-            <a className="button primary" href={demo}>
-              Open browser demo <ArrowRight size={17} />
+            <a className="button primary" href="/docs/">
+              Read the docs <ArrowRight size={17} />
             </a>
           </div>
         </section>
@@ -559,7 +572,10 @@ Content-Type: application/json
       <footer className="wrap">
         <Brand />
         <p>Device Deck is free and open source under the MIT license.</p>
-        <span>Local by design · no account login · no cloud file storage</span>
+        <span>
+          <a href="/docs/">Documentation</a> ·{" "}
+          <a href="/docs/contributing/">Contribute</a> · Captures stay on your host
+        </span>
       </footer>
     </>
   );

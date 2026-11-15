@@ -255,6 +255,18 @@ p {
   font-size: 9px;
   color: #596c85;
 }
+.platform-strip > a {
+  font-size: 12px;
+  color: #245bc2;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.status-footnote a,
+.cli-section p a,
+footer a {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
 .section {
   padding: 94px 0;
 }

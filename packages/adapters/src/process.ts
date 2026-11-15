@@ -3,6 +3,15 @@ import { constants } from "node:fs";
 import { access, stat } from "node:fs/promises";
 import path from "node:path";
 import { DeckError } from "../../core/src/local/types";
+function desktopCommand(command: string, args: string[]) {
+  // A boot service keeps the host UID but starts outside the desktop bootstrap
+  // session. Open Finder/Simulator in that user's session when one is available.
+  // simctl/idb remain direct so supported headless automation still works.
+  return process.platform === "darwin" && process.env.DEVICE_DECK_SYSTEM_SERVICE === "1" &&
+    (command === "open" || command === "/usr/bin/open")
+    ? { command: "/bin/launchctl", args: ["asuser", String(process.getuid!()), "/usr/bin/open", ...args] }
+    : { command, args };
+}
 export async function run(
   command: string,
   args: string[],
@@ -12,7 +21,8 @@ export async function run(
   if (options.signal?.aborted)
     throw new DeckError("adapter-cancelled", `${command}: Command cancelled.`, 499);
   return new Promise<{ stdout: Buffer; stderr: string }>((resolve, reject) => {
-    const child = spawn(command, args, { cwd: options.cwd, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+    const invocation = desktopCommand(command, args);
+    const child = spawn(invocation.command, invocation.args, { cwd: options.cwd, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
     const stdout: Buffer[] = [], stderr: Buffer[] = [];
     let bytes = 0, failure: string | undefined, cancelled = false;
     let escalation: ReturnType<typeof setTimeout> | undefined;
@@ -66,7 +76,8 @@ export async function available(command: string) {
 }
 export function start(command: string, args: string[], options: { env?: NodeJS.ProcessEnv } = {}) {
   // Per-helper overrides retain the host's SDK/tool discovery environment.
-  const child = spawn(command, args, { stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, ...options.env } });
+  const invocation = desktopCommand(command, args);
+  const child = spawn(invocation.command, invocation.args, { stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, ...options.env } });
   let stderr = "",
     stdout = "",
     error: Error | undefined,
