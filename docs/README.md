@@ -37,6 +37,7 @@ Prefer help from Codex or Claude? [Set up with an agent](agent-setup.md) has cop
 
 ## Contribute and maintain
 
+- [Generic device plugin API preview](device-plugins.md), including proposed contracts and example integrations
 - [Contribution guide](../CONTRIBUTING.md)
 - [Development setup and repository map](development.md)
 - [Architecture](architecture.md)

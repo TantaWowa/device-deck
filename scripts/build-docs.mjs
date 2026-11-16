@@ -12,7 +12,7 @@ const navigation = [
   ["Start here", [["README", "Overview"], ["install", "Install on Mac"], ["agent-setup", "Set up with an agent"], ["using-device-deck", "Your first session"], ["compatibility", "Device compatibility"]]],
   ["Use your devices", [["live-video-and-touch", "Video and touch"], ["simulator-controls", "Simulators and emulators"], ["physical-ios", "Physical iPhone and iPad"], ["reports-and-capture-cards", "Reports and capture cards"]]],
   ["Share and automate", [["agent-device-workflow", "Coding agents"], ["group-reservations", "CI device groups"], ["api", "CLI, API and MCP"], ["deck-sharing", "Connect another Deck"], ["remote-access", "Remote access and portal"], ["team-rollout", "Team setup"]]],
-  ["Contribute", [["contributing", "Contribution guide"], ["development", "Build from source"], ["architecture", "Architecture"], ["validation", "Validation records"]]],
+  ["Contribute", [["device-plugins", "Device plugins: preview"], ["contributing", "Contribution guide"], ["development", "Build from source"], ["architecture", "Architecture"], ["validation", "Validation records"]]],
 ];
 
 const promptCopyScript = `<script>

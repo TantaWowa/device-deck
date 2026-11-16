@@ -24,6 +24,8 @@ Free under the [MIT license](LICENSE). All features and concurrent sessions are 
 
 Capabilities and setup vary by device. Read the [compatibility guide](docs/compatibility.md) for implemented adapters, documented checks and limits.
 
+We are adding a [generic device plugin API](https://device-deck.tantawowa.com/docs/device-plugins/) for new device types. The design preview covers proposed contracts and possible integrations. The public plugin SDK is not available yet.
+
 ## Install the Mac application
 
 Requires macOS 14 or later. [Download Device Deck 0.9.0-beta.3 for Apple silicon or Intel](https://device-deck.tantawowa.com/install). The signed, Apple-notarized installers include Node, FFmpeg, ffprobe and the dashboard. Normal installation and setup need no Terminal commands, Homebrew, restart or logout.
