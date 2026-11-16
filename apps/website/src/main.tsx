@@ -94,6 +94,7 @@ Content-Type: application/json
             ["#workspace", "Workspace"],
             ["#capture", "Capture & evidence"],
             ["#cli", "CLI & agents"],
+            ["/docs/agent-setup/", "Agent setup"],
             ["/docs/", "Docs"],
             ["/install", "Install"],
             ["https://github.com/TantaWowa/device-deck", "GitHub"],
@@ -133,8 +134,8 @@ Content-Type: application/json
             <a className="button primary" href="/install">
               Download for Mac <ArrowRight size={17} />
             </a>
-            <a className="button" href="https://github.com/TantaWowa/device-deck">
-              Get the source
+            <a className="button" href="/docs/agent-setup/">
+              Set up with an agent <ArrowRight size={17} />
             </a>
           </div>
           <p className="preview-note">

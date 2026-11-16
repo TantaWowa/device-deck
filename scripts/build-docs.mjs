@@ -7,11 +7,42 @@ import GithubSlugger from "github-slugger";
 const repository = "https://github.com/TantaWowa/device-deck";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const navigation = [
-  ["Start here", [["README", "Overview"], ["install", "Install on Mac"], ["using-device-deck", "Your first session"], ["compatibility", "Device compatibility"]]],
+  ["Start here", [["README", "Overview"], ["install", "Install on Mac"], ["agent-setup", "Set up with an agent"], ["using-device-deck", "Your first session"], ["compatibility", "Device compatibility"]]],
   ["Use your devices", [["live-video-and-touch", "Video and touch"], ["simulator-controls", "Simulators and emulators"], ["physical-ios", "Physical iPhone and iPad"], ["reports-and-capture-cards", "Reports and capture cards"]]],
   ["Share and automate", [["agent-device-workflow", "Coding agents"], ["group-reservations", "CI device groups"], ["api", "CLI, API and MCP"], ["deck-sharing", "Connect another Deck"], ["remote-access", "Remote access and portal"], ["team-rollout", "Team setup"]]],
   ["Contribute", [["contributing", "Contribution guide"], ["development", "Build from source"], ["architecture", "Architecture"], ["validation", "Validation records"]]],
 ];
+
+const promptCopyScript = `<script>
+document.querySelectorAll(".agent-prompt").forEach(function (prompt) {
+  var button = prompt.querySelector(".copy-prompt");
+  var code = prompt.querySelector("pre code");
+  var status = prompt.querySelector(".copy-status");
+  var reset;
+  button.hidden = false;
+  button.addEventListener("click", async function () {
+    clearTimeout(reset);
+    button.disabled = true;
+    try {
+      await navigator.clipboard.writeText(code.textContent);
+      button.textContent = "Copied";
+      status.textContent = "Prompt copied. Paste it into your agent.";
+      reset = setTimeout(function () { button.textContent = "Copy prompt"; }, 2000);
+    } catch {
+      var range = document.createRange();
+      range.selectNodeContents(code);
+      var selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+      code.parentElement.focus();
+      button.textContent = "Copy prompt";
+      status.textContent = "Press Command+C on Mac or Ctrl+C to copy the selected prompt.";
+    } finally {
+      button.disabled = false;
+    }
+  });
+});
+</script>`;
 
 function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]);
@@ -78,9 +109,17 @@ export function createDocsSite(repositoryRoot = root) {
     const toc = document.headings.filter((heading) => heading.depth === 2);
     const contents = toc.length > 2 ? `<details class="page-contents"><summary>On this page</summary><ul>${toc.map((heading) => `<li><a href="#${escapeHtml(heading.id)}">${escapeHtml(heading.text)}</a></li>`).join("")}</ul></details>` : "";
     let firstHeading = true;
+    let hasPrompts = false;
     const markdown = new Marked({
       gfm: true,
       renderer: {
+        code(token) {
+          const prompt = (token.lang ?? "").trim().match(/^prompt(?:\s+(.+))?$/);
+          if (!prompt) return this.constructor.prototype.code.call(this, token);
+          hasPrompts = true;
+          const title = prompt[1] || "Agent prompt";
+          return `<details class="agent-prompt"><summary>${escapeHtml(title)}</summary><div class="prompt-actions"><button class="copy-prompt" type="button" aria-label="Copy prompt: ${escapeHtml(title)}" hidden>Copy prompt</button><span class="copy-status" role="status" aria-live="polite"></span></div><pre tabindex="-1"><code class="language-prompt">${escapeHtml(token.text)}</code></pre></details>\n`;
+        },
         heading({ tokens, depth }) {
           const id = slugger.slug(plainText(tokens));
           const html = `<h${depth} id="${escapeHtml(id)}">${this.parser.parseInline(tokens)}<a class="heading-link" href="#${escapeHtml(id)}" aria-label="Link to ${escapeHtml(plainText(tokens))}">#</a></h${depth}>\n`;
@@ -114,7 +153,7 @@ export function createDocsSite(repositoryRoot = root) {
 <body><a class="skip-link" href="#main">Skip to content</a><header class="docs-header"><a class="brand" href="/">Device <span>Deck</span></a><nav aria-label="Website"><a href="/docs/" aria-current="location">Docs</a><a href="/install">Install</a><a href="${repository}">GitHub</a></nav></header>
 <div class="docs-layout"><aside class="docs-sidebar"><details id="docs-navigation" open><summary>Documentation</summary><nav aria-label="Documentation">${nav}</nav></details></aside>
 <script>if (window.matchMedia("(max-width: 680px)").matches) document.getElementById("docs-navigation").open = false;</script>
-<main id="main" tabindex="-1"><p class="page-meta">Device Deck documentation <a href="${repository}/blob/main/${source}">View Markdown source</a></p><article>${body}</article><footer class="docs-footer"><a href="/docs/contributing/">Improve these docs</a><a href="${repository}/issues/new/choose">Report a problem</a><span>Free and open source · MIT</span></footer></main></div></body></html>`;
+<main id="main" tabindex="-1"><p class="page-meta">Device Deck documentation <a href="${repository}/blob/main/${source}">View Markdown source</a></p><article>${body}</article><footer class="docs-footer"><a href="/docs/contributing/">Improve these docs</a><a href="${repository}/issues/new/choose">Report a problem</a><span>Free and open source · MIT</span></footer></main></div>${hasPrompts ? promptCopyScript : ""}</body></html>`;
     files.set(`${document.route.slice(1)}index.html`, html);
   }
   files.set("docs/docs.css", readFileSync(path.join(repositoryRoot, "apps/website/src/docs.css"), "utf8"));
