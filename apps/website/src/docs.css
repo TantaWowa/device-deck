@@ -45,6 +45,17 @@ code, pre { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospac
 :not(pre) > code { background: #eef2f7; padding: 2px 5px; border-radius: 4px; }
 pre { overflow-x: auto; background: #15243a; color: #e4ecf8; border-radius: 8px; padding: 20px; margin: 20px 0 24px; line-height: 1.65; white-space: pre; overflow-wrap: normal; }
 pre code { font-size: inherit; }
+.agent-prompt { margin: 18px 0 24px; border: 1px solid #b8cbe8; border-radius: 9px; background: #f4f7fd; overflow: hidden; }
+.agent-prompt summary { padding: 16px 20px; cursor: pointer; color: #194ca6; font-weight: 650; }
+.agent-prompt summary:hover { background: #eaf0fc; }
+.agent-prompt summary:focus-visible { outline-offset: -4px; border-radius: 8px; }
+.prompt-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 16px; padding: 0 20px 12px; }
+.copy-prompt { border: 1px solid #245bc2; border-radius: 6px; background: #245bc2; color: white; padding: 9px 14px; font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; }
+.copy-prompt:hover { background: #194ca6; }
+.copy-prompt:focus-visible, .agent-prompt pre:focus-visible { outline: 3px solid #5e8ce1; outline-offset: 3px; }
+.copy-prompt:disabled { opacity: .65; cursor: wait; }
+.copy-status { flex: 1 1 220px; color: #42546c; font-size: 13px; line-height: 1.5; }
+.agent-prompt pre { margin: 0; border-radius: 0 0 8px 8px; white-space: pre-wrap; overflow-wrap: anywhere; }
 blockquote { border-left: 3px solid #7297da; background: #f1f5fc; margin: 20px 0; padding: 16px 20px; }
 blockquote p:last-child { margin-bottom: 0; }
 .table-scroll { overflow-x: auto; margin: 20px 0 26px; border: 1px solid #dce2e9; border-radius: 7px; }

@@ -4,6 +4,8 @@ Install **Device Deck 0.9.0-beta.3** on macOS 14 or later. The installers are si
 
 Device Deck is free and open source under MIT. You do not need a Device Deck account or license key. See the [beta.3 release notes](https://github.com/TantaWowa/device-deck/releases/tag/v0.9.0-beta.3) for validation results and remaining beta limitations.
 
+Want help from Codex or Claude? [Set up with an agent](agent-setup.md) gives you copyable prompts for this installation and for adding capture cards, devices and simulators.
+
 ## Install the Mac application
 
 1. Open **Apple menu → About This Mac** to check your chip, then download the matching installer:

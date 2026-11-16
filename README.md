@@ -8,6 +8,8 @@ Free under the [MIT license](LICENSE). All features and concurrent sessions are 
 
 [Download for Mac](https://tantawowa-device-deck.firebaseapp.com/install) · [Documentation](https://tantawowa-device-deck.firebaseapp.com/docs/) · [Website](https://tantawowa-device-deck.firebaseapp.com) · [Contribute](CONTRIBUTING.md)
 
+[Set up with an agent](https://tantawowa-device-deck.firebaseapp.com/docs/agent-setup/): copy a prompt into Codex or Claude to install Device Deck, connect capture cards and devices, or set up simulators.
+
 ![Device Deck dashboard with device filters, availability and capture actions](apps/website/public/assets/devices-current.png)
 
 *Current app interface with fictional demo devices. The website's separate browser demo is an earlier prototype and never connects to your hardware.*

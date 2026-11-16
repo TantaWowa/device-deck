@@ -1,17 +1,49 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { createHash } from "node:crypto";
 import { Marked } from "marked";
 import GithubSlugger from "github-slugger";
 
 const repository = "https://github.com/TantaWowa/device-deck";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const navigation = [
-  ["Start here", [["README", "Overview"], ["install", "Install on Mac"], ["using-device-deck", "Your first session"], ["compatibility", "Device compatibility"]]],
+  ["Start here", [["README", "Overview"], ["install", "Install on Mac"], ["agent-setup", "Set up with an agent"], ["using-device-deck", "Your first session"], ["compatibility", "Device compatibility"]]],
   ["Use your devices", [["live-video-and-touch", "Video and touch"], ["simulator-controls", "Simulators and emulators"], ["physical-ios", "Physical iPhone and iPad"], ["reports-and-capture-cards", "Reports and capture cards"]]],
   ["Share and automate", [["agent-device-workflow", "Coding agents"], ["group-reservations", "CI device groups"], ["api", "CLI, API and MCP"], ["deck-sharing", "Connect another Deck"], ["remote-access", "Remote access and portal"], ["team-rollout", "Team setup"]]],
   ["Contribute", [["contributing", "Contribution guide"], ["development", "Build from source"], ["architecture", "Architecture"], ["validation", "Validation records"]]],
 ];
+
+const promptCopyScript = `<script>
+document.querySelectorAll(".agent-prompt").forEach(function (prompt) {
+  var button = prompt.querySelector(".copy-prompt");
+  var code = prompt.querySelector("pre code");
+  var status = prompt.querySelector(".copy-status");
+  var reset;
+  button.hidden = false;
+  button.addEventListener("click", async function () {
+    clearTimeout(reset);
+    button.disabled = true;
+    try {
+      await navigator.clipboard.writeText(code.textContent);
+      button.textContent = "Copied";
+      status.textContent = "Prompt copied. Paste it into your agent.";
+      reset = setTimeout(function () { button.textContent = "Copy prompt"; }, 2000);
+    } catch {
+      var range = document.createRange();
+      range.selectNodeContents(code);
+      var selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+      code.parentElement.focus();
+      button.textContent = "Copy prompt";
+      status.textContent = "Press Command+C on Mac or Ctrl+C to copy the selected prompt.";
+    } finally {
+      button.disabled = false;
+    }
+  });
+});
+</script>`;
 
 function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]);
@@ -36,6 +68,8 @@ function headings(markdown) {
 
 /** Render checked-in Markdown once for both the development server and static hosting. */
 export function createDocsSite(repositoryRoot = root) {
+  const stylesheet = readFileSync(path.join(repositoryRoot, "apps/website/src/docs.css"), "utf8");
+  const stylesheetVersion = createHash("sha256").update(stylesheet).digest("hex").slice(0, 12);
   const sources = readdirSync(path.join(repositoryRoot, "docs")).filter((name) => name.endsWith(".md")).map((name) => `docs/${name}`);
   if (!sources.includes("docs/README.md")) throw new Error("The documentation index docs/README.md is missing.");
   if (existsSync(path.join(repositoryRoot, "CONTRIBUTING.md"))) sources.push("CONTRIBUTING.md");
@@ -78,9 +112,17 @@ export function createDocsSite(repositoryRoot = root) {
     const toc = document.headings.filter((heading) => heading.depth === 2);
     const contents = toc.length > 2 ? `<details class="page-contents"><summary>On this page</summary><ul>${toc.map((heading) => `<li><a href="#${escapeHtml(heading.id)}">${escapeHtml(heading.text)}</a></li>`).join("")}</ul></details>` : "";
     let firstHeading = true;
+    let hasPrompts = false;
     const markdown = new Marked({
       gfm: true,
       renderer: {
+        code(token) {
+          const prompt = (token.lang ?? "").trim().match(/^prompt(?:\s+(.+))?$/);
+          if (!prompt) return this.constructor.prototype.code.call(this, token);
+          hasPrompts = true;
+          const title = prompt[1] || "Agent prompt";
+          return `<details class="agent-prompt"><summary>${escapeHtml(title)}</summary><div class="prompt-actions"><button class="copy-prompt" type="button" aria-label="Copy prompt: ${escapeHtml(title)}" hidden>Copy prompt</button><span class="copy-status" role="status" aria-live="polite"></span></div><pre tabindex="-1"><code class="language-prompt">${escapeHtml(token.text)}</code></pre></details>\n`;
+        },
         heading({ tokens, depth }) {
           const id = slugger.slug(plainText(tokens));
           const html = `<h${depth} id="${escapeHtml(id)}">${this.parser.parseInline(tokens)}<a class="heading-link" href="#${escapeHtml(id)}" aria-label="Link to ${escapeHtml(plainText(tokens))}">#</a></h${depth}>\n`;
@@ -110,14 +152,14 @@ export function createDocsSite(repositoryRoot = root) {
       return `<div class="nav-group"><p>${label}</p><ul>${links}</ul></div>`;
     }).join("");
     const html = `<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="description" content="${escapeHtml(title)}. Device Deck guides and reference for the open-source Mac device workspace."><meta name="theme-color" content="#fcfdff"><title>${escapeHtml(title)} · Device Deck</title><link rel="icon" href="/favicon.svg"><link rel="stylesheet" href="/docs/docs.css"></head>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="description" content="${escapeHtml(title)}. Device Deck guides and reference for the open-source Mac device workspace."><meta name="theme-color" content="#fcfdff"><title>${escapeHtml(title)} · Device Deck</title><link rel="icon" href="/favicon.svg"><link rel="stylesheet" href="/docs/docs.css?v=${stylesheetVersion}"></head>
 <body><a class="skip-link" href="#main">Skip to content</a><header class="docs-header"><a class="brand" href="/">Device <span>Deck</span></a><nav aria-label="Website"><a href="/docs/" aria-current="location">Docs</a><a href="/install">Install</a><a href="${repository}">GitHub</a></nav></header>
 <div class="docs-layout"><aside class="docs-sidebar"><details id="docs-navigation" open><summary>Documentation</summary><nav aria-label="Documentation">${nav}</nav></details></aside>
 <script>if (window.matchMedia("(max-width: 680px)").matches) document.getElementById("docs-navigation").open = false;</script>
-<main id="main" tabindex="-1"><p class="page-meta">Device Deck documentation <a href="${repository}/blob/main/${source}">View Markdown source</a></p><article>${body}</article><footer class="docs-footer"><a href="/docs/contributing/">Improve these docs</a><a href="${repository}/issues/new/choose">Report a problem</a><span>Free and open source · MIT</span></footer></main></div></body></html>`;
+<main id="main" tabindex="-1"><p class="page-meta">Device Deck documentation <a href="${repository}/blob/main/${source}">View Markdown source</a></p><article>${body}</article><footer class="docs-footer"><a href="/docs/contributing/">Improve these docs</a><a href="${repository}/issues/new/choose">Report a problem</a><span>Free and open source · MIT</span></footer></main></div>${hasPrompts ? promptCopyScript : ""}</body></html>`;
     files.set(`${document.route.slice(1)}index.html`, html);
   }
-  files.set("docs/docs.css", readFileSync(path.join(repositoryRoot, "apps/website/src/docs.css"), "utf8"));
+  files.set("docs/docs.css", stylesheet);
   return files;
 }
 

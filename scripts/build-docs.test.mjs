@@ -65,3 +65,24 @@ test("maps direct documentation URLs while leaving the app routes alone", () => 
   assert.equal(docsFileForRequest("/docs-other"), null);
   assert.equal(docsFileForRequest("/docs/../package.json"), null);
 });
+
+test("renders collapsed copyable prompts, escapes their contents and preserves other code blocks", (t) => {
+  const directory = fixture(t, {
+    "docs/README.md": "# Docs\n",
+    "docs/agent-setup.md": '# Set up with an agent\n\n```prompt Install <Device Deck> & "tools"\nKeep <existing> devices & settings.\n<script>alert("unsafe")</script>\n```\n\n```prompt\nA second prompt.\n```\n\n```promptly\nOrdinary code.\n```\n',
+  });
+  const files = createDocsSite(directory);
+  const page = files.get("docs/agent-setup/index.html");
+  assert.equal((page.match(/<details class="agent-prompt">/g) ?? []).length, 2);
+  assert.doesNotMatch(page, /<details class="agent-prompt"[^>]*\bopen\b/);
+  assert.match(page, /<summary>Install &lt;Device Deck&gt; &amp; &quot;tools&quot;<\/summary>/);
+  assert.match(page, /aria-label="Copy prompt: Install &lt;Device Deck&gt; &amp; &quot;tools&quot;" hidden/);
+  assert.match(page, /<summary>Agent prompt<\/summary>/);
+  assert.match(page, /Keep &lt;existing&gt; devices &amp; settings\.\n&lt;script&gt;alert\(&quot;unsafe&quot;\)&lt;\/script&gt;/);
+  assert.match(page, /<pre><code class="language-promptly">Ordinary code\./);
+  assert.match(page, /role="status" aria-live="polite"/);
+  assert.match(page, /navigator\.clipboard\.writeText\(code\.textContent\)/);
+  assert.match(page, /range\.selectNodeContents\(code\)/);
+  assert.match(page, /href="\/docs\/agent-setup\/" aria-current="page">Set up with an agent/);
+  assert.doesNotMatch(files.get("docs/index.html"), /navigator\.clipboard/);
+});
