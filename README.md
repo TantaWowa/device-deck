@@ -6,7 +6,7 @@ Control TVs, phones and simulators from a Mac. See which devices are available, 
 
 Free under the [MIT license](LICENSE). All features and concurrent sessions are available without activation, subscriptions or payment. Local use needs no Device Deck account.
 
-[Download for Mac](https://github.com/TantaWowa/device-deck/releases) · [Documentation](docs/README.md) · [Website](https://tantawowa-device-deck.firebaseapp.com) · [Contribute](CONTRIBUTING.md)
+[Download for Mac](https://tantawowa-device-deck.firebaseapp.com/install) · [Documentation](https://tantawowa-device-deck.firebaseapp.com/docs/) · [Website](https://tantawowa-device-deck.firebaseapp.com) · [Contribute](CONTRIBUTING.md)
 
 ![Device Deck dashboard with device filters, availability and capture actions](apps/website/public/assets/devices-current.png)
 
@@ -24,9 +24,11 @@ Capabilities and setup vary by device. Read the [compatibility guide](docs/compa
 
 ## Install the Mac application
 
-Requires macOS 14 or later. Choose the Apple silicon or Intel `.pkg` from [GitHub Releases](https://github.com/TantaWowa/device-deck/releases), then follow the [Mac install guide](docs/install.md).
+Requires macOS 14 or later. [Download Device Deck 0.9.0-beta.3 for Apple silicon or Intel](https://tantawowa-device-deck.firebaseapp.com/install). The signed, Apple-notarized installers include Node, FFmpeg, ffprobe and the dashboard. Normal installation and setup need no Terminal commands, Homebrew, restart or logout.
 
-Check the release notes for the package you download. The install guide covers signing, recording tools, service setup and updates for each installation path. Device-specific SDKs, permissions and pairing still depend on your hardware.
+Open Device Deck from Applications, choose **Start shared service**, and approve the administrator prompt. The core service starts immediately and runs at boot; **Open menu-bar app at login** controls the menu app used for camera access. Allow existing Mac accounts, including CI runners, from **Mac setup… → Mac account access**.
+
+Follow the [Mac setup walkthrough](https://tantawowa-device-deck.firebaseapp.com/docs/install/) for permissions, device tools and updates from the app. See the [beta.3 release notes](https://github.com/TantaWowa/device-deck/releases/tag/v0.9.0-beta.3) for validation results and beta limitations, or the [Mac distribution guide](https://tantawowa-device-deck.firebaseapp.com/docs/macos-distribution/) for packaging and service details. Older unsigned betas need the signed installer downloaded manually once.
 
 ## Your first device session
 

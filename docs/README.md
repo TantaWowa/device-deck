@@ -6,7 +6,7 @@ These pages describe the source in this repository. Release notes and the [insta
 
 ## Start here
 
-1. [Install Device Deck](install.md) for your Mac architecture and release.
+1. [Install and set up Device Deck](install.md) on your Mac, then allow any additional Mac accounts.
 2. [Check device compatibility](compatibility.md), platform tools and current limits.
 3. [Run your first device session](using-device-deck.md#first-device-session), then find the saved capture.
 
