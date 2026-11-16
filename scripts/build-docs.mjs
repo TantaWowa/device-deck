@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { createHash } from "node:crypto";
 import { Marked } from "marked";
 import GithubSlugger from "github-slugger";
 
@@ -67,6 +68,8 @@ function headings(markdown) {
 
 /** Render checked-in Markdown once for both the development server and static hosting. */
 export function createDocsSite(repositoryRoot = root) {
+  const stylesheet = readFileSync(path.join(repositoryRoot, "apps/website/src/docs.css"), "utf8");
+  const stylesheetVersion = createHash("sha256").update(stylesheet).digest("hex").slice(0, 12);
   const sources = readdirSync(path.join(repositoryRoot, "docs")).filter((name) => name.endsWith(".md")).map((name) => `docs/${name}`);
   if (!sources.includes("docs/README.md")) throw new Error("The documentation index docs/README.md is missing.");
   if (existsSync(path.join(repositoryRoot, "CONTRIBUTING.md"))) sources.push("CONTRIBUTING.md");
@@ -149,14 +152,14 @@ export function createDocsSite(repositoryRoot = root) {
       return `<div class="nav-group"><p>${label}</p><ul>${links}</ul></div>`;
     }).join("");
     const html = `<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="description" content="${escapeHtml(title)}. Device Deck guides and reference for the open-source Mac device workspace."><meta name="theme-color" content="#fcfdff"><title>${escapeHtml(title)} · Device Deck</title><link rel="icon" href="/favicon.svg"><link rel="stylesheet" href="/docs/docs.css"></head>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="description" content="${escapeHtml(title)}. Device Deck guides and reference for the open-source Mac device workspace."><meta name="theme-color" content="#fcfdff"><title>${escapeHtml(title)} · Device Deck</title><link rel="icon" href="/favicon.svg"><link rel="stylesheet" href="/docs/docs.css?v=${stylesheetVersion}"></head>
 <body><a class="skip-link" href="#main">Skip to content</a><header class="docs-header"><a class="brand" href="/">Device <span>Deck</span></a><nav aria-label="Website"><a href="/docs/" aria-current="location">Docs</a><a href="/install">Install</a><a href="${repository}">GitHub</a></nav></header>
 <div class="docs-layout"><aside class="docs-sidebar"><details id="docs-navigation" open><summary>Documentation</summary><nav aria-label="Documentation">${nav}</nav></details></aside>
 <script>if (window.matchMedia("(max-width: 680px)").matches) document.getElementById("docs-navigation").open = false;</script>
 <main id="main" tabindex="-1"><p class="page-meta">Device Deck documentation <a href="${repository}/blob/main/${source}">View Markdown source</a></p><article>${body}</article><footer class="docs-footer"><a href="/docs/contributing/">Improve these docs</a><a href="${repository}/issues/new/choose">Report a problem</a><span>Free and open source · MIT</span></footer></main></div>${hasPrompts ? promptCopyScript : ""}</body></html>`;
     files.set(`${document.route.slice(1)}index.html`, html);
   }
-  files.set("docs/docs.css", readFileSync(path.join(repositoryRoot, "apps/website/src/docs.css"), "utf8"));
+  files.set("docs/docs.css", stylesheet);
   return files;
 }
 
