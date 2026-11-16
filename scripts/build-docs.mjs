@@ -6,6 +6,7 @@ import { Marked } from "marked";
 import GithubSlugger from "github-slugger";
 
 const repository = "https://github.com/TantaWowa/device-deck";
+const publicWebsite = "https://device-deck.tantawowa.com";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const navigation = [
   ["Start here", [["README", "Overview"], ["install", "Install on Mac"], ["agent-setup", "Set up with an agent"], ["using-device-deck", "Your first session"], ["compatibility", "Device compatibility"]]],
@@ -152,7 +153,7 @@ export function createDocsSite(repositoryRoot = root) {
       return `<div class="nav-group"><p>${label}</p><ul>${links}</ul></div>`;
     }).join("");
     const html = `<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="description" content="${escapeHtml(title)}. Device Deck guides and reference for the open-source Mac device workspace."><meta name="theme-color" content="#fcfdff"><title>${escapeHtml(title)} · Device Deck</title><link rel="icon" href="/favicon.svg"><link rel="stylesheet" href="/docs/docs.css?v=${stylesheetVersion}"></head>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="description" content="${escapeHtml(title)}. Device Deck guides and reference for the open-source Mac device workspace."><meta name="theme-color" content="#fcfdff"><title>${escapeHtml(title)} · Device Deck</title><link rel="canonical" href="${escapeHtml(publicWebsite + document.route)}"><link rel="icon" href="/favicon.svg"><link rel="stylesheet" href="/docs/docs.css?v=${stylesheetVersion}"></head>
 <body><a class="skip-link" href="#main">Skip to content</a><header class="docs-header"><a class="brand" href="/">Device <span>Deck</span></a><nav aria-label="Website"><a href="/docs/" aria-current="location">Docs</a><a href="/install">Install</a><a href="${repository}">GitHub</a></nav></header>
 <div class="docs-layout"><aside class="docs-sidebar"><details id="docs-navigation" open><summary>Documentation</summary><nav aria-label="Documentation">${nav}</nav></details></aside>
 <script>if (window.matchMedia("(max-width: 680px)").matches) document.getElementById("docs-navigation").open = false;</script>

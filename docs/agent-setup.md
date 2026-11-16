@@ -13,7 +13,7 @@ Use this when you want the agent to take you from a new Mac installation to a wo
 ```prompt Set up Device Deck from start to finish
 Help me set up Device Deck on this Mac and verify one working device session.
 
-Read https://tantawowa-device-deck.firebaseapp.com/docs/install/ and https://tantawowa-device-deck.firebaseapp.com/docs/compatibility/ first. Inspect the Mac architecture, installed Device Deck version, existing service, devices, platform tools and active reservations before changing anything. Reuse what is already installed and configured.
+Read https://device-deck.tantawowa.com/docs/install/ and https://device-deck.tantawowa.com/docs/compatibility/ first. Inspect the Mac architecture, installed Device Deck version, existing service, devices, platform tools and active reservations before changing anything. Reuse what is already installed and configured.
 
 Ask me which devices I want to use and which Mac account should host them if you cannot establish that from the existing setup. The host should own the SDKs, simulators and device pairing settings. Use the signed Mac installer and the graphical setup. Do not ask me to type Terminal commands. Guide me through administrator approval, Camera or Local Network permission, and physical pairing when needed. Do not request my passwords or tokens in chat.
 
@@ -29,7 +29,7 @@ Reserve one available device with a clear owner and reason, inspect its supporte
 Use this before adding hardware. Node, FFmpeg and ffprobe come with the signed installer.
 
 ```prompt Install or update Device Deck on this Mac
-Install Device Deck on this Mac, or update the existing installation safely. Read https://tantawowa-device-deck.firebaseapp.com/docs/install/ and use its official signed download for this Mac's architecture.
+Install Device Deck on this Mac, or update the existing installation safely. Read https://device-deck.tantawowa.com/docs/install/ and use its official signed download for this Mac's architecture.
 
 Inspect the current version, shared-service state and active sessions first. Preserve the existing host account, settings and captures. If the installed app supports updates, use Check for updates and Install when idle. For an older unsigned beta, follow the guide's migration steps. Do not interrupt active reservations or recordings.
 
@@ -43,7 +43,7 @@ Open the dashboard and check service readiness and Host diagnostics. Report the 
 Connect the card to the Mac and connect the target's HDMI output to the card. A capture-only device can show video without providing remote control.
 
 ```prompt Add and check my USB capture card
-Help me add a USB capture card to Device Deck on this Mac. Read https://tantawowa-device-deck.firebaseapp.com/docs/reports-and-capture-cards/ and https://tantawowa-device-deck.firebaseapp.com/docs/install/ first.
+Help me add a USB capture card to Device Deck on this Mac. Read https://device-deck.tantawowa.com/docs/reports-and-capture-cards/ and https://device-deck.tantawowa.com/docs/install/ first.
 
 Inspect the existing cards, assignments, reservations and host diagnostics. Confirm which physical device feeds the card's HDMI input. Identify the card by its stable hardware identity, not enumeration order, and do not guess the HDMI target from the USB name. If the card is missing, check its connections and the host menu app's Camera permission; guide me through any permission prompt.
 
@@ -59,11 +59,11 @@ Open the feed and confirm that it shows the intended hardware. Reserve the devic
 For Roku, Android, Fire TV, Apple TV, iPhone or iPad. The agent should identify the target before choosing its platform tools.
 
 ```prompt Discover and configure my physical devices
-Help me add my physical devices to Device Deck. Read https://tantawowa-device-deck.firebaseapp.com/docs/compatibility/ and https://tantawowa-device-deck.firebaseapp.com/docs/install/. Inspect the configured inventory, reservations, discovery results and Host diagnostics first, then ask which unconfigured devices I want to add if that is unclear.
+Help me add my physical devices to Device Deck. Read https://device-deck.tantawowa.com/docs/compatibility/ and https://device-deck.tantawowa.com/docs/install/. Inspect the configured inventory, reservations, discovery results and Host diagnostics first, then ask which unconfigured devices I want to add if that is unclear.
 
 Use Devices, Discover / add devices, then Add selected for those targets. Preserve existing identifiers and avoid duplicates. Check the exact target's network address or USB identity before pairing or sending input. Install only its missing platform tools, in the hosting account. Guide me through device-side network control, debugging authorization, trust or pairing prompts; I will enter private codes myself.
 
-For Roku and physical Apple TV, configure control separately from video; video needs an explicitly assigned USB capture input. For a physical iPhone or iPad, follow https://tantawowa-device-deck.firebaseapp.com/docs/physical-ios/ for the signed helper and supported capabilities. Do not describe discovery alone as working control. Unsupported TVs can use capture-only setup, without invented network controls.
+For Roku and physical Apple TV, configure control separately from video; video needs an explicitly assigned USB capture input. For a physical iPhone or iPad, follow https://device-deck.tantawowa.com/docs/physical-ios/ for the signed helper and supported capabilities. Do not describe discovery alone as working control. Unsupported TVs can use capture-only setup, without invented network controls.
 
 Use installed operation schemas if working through CLI or MCP. Configuration writes must preserve the full current configuration and use its latest revision. Do not take over another reservation or restart a device being used.
 
@@ -75,7 +75,7 @@ Reserve each selected available device for a brief check, inspect its capabiliti
 Device Deck discovers virtual devices already created in the hosting account. It does not install Xcode runtimes, Android SDKs or Android system images.
 
 ```prompt Register my existing simulators and emulators
-Add my existing Apple simulators and Android emulators to Device Deck without creating duplicates. Read https://tantawowa-device-deck.firebaseapp.com/docs/simulator-controls/ and https://tantawowa-device-deck.firebaseapp.com/docs/compatibility/.
+Add my existing Apple simulators and Android emulators to Device Deck without creating duplicates. Read https://device-deck.tantawowa.com/docs/simulator-controls/ and https://device-deck.tantawowa.com/docs/compatibility/.
 
 Inspect the Device Deck host account, current inventory, active reservations, Xcode selection, installed simulator runtimes, Android SDK paths and existing AVDs. Use the host's existing simulator and emulator homes. Follow any repository or machine rules for shared virtual-device reservations.
 
@@ -91,7 +91,7 @@ Report the registered names and exact identities, runtime versions, verified cap
 Use this for a new iPhone, iPad or Apple TV simulator. The prompt asks the agent to reuse a suitable existing device before creating one.
 
 ```prompt Create and register an Apple simulator
-Help me create an Apple simulator for Device Deck. Read https://tantawowa-device-deck.firebaseapp.com/docs/simulator-controls/ and https://tantawowa-device-deck.firebaseapp.com/docs/compatibility/.
+Help me create an Apple simulator for Device Deck. Read https://device-deck.tantawowa.com/docs/simulator-controls/ and https://device-deck.tantawowa.com/docs/compatibility/.
 
 Inspect the hosting Mac account, selected Xcode, installed runtimes, existing simulator UDIDs, available disk space and shared-device rules first. Ask which device family and OS version I need if I have not specified them. Reuse an existing matching simulator if it is suitable. Do not change the global Xcode selection or relocate simulator storage without explaining the need first.
 
@@ -107,7 +107,7 @@ Verify readiness, inspect supported capabilities, save and inspect a screenshot,
 Use this for a new phone, tablet or TV AVD. Keep the AVD in the hosting account so Device Deck can find it later.
 
 ```prompt Create and register an Android emulator
-Help me create an Android emulator for Device Deck. Read https://tantawowa-device-deck.firebaseapp.com/docs/simulator-controls/ and https://tantawowa-device-deck.firebaseapp.com/docs/compatibility/.
+Help me create an Android emulator for Device Deck. Read https://device-deck.tantawowa.com/docs/simulator-controls/ and https://device-deck.tantawowa.com/docs/compatibility/.
 
 Inspect this Mac's architecture, Device Deck hosting account, SDK paths, installed emulator and platform tools, existing AVDs, system images, free disk space and shared-device rules. Ask which device family and Android version I need if I have not specified them. Reuse a suitable existing AVD before creating another.
 
@@ -123,7 +123,7 @@ Use the installed operation schemas and a reservation group to claim and start t
 MCP gives the agent Device Deck tools for inventory, reservations, control and captures. A prompt or skill provides guidance; it does not grant access by itself.
 
 ```prompt Connect Codex or Claude to Device Deck
-Connect this coding agent to the installed Device Deck MCP server. Read https://tantawowa-device-deck.firebaseapp.com/docs/api/#mcp-walkthrough and https://tantawowa-device-deck.firebaseapp.com/docs/agent-device-workflow/.
+Connect this coding agent to the installed Device Deck MCP server. Read https://device-deck.tantawowa.com/docs/api/#mcp-walkthrough and https://device-deck.tantawowa.com/docs/agent-device-workflow/.
 
 Identify the agent client and its current supported MCP configuration format. Inspect existing settings and preserve other servers. Use the client's installed help or official documentation rather than guessing its configuration file format. Confirm that Device Deck's shared service is ready and this Mac account has access.
 
@@ -139,7 +139,7 @@ Explain how I can ask this agent to reserve a device, inspect its capabilities, 
 The host chooses which existing accounts can connect. Native test runners still need to respect macOS ownership of simulators and SDKs.
 
 ```prompt Give another Mac account access to Device Deck
-Help me allow an existing Mac account, such as ci-runner, to use this Mac's shared Device Deck service. Read https://tantawowa-device-deck.firebaseapp.com/docs/install/#allow-another-mac-account and https://tantawowa-device-deck.firebaseapp.com/docs/group-reservations/.
+Help me allow an existing Mac account, such as ci-runner, to use this Mac's shared Device Deck service. Read https://device-deck.tantawowa.com/docs/install/#allow-another-mac-account and https://device-deck.tantawowa.com/docs/group-reservations/.
 
 Inspect the existing host account and service state. Ask which exact account should have access if I have not named it. From the host's menu-bar app, open Mac setup and use Mac account access to allow only that account. I will complete any required approval. Preserve the host and all other account settings. Do not create another daemon, copy private API tokens, widen unrelated permissions or restart the Mac.
 

@@ -104,3 +104,9 @@ For documentation work, run `npm run dev` and open `http://127.0.0.1:5173/docs/`
 The renderer and local-link checks live in `scripts/build-docs.mjs`. Run `npm run test:docs` after changing that renderer or its route handling. Website-only work does not require starting the device daemon or rebuilding the Mac application.
 
 The Firebase website and portal use the existing `tantawowa-device-deck` project. Only `dist/` is hosted; the authenticated registry API runs separately on Cloud Run. Never deploy the local `build/`, runtime directory, capture files or private endpoint credentials to Firebase.
+
+## Public website hosting
+
+The public website and docs use [device-deck.tantawowa.com](https://device-deck.tantawowa.com/), attached as a custom domain to the existing Firebase Hosting site. Cloudflare manages the DNS records with proxying disabled, shown as **DNS only**. Firebase serves the site and provisions its HTTPS certificate. Keep Firebase's domain-verification records in DNS so ownership and certificate renewal continue to work.
+
+The existing `tantawowa-device-deck.firebaseapp.com` and `tantawowa-device-deck.web.app` addresses remain available. Public pages declare the custom domain as their canonical URL. The signed-in portal and machine pairing retain their configured Firebase origin; see [remote access](remote-access.md#pair-a-machine). Changing the public website address does not require changing portal authentication, signing keys or existing pairings.

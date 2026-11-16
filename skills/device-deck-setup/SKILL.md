@@ -9,12 +9,12 @@ Complete the user's requested setup against the installed release. Reuse the Mac
 
 ## Read the relevant guide
 
-Start with the [agent setup guide](https://tantawowa-device-deck.firebaseapp.com/docs/agent-setup/). Read the branch needed for this task:
+Start with the [agent setup guide](https://device-deck.tantawowa.com/docs/agent-setup/). Read the branch needed for this task:
 
-- Installation, shared accounts, permissions or updates: [Mac installation](https://tantawowa-device-deck.firebaseapp.com/docs/install/).
-- Physical devices or capture cards: [compatibility](https://tantawowa-device-deck.firebaseapp.com/docs/compatibility/) and [workspace setup](https://tantawowa-device-deck.firebaseapp.com/docs/using-device-deck/). Physical iPhone or iPad control also needs the [signed helper setup](https://tantawowa-device-deck.firebaseapp.com/docs/physical-ios/).
-- Existing or new virtual devices: [simulators and emulators](https://tantawowa-device-deck.firebaseapp.com/docs/simulator-controls/).
-- MCP connection or configuration writes: [API and MCP reference](https://tantawowa-device-deck.firebaseapp.com/docs/api/).
+- Installation, shared accounts, permissions or updates: [Mac installation](https://device-deck.tantawowa.com/docs/install/).
+- Physical devices or capture cards: [compatibility](https://device-deck.tantawowa.com/docs/compatibility/) and [workspace setup](https://device-deck.tantawowa.com/docs/using-device-deck/). Physical iPhone or iPad control also needs the [signed helper setup](https://device-deck.tantawowa.com/docs/physical-ios/).
+- Existing or new virtual devices: [simulators and emulators](https://device-deck.tantawowa.com/docs/simulator-controls/).
+- MCP connection or configuration writes: [API and MCP reference](https://device-deck.tantawowa.com/docs/api/).
 
 The website follows repository development. Compare it with the installed version and its release notes. Prefer the installed operation schemas when commands or capabilities differ.
 

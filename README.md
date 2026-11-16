@@ -6,9 +6,9 @@ Control TVs, phones and simulators from a Mac. See which devices are available, 
 
 Free under the [MIT license](LICENSE). All features and concurrent sessions are available without activation, subscriptions or payment. Local use needs no Device Deck account.
 
-[Download for Mac](https://tantawowa-device-deck.firebaseapp.com/install) · [Documentation](https://tantawowa-device-deck.firebaseapp.com/docs/) · [Website](https://tantawowa-device-deck.firebaseapp.com) · [Contribute](CONTRIBUTING.md)
+[Download for Mac](https://device-deck.tantawowa.com/install) · [Documentation](https://device-deck.tantawowa.com/docs/) · [Website](https://device-deck.tantawowa.com) · [Contribute](CONTRIBUTING.md)
 
-[Set up with an agent](https://tantawowa-device-deck.firebaseapp.com/docs/agent-setup/): copy a prompt into Codex or Claude to install Device Deck, connect capture cards and devices, or set up simulators.
+[Set up with an agent](https://device-deck.tantawowa.com/docs/agent-setup/): copy a prompt into Codex or Claude to install Device Deck, connect capture cards and devices, or set up simulators.
 
 ![Device Deck dashboard with device filters, availability and capture actions](apps/website/public/assets/devices-current.png)
 
@@ -26,11 +26,11 @@ Capabilities and setup vary by device. Read the [compatibility guide](docs/compa
 
 ## Install the Mac application
 
-Requires macOS 14 or later. [Download Device Deck 0.9.0-beta.3 for Apple silicon or Intel](https://tantawowa-device-deck.firebaseapp.com/install). The signed, Apple-notarized installers include Node, FFmpeg, ffprobe and the dashboard. Normal installation and setup need no Terminal commands, Homebrew, restart or logout.
+Requires macOS 14 or later. [Download Device Deck 0.9.0-beta.3 for Apple silicon or Intel](https://device-deck.tantawowa.com/install). The signed, Apple-notarized installers include Node, FFmpeg, ffprobe and the dashboard. Normal installation and setup need no Terminal commands, Homebrew, restart or logout.
 
 Open Device Deck from Applications, choose **Start shared service**, and approve the administrator prompt. The core service starts immediately and runs at boot; **Open menu-bar app at login** controls the menu app used for camera access. Allow existing Mac accounts, including CI runners, from **Mac setup… → Mac account access**.
 
-Follow the [Mac setup walkthrough](https://tantawowa-device-deck.firebaseapp.com/docs/install/) for permissions, device tools and updates from the app. See the [beta.3 release notes](https://github.com/TantaWowa/device-deck/releases/tag/v0.9.0-beta.3) for validation results and beta limitations, or the [Mac distribution guide](https://tantawowa-device-deck.firebaseapp.com/docs/macos-distribution/) for packaging and service details. Older unsigned betas need the signed installer downloaded manually once.
+Follow the [Mac setup walkthrough](https://device-deck.tantawowa.com/docs/install/) for permissions, device tools and updates from the app. See the [beta.3 release notes](https://github.com/TantaWowa/device-deck/releases/tag/v0.9.0-beta.3) for validation results and beta limitations, or the [Mac distribution guide](https://device-deck.tantawowa.com/docs/macos-distribution/) for packaging and service details. Older unsigned betas need the signed installer downloaded manually once.
 
 ## Your first device session
 
