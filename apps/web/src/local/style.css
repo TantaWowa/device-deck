@@ -269,6 +269,10 @@
   border-color: #235fc5;
   color: #fff;
 }
+.live-app button.primary:hover:not(:disabled) {
+  background: #194baf;
+  border-color: #194baf;
+}
 .live-app button.danger {
   color: #b72e36;
   background: #fff4f4;
