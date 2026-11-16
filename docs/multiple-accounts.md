@@ -1,6 +1,6 @@
 # Separate development and CI instances
 
-For a shared installation, follow [Mac account access](install.md#allow-another-mac-account) and [CI and other Mac accounts](macos-distribution.md#ci-and-other-mac-accounts). Packages with the new shared service let approved accounts use one daemon and reservation store. The [install guide](install.md) distinguishes those packages from the current public unsigned beta.
+For a shared installation, follow [Mac account access](install.md#allow-another-mac-account) and [CI and other Mac accounts](macos-distribution.md#ci-and-other-mac-accounts). Packages with the new shared service let approved accounts use one daemon and reservation store. The [install guide](install.md) covers the signed beta.3 packages and upgrading from older unsigned betas.
 
 The rest of this page describes deliberately isolated development profiles. Use these only when each instance should own a separate device inventory. Separate daemons do not coordinate reservations with the shared installation or with one another.
 
