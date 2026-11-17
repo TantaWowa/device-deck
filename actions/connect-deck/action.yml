@@ -1,0 +1,27 @@
+name: Connect Device Deck
+description: Connect an installed Device Deck to a trusted host and verify authenticated access.
+inputs:
+  name:
+    description: Local name for the remote Deck connection.
+    required: true
+  address:
+    description: Trusted HTTPS origin of the remote Deck.
+    required: true
+  grant:
+    description: Dedicated grant JSON supplied from an Actions secret; required when the connection is absent.
+    required: false
+  cli:
+    description: Installed devdeck executable; defaults to DEVICE_DECK_CLI or devdeck on PATH.
+    required: false
+outputs:
+  name:
+    description: Verified local connection name.
+  address:
+    description: Verified remote origin.
+  machine-id:
+    description: Connected Deck machine identity.
+  created:
+    description: Whether this invocation created the connection.
+runs:
+  using: node24
+  main: connect.mjs
