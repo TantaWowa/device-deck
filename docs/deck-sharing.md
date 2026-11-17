@@ -43,6 +43,89 @@ address stays unchanged apart from the `deck` query parameter. Multiple tabs can
 show different hosts. This release does not combine their inventories into one
 table or make an atomic reservation across several hosts.
 
+## Connect a CI runner
+
+The `actions/connect-deck` GitHub Action installs a host grant in the local Deck
+of the account running the job. A repeat run checks authenticated access through
+the saved connection. The runner needs a working Device Deck daemon and CLI.
+
+### Supply a host grant
+
+Choose a trusted private CI repository and a protected environment. Pin the
+action revision and the host address in workflow configuration controlled by
+maintainers. A host grant permits device and capture operations across the host's
+inventory. Only trusted jobs should receive it.
+
+An agent with SSH access to the host's Deck owner and permission to set the CI
+secret can transfer a dedicated grant directly. Replace the example values
+below. If the host uses a custom Deck profile, set `DEVICE_DECK_HOME` in the
+remote command to the profile that owns the devices.
+
+```bash
+set -euo pipefail
+set +x
+ci_repository='example-org/private-device-tests'
+ci_environment='device-lab'
+grant_secret='DEVICE_DECK_CI_GRANT'
+host_ssh='deck-owner@device-host.example.com'
+umask 077
+transfer=$(mktemp -d)
+trap 'rm -rf "$transfer"' EXIT
+
+ssh -T -o BatchMode=yes -o StrictHostKeyChecking=yes "$host_ssh" \
+  'bash -se' >"$transfer/grant.json" <<'HOST'
+set -euo pipefail
+set +x
+umask 077
+grant_directory=$(mktemp -d "${TMPDIR:-/tmp}/device-deck-ci-grant.XXXXXX")
+trap 'rm -rf "$grant_directory"' EXIT
+'/Applications/Device Deck.app/Contents/MacOS/devdeck' decks grant ci-device-tests \
+  --output "$grant_directory/grant.json" >/dev/null
+cat "$grant_directory/grant.json"
+HOST
+gh secret set "$grant_secret" --repo "$ci_repository" --env "$ci_environment" <"$transfer/grant.json"
+```
+
+Both shells remove their private transfer directories on exit. Run the snippet as a script. If the upload fails, use
+`devdeck decks grants` and revoke the new grant before retrying.
+
+### Run the action
+
+Put this job in the private CI repository. Set `DEVICE_DECK_ADDRESS` in the
+chosen environment to the host's HTTPS origin. Replace `REVIEWED_COMMIT_SHA`
+with the full SHA of the reviewed Device Deck revision.
+
+```yaml
+name: Connect device lab
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  connect:
+    runs-on: [self-hosted, macOS, device-lab]
+    environment: device-lab
+    steps:
+      - uses: TantaWowa/device-deck/actions/connect-deck@REVIEWED_COMMIT_SHA
+        with:
+          name: lab
+          address: ${{ vars.DEVICE_DECK_ADDRESS }}
+          grant: ${{ secrets.DEVICE_DECK_CI_GRANT }}
+          cli: /Applications/Device Deck.app/Contents/MacOS/devdeck
+```
+
+The optional `cli` input selects an executable, including an account-specific
+wrapper. It defaults to `DEVICE_DECK_CLI` when set, then to `devdeck` on PATH.
+The `grant` input contains the JSON produced by the host. A working, matching
+connection can be verified without it. Device jobs can then use the usual
+[group reservation flow](group-reservations.md).
+
+A different origin or a revoked credential fails verification. To rotate the
+credential, finish outstanding leases, remove the connection in the runner
+account, provide a fresh dedicated grant, and rerun the action. Revoke the old
+grant on its host after rotation. Removing a CI secret alone leaves the saved
+connection usable until its host grant is revoked.
+
 ## CLI and MCP
 
 ```sh
