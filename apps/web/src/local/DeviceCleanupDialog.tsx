@@ -62,6 +62,11 @@ export function DeviceCleanupDialog({
   const hasAndroid = rows.some(({ device }) => device.connection.type === "adb" && supportsDeviceCleanup(device));
   const completed = results !== null || Boolean(requestError);
   const selectedCount = submitted?.ids.length ?? eligible.length;
+  const submitLabel = {
+    "uninstall-apps": `Uninstall apps on ${selectedCount} ${selectedCount === 1 ? "device" : "devices"}`,
+    reset: `Reset ${selectedCount} ${selectedCount === 1 ? "device" : "devices"}`,
+    slim: `Slim ${selectedCount} ${selectedCount === 1 ? "simulator" : "simulators"}`,
+  }[action];
   const close = () => { if (!dispatched.current || completed) onClose(); };
   const execute = async () => {
     if (dispatched.current || !eligible.length || eligible.length > 100) return;
@@ -92,7 +97,11 @@ export function DeviceCleanupDialog({
         <button type="button" aria-label="Close cleanup dialog" disabled={pending} onClick={close}>×</button>
       </header>
       <fieldset className="device-cleanup-options" disabled={pending || completed}>
-        <legend>Choose what to remove</legend>
+        <legend>Choose a maintenance action</legend>
+        {targets.every(({ device }) => device.connection.type === "simulator") && <label>
+          <input type="radio" name="device-cleanup-action" value="slim" checked={action === "slim"} onChange={() => setAction("slim")} />
+          <span><strong>Reduce simulator RAM</strong><span>Use simslim to disable background services. Keep iCloud, App Store, push and web services available.</span></span>
+        </label>}
         <label>
           <input type="radio" name="device-cleanup-action" value="uninstall-apps" checked={action === "uninstall-apps"} onChange={() => setAction("uninstall-apps")} />
           <span><strong>Uninstall apps</strong><span>Remove user-installed apps and their app data. Keep system apps and device settings.</span></span>
@@ -104,6 +113,7 @@ export function DeviceCleanupDialog({
       </fieldset>
       <p className="device-cleanup-warning">{action === "reset"
         ? "This cannot be undone. Reset devices will be left shut down."
+        : action === "slim" ? "Requires simslim on the Deck host. Stopped simulators boot for verification and then shut down. Restore services with simslim off."
         : "This cannot be undone. Stopped devices may start briefly, then shut down again."}
         {action === "reset" && hasAndroid && " Android reset keeps files on the virtual SD card."}
       </p>
@@ -117,7 +127,7 @@ export function DeviceCleanupDialog({
           if (requested && pending) detail = "Cleanup in progress…";
           else if (requested && requestError) detail = "Result unknown. Refresh device status before retrying.";
           else if (result) detail = result.ok
-            ? action === "reset" ? "Reset complete. Device shut down."
+            ? action === "slim" ? "Simulator memory profile verified." : action === "reset" ? "Reset complete. Device shut down."
               : `${typeof result.removedApps === "number" ? `${result.removedApps} ${result.removedApps === 1 ? "app" : "apps"} uninstalled.` : "Apps uninstalled."}${result.state === "shutdown" ? " Device shut down." : ""}`
             : result.error || "Cleanup failed.";
           else if (results && requested) detail = "No result returned. Refresh device status before retrying.";
@@ -133,8 +143,8 @@ export function DeviceCleanupDialog({
       {pending && <p role="status"><LoaderCircle size={14} className="simulator-spinner" /> Cleaning up {selectedCount} {selectedCount === 1 ? "device" : "devices"}. This may take several minutes.</p>}
       <footer>
         <button type="button" disabled={pending} onClick={close}>{completed ? "Done" : "Cancel"}</button>
-        {!completed && <button type="button" className="danger" disabled={pending || !eligible.length || eligible.length > 100} onClick={() => void execute()}>
-          {pending ? "Cleaning up…" : action === "reset" ? `Reset ${selectedCount} ${selectedCount === 1 ? "device" : "devices"}` : `Uninstall apps on ${selectedCount} ${selectedCount === 1 ? "device" : "devices"}`}
+        {!completed && <button type="button" className={action === "slim" ? undefined : "danger"} disabled={pending || !eligible.length || eligible.length > 100} onClick={() => void execute()}>
+          {pending ? "Cleaning up…" : submitLabel}
         </button>}
       </footer>
     </dialog>

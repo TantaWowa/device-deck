@@ -1939,6 +1939,19 @@ test("device cleanup requires confirmation and rejects physical, reserved and lo
   } finally { await cleanup(); }
 });
 
+test("slimming rejects an Android emulator before starting maintenance", async () => {
+  const { deck, adapters, cleanup } = await setup();
+  try {
+    await useAndroidAvd(deck);
+    let called = false;
+    adapters.cleanupDevice = async () => { called = true; return {}; };
+    const result = await deck.execute("devices.cleanup", { ids: ["one"], action: "slim", confirmed: true });
+    assert.deepEqual(result, [{ id: "one", ok: false, error: "Slimming requires an Apple simulator." }]);
+    assert.equal(called, false);
+    assert(!deck.store.lockReason("one"));
+  } finally { await cleanup(); }
+});
+
 test("device cleanup locks the selection, preserves ordered partial results and releases failed maintenance", async () => {
   const { deck, adapters, capture, cleanup } = await setup();
   let release!: () => void, started!: () => void;

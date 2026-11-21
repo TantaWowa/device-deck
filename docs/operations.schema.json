@@ -1278,7 +1278,8 @@
         "type": "string",
         "enum": [
           "uninstall-apps",
-          "reset"
+          "reset",
+          "slim"
         ]
       },
       "confirmed": {

@@ -713,7 +713,14 @@ export class Adapters {
     return d;
   }
   async cleanupDevice(d: DeviceConfig, action: DeviceCleanupAction) {
-    if (isAndroidEmulator(d)) return this.emulators.cleanup(d, action);
+    if (action === "slim") {
+      if (d.connection.type !== "simulator" || d.kind !== "virtual")
+        fail("unsupported-cleanup", "Slimming requires an Apple simulator.");
+      if (!await available("simslim"))
+        fail("missing-helper", "Install simslim on the Deck host with brew install mobai-app/tap/simslim.", 503);
+    } else if (isAndroidEmulator(d)) {
+      return this.emulators.cleanup(d, action);
+    }
     return cleanupSimulator(d, action, this.execute);
   }
   async verifyIdentity(d: DeviceConfig, execute?: typeof run) {

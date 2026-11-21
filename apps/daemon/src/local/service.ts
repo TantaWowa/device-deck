@@ -86,6 +86,13 @@ const transientGroupIdentityErrors = new Set([
 ]);
 const isTransientGroupIdentityError = (error: unknown) =>
   error instanceof DeckError && transientGroupIdentityErrors.has(error.code);
+const simulatorProgress = {
+  launch: "Simulator booting…",
+  close: "Closing simulator…",
+  "uninstall-apps": "Uninstalling apps…",
+  reset: "Resetting device…",
+  slim: "Slimming simulator…",
+};
 const warmPoolLock = "Warm pool shutdown in progress";
 export class DeckService {
   readonly config: ConfigStore;
@@ -530,31 +537,23 @@ export class DeckService {
     return this.configuredHealth();
   }
   private decorate(ds: Device[]) {
-    return ds.map((d) => ({
-      ...d,
-      ...(this.simulatorActions.has(d.id)
-        ? {
-            online: false,
-            readiness: this.simulatorActions.get(d.id) === "launch" ? "starting" as const : "offline" as const,
-            capabilities: [],
-            gestureCapabilities: [],
-            simulatorState:
-              this.simulatorActions.get(d.id) === "launch"
-                ? ("starting" as const)
-                : ("stopping" as const),
-            healthDetail:
-              this.simulatorActions.get(d.id) === "launch"
-                ? "Simulator booting…"
-                : this.simulatorActions.get(d.id) === "uninstall-apps"
-                  ? "Uninstalling apps…"
-                  : this.simulatorActions.get(d.id) === "reset"
-                    ? "Resetting device…"
-                    : "Closing simulator…",
-          }
-        : {}),
-      locked: !!this.store.lockReason(d.id),
-      lockReason: this.store.lockReason(d.id),
-    }));
+    return ds.map((d) => {
+      const action = this.simulatorActions.get(d.id);
+      return {
+        ...d,
+        ...(action ? {
+          online: false,
+          readiness: action === "launch" ? "starting" as const : "offline" as const,
+          capabilities: [],
+          gestureCapabilities: [],
+          simulatorState: action === "slim" ? d.simulatorState
+            : action === "launch" ? "starting" as const : "stopping" as const,
+          healthDetail: simulatorProgress[action],
+        } : {}),
+        locked: !!this.store.lockReason(d.id),
+        lockReason: this.store.lockReason(d.id),
+      };
+    });
   }
   async snapshot(deviceIds?: string[]): Promise<Snapshot> {
     await this.refresh();
@@ -1415,6 +1414,7 @@ export class DeckService {
         });
       }
       case "devices.cleanup": {
+        const action: DeviceCleanupAction = args.action;
         await this.refresh();
         // Admit and lock the entire eligible selection before any adapter work.
         // A concurrent reservation or second cleanup cannot claim a later member.
@@ -1430,13 +1430,15 @@ export class DeckService {
               const device = this.device(id);
               if (!supportsDeviceCleanup(device))
                 fail("unsupported-cleanup", "Cleanup is only available for Apple simulators and Android emulators.");
+              if (action === "slim" && device.connection.type !== "simulator")
+                fail("unsupported-cleanup", "Slimming requires an Apple simulator.");
               const session = this.store.sessions().find((s) => s.deviceId === id && s.state !== "closed");
               if (session || this.deviceHasOpenGroup(id))
-                fail("device-reserved", "Release this device and finish reservation cleanup before removing apps or resetting it.", 409);
+                fail("device-reserved", "Release this device and finish reservation cleanup before maintenance.", 409);
               if (this.store.lockReason(id) || this.simulatorActions.has(id))
                 fail("device-locked", "This device is locked or already undergoing maintenance.", 409);
-              this.simulatorActions.set(id, args.action);
-              this.store.lock(id, args.action === "reset" ? "Device reset in progress" : "App uninstall in progress");
+              this.simulatorActions.set(id, action);
+              this.store.lock(id, simulatorProgress[action]);
               return structuredClone(device);
             } catch (error) {
               return { id, ok: false, error: (error as Error).message };
@@ -1466,17 +1468,18 @@ export class DeckService {
               if (source?.kind === "native") await this.capture.closeSource(source);
               // Reset may stop the device before a later erase step fails.
               // A subsequent manual boot must not inherit old pool ownership.
-              if (args.action === "reset") this.store.dropWarmDevice(target.id);
-              const result = await this.adapters.cleanupDevice(target, args.action);
+              if (action === "reset") this.store.dropWarmDevice(target.id);
+              const result = await this.adapters.cleanupDevice(target, action);
               if (result.state === "shutdown") this.store.dropWarmDevice(target.id);
               this.store.event({
-                deviceId: target.id, owner: origin, action: `cleanup-${args.action}`,
-                detail: args.action === "reset" ? "Reset device" : `Uninstalled ${result.removedApps ?? 0} user apps`,
+                deviceId: target.id, owner: origin, action: `cleanup-${action}`,
+                detail: action === "slim" ? "Applied and verified simslim profile"
+                  : action === "reset" ? "Reset device" : `Uninstalled ${result.removedApps ?? 0} user apps`,
               });
               return { id: target.id, ok: true, ...result };
             } catch (error) {
               const message = (error as Error).message;
-              this.store.event({ deviceId: target.id, owner: origin, action: `cleanup-${args.action}-failed`, detail: message });
+              this.store.event({ deviceId: target.id, owner: origin, action: `cleanup-${action}-failed`, detail: message });
               return { id: target.id, ok: false, error: message };
             } finally {
               this.simulatorActions.delete(target.id);

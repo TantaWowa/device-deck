@@ -240,7 +240,7 @@ export const canLaunchSimulator = (d: DeviceConfig) =>
   supportsSimulatorLifecycle(d) &&
   (d.connection.type !== "adb" || Boolean(d.connection.avdName));
 export const supportsDeviceCleanup = supportsSimulatorLifecycle;
-export const deviceCleanupActionSchema = z.enum(["uninstall-apps", "reset"]);
+export const deviceCleanupActionSchema = z.enum(["uninstall-apps", "reset", "slim"]);
 export type DeviceCleanupAction = z.infer<typeof deviceCleanupActionSchema>;
 export type DeviceCleanupResult =
   | { id: string; ok: true; removedApps?: number; state?: "booted" | "shutdown"; warning?: string }

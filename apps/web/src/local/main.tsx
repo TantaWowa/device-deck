@@ -951,7 +951,7 @@ function App() {
                                 type="button"
                                 aria-label={`Clean up ${d.name}`}
                                 disabled={busy || Boolean(cleanupBlockedReason(d, data.sessions))}
-                                title={cleanupBlockedReason(d, data.sessions) || "Uninstall apps or reset this virtual device"}
+                                title={cleanupBlockedReason(d, data.sessions) || "View maintenance actions for this virtual device"}
                                 onClick={() => setCleanupTargets([{ device: d, hidden: false }])}
                               >
                                 Clean up…

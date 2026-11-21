@@ -10,7 +10,7 @@ Apple iOS/tvOS simulators and Android AVDs can be launched and closed directly i
 
 The **Wake** button in Devices and the remote attempts to wake a device without reserving it. It sends Android's wake key, Roku TV power-on or a Roku player's Home button, Apple TV power-on, or Home to an already running Apple simulator. Wake can be attempted while a device is reported offline; an unreachable device can still fail, and successful dispatch does not prove the screen is awake. Shut-down simulators must be launched first. Physical iOS devices and capture-only connections do not expose Wake.
 
-Web Devices also offers **Clean up…** per virtual device and **Clean up selected…** for a selection. `devices.cleanup` accepts `ids`, `action` (`uninstall-apps` or `reset`) and `confirmed:true`. It returns per-device results, protects reservations and physical devices, and preserves OS images. Android reset preserves its separate virtual SD card. See [cleanup behavior](simulator-controls.md#remove-apps-or-reset-devices).
+Web Devices also offers **Clean up…** per virtual device and **Clean up selected…** for a selection. `devices.cleanup` accepts `ids`, `action` (`uninstall-apps`, `reset`, or `slim` for Apple simulators) and `confirmed:true`. It returns per-device results, protects reservations and physical devices, and preserves OS images. Android reset preserves its separate virtual SD card. See [cleanup behavior](simulator-controls.md#remove-apps-or-reset-devices).
 
 ## CLI walkthrough
 

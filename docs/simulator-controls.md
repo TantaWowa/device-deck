@@ -78,9 +78,27 @@ the Mac's memory, with a minimum of two. Set `"enabled": false` to shut
 cold-started devices down on release, as earlier versions did; devices
 already in the pool are then shut down at the next check.
 
+## Reduce Apple simulator RAM
+
+Install simslim on the Mac that hosts the simulators.
+
+```sh
+brew install mobai-app/tap/simslim
+```
+
+In **Devices**, select one or more Apple simulators, open **Clean up…**, and choose **Reduce simulator RAM**. Device Deck skips reserved or locked devices. From the CLI, pass the configured Device Deck ID.
+
+```sh
+devdeck call devices.cleanup '{"ids":["APPLE_SIMULATOR_ID"],"action":"slim","confirmed":true}'
+```
+
+Device Deck applies and verifies the profile for each UDID. A running simulator stays up. A stopped simulator boots for verification and returns to shutdown. The profile keeps the `store`, `web` and `icloud` categories for push, StoreKit, universal links and account services. Tests that depend on disabled services such as Siri, Photos or HealthKit need a different profile or a stock simulator.
+
+On current iOS and tvOS runtimes the settings persist across boots. Older runtimes that cannot persist overrides support slimming only for the running session. To measure RAM, run `simslim measure UDID` on the host while the simulator is booted. When the simulator is free for maintenance, `simslim off UDID --preserve-boot-state` restores the stock services and may reboot it. [simslim profiles and runtime support](https://github.com/MobAI-App/simslim#usage)
+
 ## Remove apps or reset devices
 
-In **Devices**, choose **Clean up…** on a virtual device, or select several devices and choose **Clean up selected…**. The dialog lists the exact targets, including those hidden by filters, and offers two actions:
+In **Devices**, choose **Clean up…** on a virtual device, or select several devices and choose **Clean up selected…**. The dialog lists the exact targets, including those hidden by filters, and offers the following storage actions.
 
 - **Uninstall apps** removes user-installed apps and their app data, keeping system apps and device settings. Stopped devices start temporarily and return to shutdown afterward; running devices stay running.
 - **Reset device** removes installed apps, internal user data, settings and logins, then leaves the device shut down. The virtual-device definition and OS image remain. Android uses the SDK's `-wipe-data` reset, which preserves any separate virtual SD-card image.
