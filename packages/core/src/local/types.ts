@@ -100,6 +100,7 @@ export const settingsSchema = z
     captureMode: z.enum(["clean", "annotated"]).default("clean"),
     maxRecordingMinutes: z.number().int().min(1).max(120).default(15),
     previewIntervalMs: z.number().int().min(250).max(5000).default(750),
+    defaultAndroidAvdMemoryProfile: z.enum(["stock", "low-ram"]).optional(),
     /** Virtual devices Device Deck cold-started stay booted after release. */
     warmPool: z
       .object({
@@ -236,11 +237,13 @@ export const supportsSimulatorLifecycle = (d: DeviceConfig) =>
       Boolean(
         d.connection.avdName || /^emulator-\d+$/.test(d.connection.serial),
       )));
+export const isAndroidAvd = (d: DeviceConfig) =>
+  d.platform === "Android" && d.connection.type === "adb" && supportsSimulatorLifecycle(d);
 export const canLaunchSimulator = (d: DeviceConfig) =>
   supportsSimulatorLifecycle(d) &&
   (d.connection.type !== "adb" || Boolean(d.connection.avdName));
 export const supportsDeviceCleanup = supportsSimulatorLifecycle;
-export const deviceCleanupActionSchema = z.enum(["uninstall-apps", "reset"]);
+export const deviceCleanupActionSchema = z.enum(["uninstall-apps", "reset", "slim"]);
 export type DeviceCleanupAction = z.infer<typeof deviceCleanupActionSchema>;
 export type DeviceCleanupResult =
   | { id: string; ok: true; removedApps?: number; state?: "booted" | "shutdown"; warning?: string }
@@ -625,6 +628,19 @@ export function matchDevices(
   );
 }
 
+export function matchReservationDevices(
+  devices: Device[],
+  sessions: Session[],
+  selector: Selector,
+  defaultAndroidProfile?: Config["settings"]["defaultAndroidAvdMemoryProfile"],
+) {
+  const matches = matchDevices(devices, sessions, selector);
+  if (defaultAndroidProfile !== "low-ram" || selector.device || selector.tags?.includes("android-full-ram"))
+    return matches;
+  return matches.filter(device => !isAndroidAvd(device) || !device.tags?.includes("android-full-ram") ||
+    selector.name?.toLowerCase() === device.name.toLowerCase());
+}
+
 /** Resolve a complete set of distinct, currently claimable devices. The
  * smallest candidate sets are assigned first so broad criteria cannot steal a
  * device needed by a more specific request. Offline virtual devices remain
@@ -638,6 +654,7 @@ export function matchReservationGroup(
   /** Running devices an `offline` request may take by shutting them down and
    * cold-starting them again. Genuinely stopped devices are preferred. */
   recyclable: (device: Device) => boolean = () => false,
+  defaultAndroidProfile?: Config["settings"]["defaultAndroidAvdMemoryProfile"],
 ) {
   const busy = new Set(
     sessions.filter((session) => session.state !== "closed").map((session) => session.deviceId),
@@ -647,9 +664,9 @@ export function matchReservationGroup(
       ? { ...request.selector, state: undefined }
       : request.selector;
     const recycled = selector.state === "offline"
-      ? matchDevices(devices.filter((device) => device.online && recyclable(device)), sessions, { ...selector, state: undefined })
+      ? matchReservationDevices(devices.filter((device) => device.online && recyclable(device)), sessions, { ...selector, state: undefined }, defaultAndroidProfile)
       : [];
-    const candidates = [...matchDevices(devices, sessions, selector), ...recycled]
+    const candidates = [...matchReservationDevices(devices, sessions, selector, defaultAndroidProfile), ...recycled]
       .filter((device) => !busy.has(device.id) && !device.locked)
       .sort((a, b) => Number(recycled.includes(a)) - Number(recycled.includes(b)) ||
         Number(b.online) - Number(a.online) || a.id.localeCompare(b.id));

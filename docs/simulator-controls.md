@@ -14,6 +14,15 @@ If a runner stores its CoreSimulator device set on a mounted volume, host bootst
 
 For Android, create the AVD in Android Studio first. **Discover** lists both running emulators and installed AVDs that are stopped. Select multiple or **Add all** to register them. Device Deck uses the existing SDK emulator executable from **Settings → Adapter executables → emulator**, Android SDK environment variables, standard SDK paths, or `PATH`. It does not install an SDK or system images. The AVD name comes from `emulator -list-avds` or a running emulator's exact `adb -s SERIAL emu avd name` response. When that console response is empty or unavailable, Device Deck reads `ro.boot.qemu.avd_name` from the same exact ADB serial. Empty or invalid identities remain blocked. These commands use the Android SDK's [launch](https://developer.android.com/studio/run/emulator-commandline) and [console](https://developer.android.com/studio/run/emulator-console) interfaces.
 
+To default future Android registrations on this Deck to 1,536 MiB, set `settings.defaultAndroidAvdMemoryProfile` to `"low-ram"`. Run these commands on the Deck host with `jq` installed to preserve the current configuration and revision.
+
+```sh
+fleet_update=$(devdeck call config.get --json | jq -c '{config: (.config | .settings.defaultAndroidAvdMemoryProfile = "low-ram"), revision}')
+devdeck call config.save "$fleet_update"
+```
+
+Dashboard **Discover** and **Add all**, `devdeck register --avd`, and new AVDs in a `config.save` request all inherit the `android-low-ram` tag. To keep an AVD at its configured RAM and reserve it for explicit requests, register it with `--tags android-full-ram`. Existing registrations keep their tags. To stop automatically tagging new registrations, set the same setting to `"stock"`. See [Android reservation and memory checks](group-reservations.md#android-emulator-memory).
+
 An Android device's optional `connection.avdName` is its persistent virtual-device identity. Launch uses `emulator -avd NAME`; after boot, Device Deck finds the actual ADB serial belonging to that AVD. New remote, screenshot and recording operations resolve that serial again, so another emulator reusing an old serial is not selected. A recording retains its resolved transport for its lifetime. Duplicate running instances with the same AVD name are reported as ambiguous.
 
 Existing serial-only emulator entries can close their exact running emulator once its AVD identity is readable. Lifecycle and reservation preflight learn and save that verified AVD name, rejecting duplicate registered identities. A stopped serial-only entry needs its AVD name set in **Edit device** before Launch is available. If an emulator is still booting or its identity is unreadable, wait and refresh; a launch timeout leaves its process running. Physical devices do not have simulator lifecycle controls.
@@ -78,9 +87,46 @@ the Mac's memory, with a minimum of two. Set `"enabled": false` to shut
 cold-started devices down on release, as earlier versions did; devices
 already in the pool are then shut down at the next check.
 
+## Reduce Apple simulator RAM
+
+Install simslim on the Mac that hosts the simulators.
+
+```sh
+brew install mobai-app/tap/simslim
+```
+
+To apply the QA profile automatically to existing and future iOS and tvOS simulators, run these commands in the logged-in macOS account that owns the CoreSimulator device set and hosts Device Deck. SSH into that account also works while its GUI session is active. The watcher uses the Xcode selected by `xcode-select -p`.
+
+```sh
+devdeck simulator-profile install
+devdeck simulator-profile status
+```
+
+On older Device Deck releases, run `python3 scripts/install-simulator-memory-profile.py install` and `status` from a checkout containing the [standalone installer](../scripts/install-simulator-memory-profile.py).
+
+The installer writes `~/Library/Application Support/Device Deck/simslim-profile.json` and starts the per-user LaunchAgent `com.tantawowa.device-deck.simslim`. It starts again at GUI login. The watcher covers the account's default and Xcode testing device sets, including devices created outside Device Deck. It applies the profile to existing booted devices as soon as it starts. Enroll when those devices are idle or already match the profile. On supported runtimes it also seeds shutdown devices before boot. When a device boots immediately after creation, the watcher can finish applying the profile after boot. On enrolled hosts, Device Deck verifies the exact UDID before a manual launch returns and before handing out a single reservation, a new group, or a replayed group. The check gives the watcher time to finish. If verification fails, Device Deck releases a newly acquired lease or group. A failed replay leaves the caller’s existing group active.
+
+To check the profile of a booted target, run this on its host with its exact UDID.
+
+```sh
+simslim verify "$UDID" --profile "$HOME/Library/Application Support/Device Deck/simslim-profile.json"
+```
+
+To stop future automatic applications, run `devdeck simulator-profile uninstall`. This removes the watcher and its enrollment profile. Existing overrides persist until restored on each simulator.
+
+In **Devices**, select one or more Apple simulators, open **Clean up…**, and choose **Reduce simulator RAM**. Device Deck skips reserved or locked devices. From the CLI, pass the configured Device Deck ID.
+
+```sh
+devdeck call devices.cleanup '{"ids":["APPLE_SIMULATOR_ID"],"action":"slim","confirmed":true}'
+```
+
+Device Deck applies and verifies the profile for each UDID. A running simulator stays up. A stopped simulator boots for verification and returns to shutdown. The profile keeps the `store`, `web` and `icloud` categories for push, StoreKit, universal links and account services. Tests that depend on disabled services such as Siri, Photos or HealthKit need a different profile or a stock simulator.
+
+On current iOS and tvOS runtimes the settings persist across boots. Older runtimes that cannot persist overrides support slimming only for the running session. To measure RAM, run `simslim measure UDID` on the host while the simulator is booted. After unenrolling the host, run `simslim off UDID --preserve-boot-state` when the simulator is free for maintenance to restore stock services. This may reboot the device. [simslim profiles and runtime support](https://github.com/MobAI-App/simslim#usage)
+
 ## Remove apps or reset devices
 
-In **Devices**, choose **Clean up…** on a virtual device, or select several devices and choose **Clean up selected…**. The dialog lists the exact targets, including those hidden by filters, and offers two actions:
+In **Devices**, choose **Clean up…** on a virtual device, or select several devices and choose **Clean up selected…**. The dialog lists the exact targets, including those hidden by filters, and offers the following storage actions.
 
 - **Uninstall apps** removes user-installed apps and their app data, keeping system apps and device settings. Stopped devices start temporarily and return to shutdown afterward; running devices stay running.
 - **Reset device** removes installed apps, internal user data, settings and logins, then leaves the device shut down. The virtual-device definition and OS image remain. Android uses the SDK's `-wipe-data` reset, which preserves any separate virtual SD-card image.

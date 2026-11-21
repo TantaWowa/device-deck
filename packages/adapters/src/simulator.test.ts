@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { configSchema, deviceSchema } from "../../core/src/local/types";
 import { Adapters } from "./index";
-import { cleanupSimulator, controlSimulator, simulatorState, wakeSimulator, SimulatorInventory } from "./simulator";
+import { cleanupSimulator, controlSimulator, simulatorState, verifySimulatorMemoryProfile, wakeSimulator, SimulatorInventory } from "./simulator";
 import type { run } from "./process";
 
 const simulator = deviceSchema.parse({
@@ -65,6 +65,53 @@ function fixture(
   };
   return { execute, calls };
 }
+test("enrolled Apple profiles verify the exact UDID and allow the watcher to finish", async (t) => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "simslim-check-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const profile = path.join(dir, "profile.json");
+  assert.equal(simulator.connection.type, "simulator");
+  const udid = simulator.connection.udid;
+  let attempts = 0;
+  const waits: number[] = [];
+  const execute: typeof run = async (file, args, timeout, options) => {
+    assert.equal(options?.env?.HOME, os.userInfo().homedir);
+    assert.ok(["/opt/homebrew/bin/simslim", "/usr/local/bin/simslim"].includes(file));
+    assert.deepEqual(args, ["verify", udid, "--profile", profile, "--json"]);
+    assert.equal(timeout, 5000);
+    if (++attempts === 1) throw new Error("verify exited 1");
+    return { stdout: Buffer.from(JSON.stringify({ udid: udid.toLowerCase(), ok: true })), stderr: "" };
+  };
+  const wait = async (ms: number) => { waits.push(ms); };
+  await verifySimulatorMemoryProfile(simulator, profile, execute, wait);
+  assert.equal(attempts, 0, "unenrolled account skips verification");
+  await writeFile(profile, "{}");
+  await verifySimulatorMemoryProfile({ ...simulator, kind: "physical" }, profile, execute, wait);
+  assert.equal(attempts, 0);
+  await verifySimulatorMemoryProfile(simulator, profile, execute, wait);
+  assert.equal(attempts, 2);
+  assert.deepEqual(waits, [3000]);
+});
+test("Apple profile verification refuses drift, malformed responses and other UDIDs", async (t) => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "simslim-check-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const profile = path.join(dir, "profile.json");
+  await writeFile(profile, "{}");
+  assert.equal(simulator.connection.type, "simulator");
+  const udid = simulator.connection.udid;
+  for (const [output, expected] of [
+    [JSON.stringify({ udid, ok: false }), 6],
+    [JSON.stringify({ udid, ok: 1 }), 6],
+    [JSON.stringify({ udid: "other", ok: true }), 1],
+    ["invalid JSON", 1],
+  ] as const) {
+    let attempts = 0;
+    await assert.rejects(verifySimulatorMemoryProfile(simulator, profile, async () => {
+      attempts++;
+      return { stdout: Buffer.from(output), stderr: "" };
+    }, async () => {}), /devdeck simulator-profile status/);
+    assert.equal(attempts, expected);
+  }
+});
 test("simulator launch boots the configured UDID, waits for readiness, and opens the selected Xcode Simulator", async () => {
   const { execute, calls } = fixture();
   let ownershipRecorded = false;
@@ -539,8 +586,69 @@ test("reset never erases after failed shutdown and propagates erase failures", a
   await assert.rejects(cleanupSimulator(simulator, "reset", failedErase), /Erase failed/);
 });
 
+test("slimming verifies the exact UDID and restores its original boot state", async () => {
+  const udid = "F4B9CA01-BA57-40A0-984D-38B7F91AB8A1";
+  for (const initial of ["Shutdown", "Booted"]) {
+    const device = fixture(initial);
+    const commands: string[][] = [];
+    const execute: typeof run = async (command, args, timeout, options) => {
+      if (command === "simslim") {
+        assert.equal(options?.env?.HOME, os.userInfo().homedir);
+        commands.push(args);
+        if (initial === "Shutdown" && args[0] === "on")
+          await device.execute("xcrun", ["simctl", "bootstatus", udid]);
+        return { stdout: Buffer.alloc(0), stderr: "" };
+      }
+      return device.execute(command, args, timeout);
+    };
+    const result = await cleanupSimulator(simulator, "slim", execute);
+    assert.deepEqual(result, { state: initial.toLowerCase() });
+    assert.deepEqual(commands, [
+      ["on", udid, "--except", "store,web,icloud", ...(initial === "Booted" ? ["--no-reboot"] : [])],
+      ["verify", udid, "--except", "store,web,icloud"],
+    ]);
+    assert.equal(device.calls.some(({ args }) => args[1] === "shutdown"), initial === "Shutdown");
+    assert(!device.calls.some(({ args }) => ["uninstall", "erase"].includes(args[1])));
+  }
+});
+
+test("a live simulator with a stricter profile regains QA services without rebooting", async () => {
+  const device = fixture("Booted");
+  const udid = "F4B9CA01-BA57-40A0-984D-38B7F91AB8A1";
+  let enabled = false;
+  let verified = 0;
+  const execute: typeof run = async (command, args, timeout, options) => {
+    if (command === "simslim") {
+      assert.equal(options?.env?.HOME, os.userInfo().homedir);
+      if (args[0] === "verify" && !enabled) throw new Error("Managed service disabled beyond profile");
+      if (args[0] === "enable") {
+        assert.deepEqual(args, ["enable", udid, "store,web,icloud"]);
+        enabled = true;
+      }
+      if (args[0] === "verify") verified++;
+      return { stdout: Buffer.alloc(0), stderr: "" };
+    }
+    return device.execute(command, args, timeout);
+  };
+  assert.deepEqual(await cleanupSimulator(simulator, "slim", execute), { state: "booted" });
+  assert.equal(verified, 1);
+  assert(!device.calls.some(({ args }) => args[1] === "shutdown"));
+});
+
+test("a profile verification failure still closes a simulator booted for slimming", async () => {
+  const device = fixture();
+  const execute: typeof run = async (command, args, timeout) => {
+    if (command === "simslim" && args[0] === "on")
+      return device.execute("xcrun", ["simctl", "bootstatus", args[1]]);
+    if (command === "simslim" && args[0] === "verify") throw new Error("Profile drift");
+    return device.execute(command, args, timeout);
+  };
+  await assert.rejects(cleanupSimulator(simulator, "slim", execute), /Profile drift/);
+  assert.equal(await simulatorState(simulator, device.execute), "shutdown");
+});
+
 test("cleanup rejects physical, alias, unavailable, and transitioning targets before mutation", async () => {
-  for (const action of ["uninstall-apps", "reset"] as const) {
+  for (const action of ["uninstall-apps", "reset", "slim"] as const) {
     for (const target of [
       { ...simulator, kind: "physical" as const },
       { ...simulator, connection: { type: "simulator" as const, os: "tvos" as const, udid: "all" } },

@@ -11,6 +11,15 @@ test("commands with empty stderr still report a useful failure or timeout", asyn
   await assert.rejects(run(process.execPath, ["-e", "setTimeout(() => {}, 5000)"], 100), /Timed out/);
 });
 
+test("command environment overrides preserve other inherited variables and stay in the child", async () => {
+  const original = process.env.DEVICE_DECK_RUN_TEST;
+  const result = await run(process.execPath, ["-e", "console.log(JSON.stringify([process.env.DEVICE_DECK_RUN_TEST, process.env.PATH]))"], 5000, {
+    env: { DEVICE_DECK_RUN_TEST: "from runner" },
+  });
+  assert.deepEqual(JSON.parse(result.stdout.toString()), ["from runner", process.env.PATH]);
+  assert.equal(process.env.DEVICE_DECK_RUN_TEST, original);
+});
+
 test("aborting a probe escalates an uncooperative owned child and waits for its exit", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "deck-probe-abort-"));
   const pidFile = path.join(directory, "pid");

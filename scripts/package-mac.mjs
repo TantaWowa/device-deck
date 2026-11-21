@@ -131,6 +131,8 @@ if (imported) {
     await cp(path.join(root, "build", item), path.join(resources, "build", item), { recursive: true });
   await mkdir(path.join(resources, "native"));
   await cp("native/apple-tv.py", path.join(resources, "native/apple-tv.py"));
+  await mkdir(path.join(resources, "scripts"));
+  await cp("scripts/install-simulator-memory-profile.py", path.join(resources, "scripts/install-simulator-memory-profile.py"));
   await cp("LICENSE", path.join(resources, "LICENSE"));
   await writeFile(path.join(contents, "Info.plist"), appInfo(pkg.version));
   await writeFile(path.join(contents, "PkgInfo"), "APPL????");

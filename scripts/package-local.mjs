@@ -22,6 +22,8 @@ for (const name of applicationBuildPayload)
 await mkdir(path.join(destination, "native"), { recursive: true });
 // Python is an actual runtime bridge. Swift and its compiler plist stay private.
 await cp("native/apple-tv.py", path.join(destination, "native/apple-tv.py"));
+await mkdir(path.join(destination, "scripts"));
+await cp("scripts/install-simulator-memory-profile.py", path.join(destination, "scripts/install-simulator-memory-profile.py"));
 await cp("docs", path.join(destination, "docs"), { recursive: true });
 await cp("examples", path.join(destination, "examples"), { recursive: true });
 await cp("README.md", path.join(destination, "README.md"));

@@ -18,6 +18,16 @@ Physical devices must already be online. A stopped registered Apple simulator or
 
 After claiming the complete set, Device Deck gives each member up to two minutes to stabilize while it rechecks readiness and transient Android AVD identity. This wait belongs to the allocator; CI jobs and test suites do not add sleeps. A virtual device already starting remains externally owned and is never shut down by group cleanup. Device Deck records `startedByGroup` immediately before it launches a definitively stopped virtual device, and release restores only those recorded cold starts. Android group launches also receive a random, durable process marker before spawn. If ADB is still offline and cannot report the AVD identity during rollback, Device Deck may stop only the process carrying both that marker and the expected AVD name; an unmarked or ambiguous emulator remains untouched and cleanup stays pending. A timeout reports the affected group, alias, device, and last readiness detail, then rolls back the complete group.
 
+### Android emulator memory
+
+Add `android-low-ram` to an Android virtual device's tags to request **1,536 MiB of guest RAM** whenever Device Deck starts that AVD. The Android SDK emulator receives `-lowram -memory 1536 -no-snapshot`. A tagged launch cold boots from the existing user data and skips Quick Boot snapshot loading and saving. It uses the device's usual renderer, audio, input and installed apps. The host emulator process also uses memory for graphics and emulation, so its footprint can exceed the guest RAM setting.
+
+Set `settings.defaultAndroidAvdMemoryProfile` to `"low-ram"` on a Deck to tag future AVD registrations automatically. Dashboard discovery, CLI registration and configuration saves share this setting. Already registered AVDs keep their tags. A new AVD explicitly tagged `android-full-ram` keeps the RAM from its AVD configuration. Omitting the setting or selecting `"stock"` keeps automatic tagging off.
+
+On an enrolled Deck, general single and group reservations skip AVDs tagged `android-full-ram`. To reserve one, request the `android-full-ram` tag, its exact ID, or its exact friendly name. AVDs stay visible in inventory. A reservation selector can include `"tags": ["ci", "android-low-ram"]` to choose from those devices. Before handing a tagged device to a caller, Device Deck checks the guest's usable RAM on the exact ADB transport. A running AVD within budget can be reused. An over-budget AVD stays running and the request returns its measured RAM. Once current work finishes, close it and launch it through Device Deck. To return to the AVD's configured RAM, replace the low-RAM tag with `android-full-ram` and cold start it.
+
+To check the guest's actual RAM, run `adb -P PORT -s SERIAL shell cat /proc/meminfo` with the port and serial returned by the reservation. `MemTotal` excludes memory reserved by the kernel. Measure the host QEMU process separately for RAM savings. See the [Android Emulator command-line reference](https://developer.android.com/studio/run/emulator-commandline#startup-options).
+
 ## Manifest and CLI
 
 Create an ephemeral manifest after the test planner has selected its suites:

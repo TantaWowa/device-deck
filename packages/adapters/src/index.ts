@@ -6,8 +6,9 @@ import { observationAdapter, type ObservationHost } from "./device-observation";
 import type { DeviceInteraction } from "../../core/src/device-interaction";
 import type { InteractiveSource, VideoProfile } from "../../core/src/live";
 import { androidKeys, rokuKeys, hidKeys, iosHardwareKeys, deviceInputMode } from "../../core/src/remote";
-import { cleanupSimulator, controlSimulator, simulatorState, SimulatorInventory, wakeSimulator, SIMULATOR_UNAVAILABLE_MESSAGE } from "./simulator";
-import { AndroidEmulators, isAndroidEmulator } from "./android-emulator";
+import { cleanupSimulator, controlSimulator, simulatorState, SimulatorInventory, verifySimulatorMemoryProfile, wakeSimulator, SIMULATOR_UNAVAILABLE_MESSAGE } from "./simulator";
+import { AndroidEmulators, isAndroidEmulator, usesAndroidLowRamProfile } from "./android-emulator";
+export { usesAndroidLowRamProfile } from "./android-emulator";
 import { idbInput as sharedIdbInput, IdbInput } from "./idb-input";
 import {
   mergeCaptureCards,
@@ -708,12 +709,23 @@ export class Adapters {
   async memoryPressureLevel() {
     return (await this.execute("/usr/sbin/sysctl", ["-n", "kern.memorystatus_vm_pressure_level"])).stdout.toString();
   }
+  verifySimulatorMemoryProfile(device: DeviceConfig, profile?: string) {
+    if (usesAndroidLowRamProfile(device)) return this.emulators.verifyMemoryProfile(device);
+    return verifySimulatorMemoryProfile(device, profile, this.execute);
+  }
   async prepareSimulator(d: DeviceConfig) {
     if (isAndroidEmulator(d)) return this.emulators.prepare(d);
     return d;
   }
   async cleanupDevice(d: DeviceConfig, action: DeviceCleanupAction) {
-    if (isAndroidEmulator(d)) return this.emulators.cleanup(d, action);
+    if (action === "slim") {
+      if (d.connection.type !== "simulator" || d.kind !== "virtual")
+        fail("unsupported-cleanup", "Slimming requires an Apple simulator.");
+      if (!await available("simslim"))
+        fail("missing-helper", "Install simslim on the Deck host with brew install mobai-app/tap/simslim.", 503);
+    } else if (isAndroidEmulator(d)) {
+      return this.emulators.cleanup(d, action);
+    }
     return cleanupSimulator(d, action, this.execute);
   }
   async verifyIdentity(d: DeviceConfig, execute?: typeof run) {

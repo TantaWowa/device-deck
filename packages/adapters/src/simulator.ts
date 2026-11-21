@@ -1,8 +1,8 @@
 import path from "node:path";
 import os from "node:os";
 import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
-import { fail, type DeviceConfig } from "../../core/src/local/types";
-import { run } from "./process";
+import { fail, type DeviceCleanupAction, type DeviceConfig } from "../../core/src/local/types";
+import { available, run } from "./process";
 import { idbInput, type IdbInput } from "./idb-input";
 
 export type SimulatorState =
@@ -116,6 +116,55 @@ export class SimulatorInventory {
       return "starting";
     }
   }
+}
+
+// simslim uses HOME to locate CoreSimulator device sets, including in CI jobs with a temporary HOME.
+const simulatorOwnerEnvironment = () => ({ env: { HOME: os.userInfo().homedir } });
+
+/** Verify the enrolled account's profile using the exact simulator handed to the caller. */
+export async function verifySimulatorMemoryProfile(
+  device: DeviceConfig,
+  profile: string | undefined,
+  execute: Runner = run,
+  wait = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
+) {
+  if (!profile || device.kind !== "virtual" || device.connection.type !== "simulator") return;
+  try {
+    if (!(await stat(profile)).isFile()) throw new Error("Expected a regular profile file.");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    fail("simulator-memory-profile", `Cannot read the simulator memory profile at ${profile}: ${(error as Error).message}`, 503);
+  }
+  const { udid } = device.connection;
+  const binary = await available("/opt/homebrew/bin/simslim") ? "/opt/homebrew/bin/simslim" : "/usr/local/bin/simslim";
+  const options = simulatorOwnerEnvironment();
+  let detail = "The reported profile does not match.";
+  for (let attempt = 0; attempt < 6; attempt++) {
+    let output: Buffer | undefined;
+    try {
+      output = (await execute(binary, ["verify", udid, "--profile", profile, "--json"], 5000, options)).stdout;
+    } catch (error) {
+      detail = (error as Error).message;
+      if (/ENOENT|EACCES/.test(detail)) break;
+    }
+    if (output) {
+      let result: { ok?: unknown; udid?: unknown } | undefined;
+      try {
+        result = JSON.parse(output.toString());
+      } catch {
+        detail = "The helper returned invalid JSON.";
+        break;
+      }
+      if (typeof result?.udid !== "string" || result.udid.toLowerCase() !== udid.toLowerCase()) {
+        detail = "The helper did not confirm the requested UDID.";
+        break;
+      }
+      if (result.ok === true) return;
+      detail = "The helper reported profile drift.";
+    }
+    if (attempt < 5) await wait(3000);
+  }
+  fail("simulator-memory-profile", `Could not verify the simslim profile for ${device.name} (${udid}). Check the host watcher with devdeck simulator-profile status and run simslim verify for this UDID. ${detail}`, 503);
 }
 
 export async function controlSimulator(
@@ -265,23 +314,46 @@ async function shutdownSimulatorForCleanup(device: DeviceConfig, udid: string, e
     fail("simulator-transition", `Simulator is ${state}; shutdown could not be verified.`, 409);
 }
 
-/** Remove user apps or reset one simulator without using aliases or presenting its UI. */
+/** Run maintenance against one exact simulator without presenting its UI. */
 export async function cleanupSimulator(
   device: DeviceConfig,
-  action: "uninstall-apps" | "reset",
+  action: DeviceCleanupAction,
   execute: Runner = run,
 ): Promise<{ removedApps?: number; state?: "booted" | "shutdown"; warning?: string }> {
   if (device.kind !== "virtual" || device.connection.type !== "simulator" ||
       !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(device.connection.udid))
     fail("unsupported-cleanup", "Cleanup requires one configured Apple simulator with an exact UDID.");
-  if (action !== "uninstall-apps" && action !== "reset")
-    fail("unsupported-cleanup", "Choose uninstall-apps or reset.");
+  if (action !== "uninstall-apps" && action !== "reset" && action !== "slim")
+    fail("unsupported-cleanup", "Unknown simulator maintenance action.");
   const udid = device.connection.udid;
   const initial = await simulatorState(device, execute);
   if (initial === "unavailable")
     fail("simulator-unavailable", SIMULATOR_UNAVAILABLE_MESSAGE, 409);
   if (initial !== "booted" && initial !== "shutdown")
     fail("simulator-transition", `Simulator is ${initial}. Wait for it to finish before cleanup.`, 409);
+
+  if (action === "slim") {
+    // Keep account, purchase, push, media and associated-domain services available for QA.
+    const options = simulatorOwnerEnvironment();
+    const keep = "store,web,icloud";
+    const verify = ["verify", udid, "--except", keep];
+    try {
+      const mode = initial === "booted" ? ["--no-reboot"] : [];
+      await execute("simslim", ["on", udid, "--except", keep, ...mode], 660000, options);
+      try {
+        await execute("simslim", verify, 30000, options);
+      } catch (error) {
+        if (initial !== "booted") throw error;
+        // Live slimming only adds disables. An older profile can still have our kept services disabled.
+        await execute("simslim", ["enable", udid, keep], 660000, options);
+        await execute("simslim", verify, 30000, options);
+      }
+    } finally {
+      if (initial === "shutdown" && await simulatorState(device, execute, false) !== "shutdown")
+        await shutdownSimulatorForCleanup(device, udid, execute);
+    }
+    return { state: initial };
+  }
 
   if (action === "reset") {
     if (initial === "booted") await shutdownSimulatorForCleanup(device, udid, execute);

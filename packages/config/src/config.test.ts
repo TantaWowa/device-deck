@@ -48,6 +48,31 @@ test("two concurrent saves with one revision have exactly one winner", async () 
     await rm(dir, { recursive: true, force: true });
   }
 });
+test("the fleet default classifies new AVD registrations and preserves explicit and existing devices", async (t) => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "deck-fleet-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const store = new ConfigStore(path.join(dir, "config.json"));
+  await store.load();
+  const avd = (id: string, tags?: string[]) => ({
+    id, name: id, platform: "Android" as const, kind: "virtual" as const, model: "", visibility: "local" as const, captureSourceId: null, tags,
+    connection: { type: "adb" as const, avdName: id, serial: "avd-" + id, port: 5037 },
+  });
+  await store.save({ ...store.config, devices: [avd("existing")] }, store.revision);
+  const next = structuredClone(store.config);
+  next.settings.defaultAndroidAvdMemoryProfile = "low-ram";
+  next.devices.push(avd("automatic", ["ci"]), avd("full", ["android-full-ram"]), avd("low", ["android-low-ram"]));
+  next.devices.push({ ...avd("usb", ["ci"]), kind: "physical", connection: { type: "adb", serial: "USBserial", port: 5037 } });
+  await store.save(next, store.revision);
+  const reloaded = new ConfigStore(store.file);
+  await reloaded.load();
+  assert.deepEqual(reloaded.config.devices.map(d => d.tags), [
+    undefined, ["ci", "android-low-ram"], ["android-full-ram"], ["android-low-ram"], ["ci"],
+  ]);
+  const full = structuredClone(store.config);
+  full.devices[1].tags!.push("android-full-ram");
+  await store.save(full, store.revision);
+  assert.deepEqual(store.config.devices[1].tags, ["ci", "android-full-ram"]);
+});
 test("device tags are optional for existing configs and validated when present", () => {
   const base = {
     schemaVersion: 1,

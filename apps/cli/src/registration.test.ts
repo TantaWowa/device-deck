@@ -1,5 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { deckFixture } from "../../../tests/decks";
 import { discoverRegistration } from "./registration";
 import type { DiscoveredDevices } from "../../../packages/core/src/discovery";
 
@@ -30,4 +33,22 @@ test("registration makes one request for a present device and bounds missing-dev
     return { ...found, diagnostics: ["Simulators: unavailable"] };
   }), (error: unknown) => error instanceof Error && error.message === "Discovery found no device with that identifier.");
   assert.equal(calls, 2);
+});
+
+test("CLI register reports the saved fleet memory tag and accepts an explicit full AVD", async (t) => {
+  const f = await deckFixture("Registration"); t.after(f.close);
+  const config = structuredClone(f.deck.config.config);
+  config.settings.defaultAndroidAvdMemoryProfile = "low-ram";
+  await f.deck.execute("config.save", { config, revision: f.deck.config.revision });
+  f.deck.adapters.discover = async () => ({ ...found, devices: [found.devices[0]] });
+  const env = { ...process.env, DEVICE_DECK_HOME: f.directory, DEVICE_DECK_TARGET: "local" };
+  const run = (...tags: string[]) => promisify(execFile)(process.execPath,
+    ["--import", "tsx", "apps/cli/src/index.ts", "register", "--avd", "new_avd", ...tags, "--json"], { env });
+  const created = JSON.parse((await run()).stdout);
+  assert.equal(created.created, true);
+  assert.deepEqual(created.registered.tags, ["android-low-ram"]);
+  const updated = JSON.parse((await run("--tags", "android-full-ram")).stdout);
+  assert.equal(updated.created, false);
+  assert.deepEqual(updated.registered.tags, ["android-full-ram"]);
+  assert.deepEqual(f.deck.config.config.devices.find(d => d.id === "new-avd")?.tags, updated.registered.tags);
 });

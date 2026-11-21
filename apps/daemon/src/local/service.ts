@@ -13,7 +13,7 @@ import {
   sourceIdentity,
   atomicWrite,
 } from "../../../../packages/config/src";
-import { Adapters } from "../../../../packages/adapters/src";
+import { Adapters, usesAndroidLowRamProfile } from "../../../../packages/adapters/src";
 import { supportsWake } from "../../../../packages/core/src/remote";
 import {
   run,
@@ -26,7 +26,7 @@ import {
 } from "../../../../packages/capture/src";
 import {
   operations,
-  matchDevices,
+  matchReservationDevices,
   matchReservationGroup,
   supportsSimulatorLifecycle,
   supportsDeviceCleanup,
@@ -86,6 +86,13 @@ const transientGroupIdentityErrors = new Set([
 ]);
 const isTransientGroupIdentityError = (error: unknown) =>
   error instanceof DeckError && transientGroupIdentityErrors.has(error.code);
+const simulatorProgress = {
+  launch: "Simulator booting…",
+  close: "Closing simulator…",
+  "uninstall-apps": "Uninstalling apps…",
+  reset: "Resetting device…",
+  slim: "Slimming simulator…",
+};
 const warmPoolLock = "Warm pool shutdown in progress";
 export class DeckService {
   readonly config: ConfigStore;
@@ -135,6 +142,7 @@ export class DeckService {
     capture?: CaptureEngine,
     private readonly licensingOverride?: EntitlementService,
     groupReadiness: Partial<GroupReadinessPolicy> = {},
+    private readonly simulatorMemoryProfile?: string,
   ) {
     this.config = new ConfigStore(configFile);
     this.adapters = adapters || new Adapters(() => this.config.config);
@@ -286,6 +294,7 @@ export class DeckService {
       if (current.online) {
         try {
           const resolved = await this.adapters.verifyIdentity(current);
+          await this.adapters.verifySimulatorMemoryProfile(resolved, this.simulatorMemoryProfile);
           this.preparingGroup(groupId, preparation);
           return { ...current, connection: resolved.connection };
         } catch (error) {
@@ -530,31 +539,23 @@ export class DeckService {
     return this.configuredHealth();
   }
   private decorate(ds: Device[]) {
-    return ds.map((d) => ({
-      ...d,
-      ...(this.simulatorActions.has(d.id)
-        ? {
-            online: false,
-            readiness: this.simulatorActions.get(d.id) === "launch" ? "starting" as const : "offline" as const,
-            capabilities: [],
-            gestureCapabilities: [],
-            simulatorState:
-              this.simulatorActions.get(d.id) === "launch"
-                ? ("starting" as const)
-                : ("stopping" as const),
-            healthDetail:
-              this.simulatorActions.get(d.id) === "launch"
-                ? "Simulator booting…"
-                : this.simulatorActions.get(d.id) === "uninstall-apps"
-                  ? "Uninstalling apps…"
-                  : this.simulatorActions.get(d.id) === "reset"
-                    ? "Resetting device…"
-                    : "Closing simulator…",
-          }
-        : {}),
-      locked: !!this.store.lockReason(d.id),
-      lockReason: this.store.lockReason(d.id),
-    }));
+    return ds.map((d) => {
+      const action = this.simulatorActions.get(d.id);
+      return {
+        ...d,
+        ...(action ? {
+          online: false,
+          readiness: action === "launch" ? "starting" as const : "offline" as const,
+          capabilities: [],
+          gestureCapabilities: [],
+          simulatorState: action === "slim" ? d.simulatorState
+            : action === "launch" ? "starting" as const : "stopping" as const,
+          healthDetail: simulatorProgress[action],
+        } : {}),
+        locked: !!this.store.lockReason(d.id),
+        lockReason: this.store.lockReason(d.id),
+      };
+    });
   }
   async snapshot(deviceIds?: string[]): Promise<Snapshot> {
     await this.refresh();
@@ -724,11 +725,12 @@ export class DeckService {
       case "sessions.reserve": {
         await this.expire();
         await this.refresh();
-        return this.global.run(async () => {
-          const matches = matchDevices(
+        const { reservation, device } = await this.global.run(async () => {
+          const matches = matchReservationDevices(
             await this.devices(),
             this.store.sessions(),
             args.selector,
+            this.config.config.settings.defaultAndroidAvdMemoryProfile,
           );
           if (!matches.length)
             fail("no-match", "No configured device matches the selector.", 404);
@@ -745,8 +747,9 @@ export class DeckService {
             fail("device-locked", "Device is locked for maintenance.", 409);
           const d = await this.adapters.inspect(this.device(matches[0].id));
           if (!d.online) fail("device-offline", d.healthDetail, 409);
-          if (!matchDevices(this.decorate([d]), this.store.sessions(), args.selector).length)
+          if (!matchReservationDevices(this.decorate([d]), this.store.sessions(), args.selector, this.config.config.settings.defaultAndroidAvdMemoryProfile).length)
             fail("no-match", "The device no longer matches the requested state or capabilities. Refresh and select it again.", 409);
+          let device: DeviceConfig = d;
           if (supportsSimulatorLifecycle(d) && d.connection.type === "adb") {
             const configured = this.device(d.id);
             const resolved = await this.adapters.verifyIdentity(configured);
@@ -760,6 +763,7 @@ export class DeckService {
                 "Wait for this emulator's AVD identity to become available before reserving it. Discover again or set its exact AVD name in Edit device.",
                 409,
               );
+            device = resolved;
             const connection = {
               ...configured.connection,
               avdName: configured.connection.avdName || resolved.connection.avdName,
@@ -786,7 +790,7 @@ export class DeckService {
             (s) => s.id === d.captureSourceId,
           );
           try {
-            return this.store.reserve(
+            const reservation = this.store.reserve(
               d.id,
               source?.id || null,
               source ? sourceIdentity(source) : null,
@@ -795,6 +799,7 @@ export class DeckService {
               args.ttlMinutes || this.config.config.settings.ttl,
               Infinity,
             );
+            return { reservation, device };
           } catch (e) {
             this.store.event({
               deviceId: d.id,
@@ -805,6 +810,19 @@ export class DeckService {
             throw e;
           }
         });
+        if (!(this.simulatorMemoryProfile && device.connection.type === "simulator") && !usesAndroidLowRamProfile(device))
+          return reservation;
+        try {
+          return await this.queue(device.id).run(async () => {
+            this.store.validate(reservation.session.id, reservation.leaseToken);
+            await this.adapters.verifySimulatorMemoryProfile(device, this.simulatorMemoryProfile);
+            this.store.validate(reservation.session.id, reservation.leaseToken);
+            return reservation;
+          });
+        } catch (error) {
+          await this.closeSession(reservation.session.id, "Simulator readiness verification failed");
+          throw error;
+        }
       }
       case "sessions.reserveGroup": {
         const { leaseToken: _leaseToken, ...manifest } = args;
@@ -852,6 +870,7 @@ export class DeckService {
                 );
               const resolved = member.binding ??
                 await this.adapters.verifyIdentity(inspected);
+              await this.adapters.verifySimulatorMemoryProfile({ ...configured, connection: resolved.connection }, this.simulatorMemoryProfile);
               return [
                 member.alias,
                 {
@@ -931,6 +950,7 @@ export class DeckService {
               !this.simulatorActions.has(device.id) &&
               !this.deviceHasOpenGroup(device.id) &&
               !this.streams.viewing(device.id),
+            this.config.config.settings.defaultAndroidAvdMemoryProfile,
           );
           if (!selected)
             fail(
@@ -943,10 +963,11 @@ export class DeckService {
                   const selector = requested.state === "free"
                     ? { ...requested, state: undefined }
                     : requested;
-                  const matches = matchDevices(
+                  const matches = matchReservationDevices(
                     observed,
                     this.store.sessions(),
                     selector,
+                    this.config.config.settings.defaultAndroidAvdMemoryProfile,
                   );
                   return [
                     alias,
@@ -1394,6 +1415,11 @@ export class DeckService {
             if (args.action === "close" && source?.kind === "native")
               await this.capture.closeSource(source);
             const result = await this.adapters.simulator(device, args.action);
+            if (args.action === "launch") {
+              const launched = device.connection.type === "adb" && "serial" in result && result.serial
+                ? { ...device, connection: { ...device.connection, serial: result.serial } } : device;
+              await this.adapters.verifySimulatorMemoryProfile(launched, this.simulatorMemoryProfile);
+            }
             // A manual close ends warm-pool ownership; a later manual boot is the user's.
             if (args.action === "close") this.store.dropWarmDevice(device.id);
             this.store.event({
@@ -1415,6 +1441,7 @@ export class DeckService {
         });
       }
       case "devices.cleanup": {
+        const action: DeviceCleanupAction = args.action;
         await this.refresh();
         // Admit and lock the entire eligible selection before any adapter work.
         // A concurrent reservation or second cleanup cannot claim a later member.
@@ -1430,13 +1457,15 @@ export class DeckService {
               const device = this.device(id);
               if (!supportsDeviceCleanup(device))
                 fail("unsupported-cleanup", "Cleanup is only available for Apple simulators and Android emulators.");
+              if (action === "slim" && device.connection.type !== "simulator")
+                fail("unsupported-cleanup", "Slimming requires an Apple simulator.");
               const session = this.store.sessions().find((s) => s.deviceId === id && s.state !== "closed");
               if (session || this.deviceHasOpenGroup(id))
-                fail("device-reserved", "Release this device and finish reservation cleanup before removing apps or resetting it.", 409);
+                fail("device-reserved", "Release this device and finish reservation cleanup before maintenance.", 409);
               if (this.store.lockReason(id) || this.simulatorActions.has(id))
                 fail("device-locked", "This device is locked or already undergoing maintenance.", 409);
-              this.simulatorActions.set(id, args.action);
-              this.store.lock(id, args.action === "reset" ? "Device reset in progress" : "App uninstall in progress");
+              this.simulatorActions.set(id, action);
+              this.store.lock(id, simulatorProgress[action]);
               return structuredClone(device);
             } catch (error) {
               return { id, ok: false, error: (error as Error).message };
@@ -1466,17 +1495,18 @@ export class DeckService {
               if (source?.kind === "native") await this.capture.closeSource(source);
               // Reset may stop the device before a later erase step fails.
               // A subsequent manual boot must not inherit old pool ownership.
-              if (args.action === "reset") this.store.dropWarmDevice(target.id);
-              const result = await this.adapters.cleanupDevice(target, args.action);
+              if (action === "reset") this.store.dropWarmDevice(target.id);
+              const result = await this.adapters.cleanupDevice(target, action);
               if (result.state === "shutdown") this.store.dropWarmDevice(target.id);
               this.store.event({
-                deviceId: target.id, owner: origin, action: `cleanup-${args.action}`,
-                detail: args.action === "reset" ? "Reset device" : `Uninstalled ${result.removedApps ?? 0} user apps`,
+                deviceId: target.id, owner: origin, action: `cleanup-${action}`,
+                detail: action === "slim" ? "Applied and verified simslim profile"
+                  : action === "reset" ? "Reset device" : `Uninstalled ${result.removedApps ?? 0} user apps`,
               });
               return { id: target.id, ok: true, ...result };
             } catch (error) {
               const message = (error as Error).message;
-              this.store.event({ deviceId: target.id, owner: origin, action: `cleanup-${args.action}-failed`, detail: message });
+              this.store.event({ deviceId: target.id, owner: origin, action: `cleanup-${action}-failed`, detail: message });
               return { id: target.id, ok: false, error: message };
             } finally {
               this.simulatorActions.delete(target.id);

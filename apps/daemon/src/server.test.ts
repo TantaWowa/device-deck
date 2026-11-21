@@ -142,6 +142,7 @@ async function setup(
     capture,
     licensed?.manager ?? new LicenseManager(dir),
     groupReadiness,
+    path.join(dir, "simslim-profile.json"),
   );
   await deck.init();
   const c = structuredClone(deck.config.config);
@@ -459,6 +460,138 @@ const reserveWarmGroup = (deck: DeckService, groupId: string, selector: Record<s
 const releaseWarmGroup = (deck: DeckService, reserved: any) =>
   deck.execute("sessions.releaseGroup", { groupId: reserved.groupId, leaseToken: reserved.leaseToken });
 
+test("single simulator reservations verify before handoff, release a failed lease and allow independent reservations", async (t) => {
+  const { dir, deck, adapters, cleanup } = await setup();
+  t.after(cleanup);
+  await useSimulator(deck);
+  let started!: () => void, finish!: () => void;
+  const checking = new Promise<void>((resolve) => { started = resolve; });
+  const gate = new Promise<void>((resolve) => { finish = resolve; });
+  adapters.verifySimulatorMemoryProfile = async (device, pathToProfile) => {
+    assert.deepEqual(device.connection, deck.config.config.devices[0].connection);
+    assert.equal(pathToProfile, path.join(dir, "simslim-profile.json"));
+    started();
+    await gate;
+    throw new Error("profile drift");
+  };
+  const failed = assert.rejects(reserve(deck), /profile drift/);
+  try {
+    await checking;
+    const other = await reserve(deck, "two");
+    assert.equal(deck.store.session(other.session.id).state, "active");
+  } finally { finish(); }
+  await failed;
+  assert.equal(deck.store.sessions().find((lease) => lease.deviceId === "one")?.state, "closed");
+  adapters.verifySimulatorMemoryProfile = async () => {};
+  const valid = await reserve(deck);
+  assert.equal(deck.store.session(valid.session.id).state, "active");
+});
+
+test("group handoffs verify warm and cold simulators, roll back a failed claim and recheck a replay", async (t) => {
+  const { deck, adapters, cleanup } = await setup();
+  t.after(cleanup);
+  await restoreOnRelease(deck);
+  const { actions, running } = await useWarmPoolSimulators(deck, adapters);
+  const checks: string[] = [];
+  let drift = true;
+  adapters.verifySimulatorMemoryProfile = async (device) => {
+    checks.push(device.id);
+    if (drift) throw new Error("profile drift");
+  };
+  await assert.rejects(reserveWarmGroup(deck, "test/profile/cold", { device: "one" }), /profile drift/);
+  assert.equal(deck.store.group("test/profile/cold").state, "closed");
+  assert.deepEqual(actions, ["launch:one", "close:one"]);
+  assert.ok(deck.store.sessions().every((lease) => lease.state === "closed"));
+  running.add("one");
+  drift = false;
+  const groupId = "test/profile/warm";
+  const reserved = await reserveWarmGroup(deck, groupId, { device: "one" });
+  drift = true;
+  await assert.rejects(reserveWarmGroup(deck, groupId, { device: "one" }), /profile drift/);
+  assert.equal(deck.store.group(groupId).state, "active");
+  drift = false;
+  const replayed = await reserveWarmGroup(deck, groupId, { device: "one" });
+  assert.equal(replayed.devices.device.sessionId, reserved.devices.device.sessionId);
+  assert.deepEqual(checks, ["one", "one", "one", "one"]);
+  assert.deepEqual(actions, ["launch:one", "close:one"]);
+});
+
+test("manual simulator launches verify the running device and release maintenance ownership on failure", async (t) => {
+  const { deck, adapters, cleanup } = await setup();
+  t.after(cleanup);
+  await useSimulator(deck);
+  const operations: string[] = [];
+  adapters.simulator = async (device, action) => {
+    operations.push(action);
+    return { deviceId: device.id, action, state: action === "launch" ? "booted" : "shutdown", changed: false };
+  };
+  adapters.verifySimulatorMemoryProfile = async (device) => {
+    assert.deepEqual(device.connection, deck.config.config.devices[0].connection);
+    operations.push("verify");
+    throw new Error("profile drift");
+  };
+  await assert.rejects(deck.execute("devices.simulator", { deviceId: "one", action: "launch" }), /profile drift/);
+  await deck.execute("devices.simulator", { deviceId: "one", action: "close", confirmed: true });
+  assert.deepEqual(operations, ["launch", "verify", "close"]);
+});
+
+test("tagged Android manual and single handoffs verify the resolved AVD serial", async (t) => {
+  const { deck, adapters, cleanup } = await setup();
+  t.after(cleanup);
+  await useAndroidAvd(deck);
+  const configured = structuredClone(deck.config.config);
+  configured.devices[0].tags = ["android-low-ram"];
+  await deck.execute("config.save", { config: configured, revision: deck.config.revision });
+  const target = configured.devices[0];
+  assert.equal(target.connection.type, "adb");
+  const connection = { ...target.connection, serial: "emulator-5576" };
+  adapters.prepareSimulator = async (device) => device;
+  adapters.verifyIdentity = async (device) => ({ ...device, connection });
+  adapters.simulator = async (device, action) => ({ deviceId: device.id, action, state: "booted", changed: false, serial: connection.serial });
+  const checks: string[] = [];
+  adapters.verifySimulatorMemoryProfile = async (device) => {
+    assert.deepEqual(device.connection, connection);
+    checks.push(device.id);
+  };
+  await deck.execute("devices.simulator", { deviceId: "one", action: "launch" });
+  await reserve(deck);
+  assert.deepEqual(checks, ["one", "one"]);
+});
+
+test("enrolled fleets keep full AVDs available for explicit single and group requests", async (t) => {
+  const { deck, adapters, cleanup } = await setup();
+  t.after(cleanup);
+  const config = structuredClone(deck.config.config);
+  config.settings.defaultAndroidAvdMemoryProfile = "low-ram";
+  for (const d of config.devices) {
+    d.connection = { type: "adb", avdName: d.id, serial: "avd-" + d.id, port: 5037 };
+    d.tags = ["hope", d.id === "one" ? "android-full-ram" : "android-low-ram"];
+  }
+  config.devices[0].name = "Full Television";
+  await deck.execute("config.save", { config, revision: deck.config.revision });
+  adapters.verifyIdentity = async device => device;
+  adapters.verifySimulatorMemoryProfile = async () => {};
+  const selector = { platform: "Android", model: "fixture", tags: ["hope"], state: "free" } as const;
+  const args = { selector, owner: "test", reason: "fleet policy" };
+  const low: any = await deck.execute("sessions.reserve", args);
+  assert.equal(low.session.deviceId, "two");
+  await assert.rejects(deck.execute("sessions.reserve", args), /No configured device matches/);
+  await assert.rejects(reserveWarmGroup(deck, "test/default/generic", selector), (e: any) => e.code === "group-no-match");
+  await assert.rejects(deck.execute("sessions.reserve", { ...args, selector: { ...selector, name: "Full*" } }), /No configured device matches/);
+  const full = await reserveWarmGroup(deck, "test/default/explicit", { ...selector, tags: ["hope", "android-full-ram"] });
+  assert.equal(full.devices.device.id, "one");
+  await releaseWarmGroup(deck, full);
+  for (const exact of [{ device: "one" }, { name: "full television" }]) {
+    const lease: any = await deck.execute("sessions.reserve", { ...args, selector: { ...selector, ...exact } });
+    assert.equal(lease.session.deviceId, "one");
+    await deck.execute("sessions.release", { sessionId: lease.session.id, leaseToken: lease.leaseToken });
+  }
+  const stock = structuredClone(deck.config.config);
+  stock.settings.defaultAndroidAvdMemoryProfile = "stock";
+  await deck.execute("config.save", { config: stock, revision: deck.config.revision });
+  const remaining = await reserveWarmGroup(deck, "test/default/stock", selector);
+  assert.equal(remaining.devices.device.id, "one");
+});
 test("warm pool keeps a released cold start booted, reuses it without a launch and refreshes its use time", async () => {
   const { deck, adapters, cleanup } = await setup();
   try {
@@ -1936,6 +2069,19 @@ test("device cleanup requires confirmation and rejects physical, reserved and lo
     assert.match(locked[0].error, /locked/);
     assert.equal(deck.store.lockReason("one"), "Other maintenance");
     assert.deepEqual(calls, []);
+  } finally { await cleanup(); }
+});
+
+test("slimming rejects an Android emulator before starting maintenance", async () => {
+  const { deck, adapters, cleanup } = await setup();
+  try {
+    await useAndroidAvd(deck);
+    let called = false;
+    adapters.cleanupDevice = async () => { called = true; return {}; };
+    const result = await deck.execute("devices.cleanup", { ids: ["one"], action: "slim", confirmed: true });
+    assert.deepEqual(result, [{ id: "one", ok: false, error: "Slimming requires an Apple simulator." }]);
+    assert.equal(called, false);
+    assert(!deck.store.lockReason("one"));
   } finally { await cleanup(); }
 });
 

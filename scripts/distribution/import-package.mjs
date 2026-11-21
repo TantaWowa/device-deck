@@ -104,7 +104,9 @@ export async function validateExpandedPackage(expanded, imported, root) {
   await entries(app, ["Contents"]);
   await entries(contents, ["Info.plist", "PkgInfo", "MacOS", "Resources", "_CodeSignature"]);
   await entries(path.join(contents, "MacOS"), ["Device Deck", "devdeck", "device-deck-service"]);
-  await entries(resources, ["Capture Setup.html", "LICENSE", "THIRD_PARTY_NOTICES.txt", "build", "distribution.json", "media", "native", "runtime"]);
+  await entries(resources, ["Capture Setup.html", "LICENSE", "THIRD_PARTY_NOTICES.txt", "build", "distribution.json", "media", "native", "runtime", "scripts"]);
+  await entries(path.join(resources, "scripts"), ["install-simulator-memory-profile.py"]);
+  await equalFile(path.join(resources, "scripts/install-simulator-memory-profile.py"), await readFile(path.join(root, "scripts/install-simulator-memory-profile.py")));
   await entries(path.join(resources, "build"), applicationBuildPayload);
   await entries(path.join(resources, "native"), ["apple-tv.py"]);
   await entries(path.join(resources, "runtime"), ["bin", "LICENSE"]);
