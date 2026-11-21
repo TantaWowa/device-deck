@@ -16,11 +16,14 @@ const emulatorSerial = /^emulator-\d+$/;
 const avdName = /^[A-Za-z0-9_][A-Za-z0-9_.-]*$/;
 const launchMarker = /^[a-f0-9]{32}$/;
 const launchProperty = "qemu.devdeck_launch";
+const lowRamMiB = 1536;
 type Runner = typeof run;
 export const isAndroidEmulator = (d: DeviceConfig) =>
   d.kind === "virtual" &&
   d.connection.type === "adb" &&
   Boolean(d.connection.avdName || emulatorSerial.test(d.connection.serial));
+export const usesAndroidLowRamProfile = (d: DeviceConfig) =>
+  isAndroidEmulator(d) && Boolean(d.tags?.includes("android-low-ram"));
 export class AndroidEmulators {
   private readyBoots = new Map<string, string>();
   constructor(
@@ -48,6 +51,22 @@ export class AndroidEmulators {
   ) {}
   adb() {
     return this.config().tools.adb || "adb";
+  }
+  async verifyMemoryProfile(resolved: DeviceConfig, execute = this.execute) {
+    if (!usesAndroidLowRamProfile(resolved)) return;
+    const { args } = await freezeAdbTransport(resolved, this.adb(), execute);
+    const result = await execute(this.adb(), [...args, "shell", "cat", "/proc/meminfo"], 3000)
+      .catch(() => undefined);
+    const match = result && !result.stderr.trim() &&
+      /^MemTotal:[ \t]+(\d+)[ \t]+kB[ \t]*\r?$/m.exec(result.stdout.toString());
+    const totalKiB = match ? Number(match[1]) : 0;
+    if (!Number.isSafeInteger(totalKiB) || totalKiB <= 0)
+      fail("emulator-memory-unverified",
+        `Could not read guest RAM for ${resolved.name}. Check its ADB connection and retry.`, 409);
+    // Linux MemTotal is usable guest RAM in KiB, excluding kernel-reserved pages.
+    if (totalKiB > lowRamMiB * 1024)
+      fail("emulator-memory-profile-mismatch",
+        `${resolved.name} reports ${Math.ceil(totalKiB / 1024)} MiB of guest RAM. The android-low-ram budget is ${lowRamMiB} MiB. When current work finishes, close the AVD and launch it through Device Deck.`, 409);
   }
   async binary() {
     const configured = this.config().tools.emulator;
@@ -520,6 +539,7 @@ export class AndroidEmulators {
         "This AVD is unavailable in the configured Android SDK.",
         409,
       );
+    const lowRam = usesAndroidLowRamProfile(d);
     let error: () => string | undefined = () => undefined;
     if (!current) {
       const binary = await this.binary();
@@ -536,8 +556,10 @@ export class AndroidEmulators {
         [
           "-avd",
           c.avdName,
-          // The SDK's wipe-data removes old snapshots; avoid saving a new one during reset.
-          ...(launchOptions.wipeData ? ["-wipe-data", "-no-snapshot"] : []),
+          ...(launchOptions.wipeData ? ["-wipe-data"] : []),
+          // Quick Boot snapshots contain the previous guest's RAM and hardware configuration.
+          ...(launchOptions.wipeData || lowRam ? ["-no-snapshot"] : []),
+          ...(lowRam ? ["-lowram", "-memory", String(lowRamMiB)] : []),
           ...(launchOptions.headless || process.env.DEVICE_DECK_HEADLESS === "1"
             ? ["-no-window", "-gpu", "software", "-feature", "-Vulkan"] : []),
           ...(launchOwnership

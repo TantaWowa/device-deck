@@ -86,6 +86,25 @@ Install simslim on the Mac that hosts the simulators.
 brew install mobai-app/tap/simslim
 ```
 
+To apply the QA profile automatically to existing and future iOS and tvOS simulators, run these commands in the logged-in macOS account that owns the CoreSimulator device set and hosts Device Deck. SSH into that account also works while its GUI session is active. The watcher uses the Xcode selected by `xcode-select -p`.
+
+```sh
+devdeck simulator-profile install
+devdeck simulator-profile status
+```
+
+On older Device Deck releases, run `python3 scripts/install-simulator-memory-profile.py install` and `status` from a checkout containing the [standalone installer](../scripts/install-simulator-memory-profile.py).
+
+The installer writes `~/Library/Application Support/Device Deck/simslim-profile.json` and starts the per-user LaunchAgent `com.tantawowa.device-deck.simslim`. It starts again at GUI login. The watcher covers the account's default and Xcode testing device sets, including devices created outside Device Deck. It applies the profile to existing booted devices as soon as it starts. Enroll when those devices are idle or already match the profile. On supported runtimes it also seeds shutdown devices before boot. When a device boots immediately after creation, the watcher can finish applying the profile after boot. On enrolled hosts, Device Deck verifies the exact UDID before a manual launch returns and before handing out a single reservation, a new group, or a replayed group. The check gives the watcher time to finish. If verification fails, Device Deck releases a newly acquired lease or group. A failed replay leaves the caller’s existing group active.
+
+To check the profile of a booted target, run this on its host with its exact UDID.
+
+```sh
+simslim verify "$UDID" --profile "$HOME/Library/Application Support/Device Deck/simslim-profile.json"
+```
+
+To stop future automatic applications, run `devdeck simulator-profile uninstall`. This removes the watcher and its enrollment profile. Existing overrides persist until restored on each simulator.
+
 In **Devices**, select one or more Apple simulators, open **Clean up…**, and choose **Reduce simulator RAM**. Device Deck skips reserved or locked devices. From the CLI, pass the configured Device Deck ID.
 
 ```sh
@@ -94,7 +113,7 @@ devdeck call devices.cleanup '{"ids":["APPLE_SIMULATOR_ID"],"action":"slim","con
 
 Device Deck applies and verifies the profile for each UDID. A running simulator stays up. A stopped simulator boots for verification and returns to shutdown. The profile keeps the `store`, `web` and `icloud` categories for push, StoreKit, universal links and account services. Tests that depend on disabled services such as Siri, Photos or HealthKit need a different profile or a stock simulator.
 
-On current iOS and tvOS runtimes the settings persist across boots. Older runtimes that cannot persist overrides support slimming only for the running session. To measure RAM, run `simslim measure UDID` on the host while the simulator is booted. When the simulator is free for maintenance, `simslim off UDID --preserve-boot-state` restores the stock services and may reboot it. [simslim profiles and runtime support](https://github.com/MobAI-App/simslim#usage)
+On current iOS and tvOS runtimes the settings persist across boots. Older runtimes that cannot persist overrides support slimming only for the running session. To measure RAM, run `simslim measure UDID` on the host while the simulator is booted. After unenrolling the host, run `simslim off UDID --preserve-boot-state` when the simulator is free for maintenance to restore stock services. This may reboot the device. [simslim profiles and runtime support](https://github.com/MobAI-App/simslim#usage)
 
 ## Remove apps or reset devices
 

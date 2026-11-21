@@ -1,4 +1,5 @@
 import path from "node:path";
+import { userInfo } from "node:os";
 import { mkdir, readFile, rm } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import { createBrowserCredentials, createService } from "./server";
@@ -51,6 +52,10 @@ export async function runDaemon(
     undefined,
     undefined,
     licensing,
+    undefined,
+    process.platform === "darwin"
+      ? path.join(userInfo().homedir, "Library/Application Support/Device Deck/simslim-profile.json")
+      : undefined,
   );
   let shutdown: (() => Promise<void>) | undefined;
   const servers: ReturnType<typeof createService>[] = [];

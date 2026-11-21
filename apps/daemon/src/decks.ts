@@ -126,9 +126,14 @@ export class DeckConnections {
       const headers = new Headers(init.headers);
       headers.set("Authorization", `Bearer ${deck.token}`);
       headers.set("X-Device-Deck", "local");
+      const pathname = route.split("?", 1)[0];
+      const timeoutMs = pathname === "/v1/operations/devices.cleanup" ? 1_810_000
+        : pathname === "/v1/operations/sessions.reserveGroup" ? 610_000
+        : pathname === "/v1/operations/devices.simulator" ? 310_000
+        : 180_000;
       return await fetch(`${deck.address}${route}`, {
         ...init, headers, redirect: "error",
-        signal: AbortSignal.any([AbortSignal.timeout(route === "/v1/operations/devices.cleanup" ? 1_810_000 : route.includes("reserveGroup") ? 610000 : 180000), ...(init.signal ? [init.signal] : [])]),
+        signal: AbortSignal.any([AbortSignal.timeout(timeoutMs), ...(init.signal ? [init.signal] : [])]),
       });
     } catch {
       throw new DeckError("deck-unavailable", `Deck ${deck.name} is unreachable. No local operation was attempted. If a mutation was sent, inspect the host before retrying.`, 502);

@@ -16,13 +16,18 @@ export async function run(
   command: string,
   args: string[],
   timeout = 15000,
-  options: { cwd?: string; signal?: AbortSignal; maxOutputBytes?: number } = {},
+  options: { cwd?: string; env?: NodeJS.ProcessEnv; signal?: AbortSignal; maxOutputBytes?: number } = {},
 ) {
   if (options.signal?.aborted)
     throw new DeckError("adapter-cancelled", `${command}: Command cancelled.`, 499);
   return new Promise<{ stdout: Buffer; stderr: string }>((resolve, reject) => {
     const invocation = desktopCommand(command, args);
-    const child = spawn(invocation.command, invocation.args, { cwd: options.cwd, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(invocation.command, invocation.args, {
+      cwd: options.cwd,
+      env: options.env ? { ...process.env, ...options.env } : undefined,
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
     const stdout: Buffer[] = [], stderr: Buffer[] = [];
     let bytes = 0, failure: string | undefined, cancelled = false;
     let escalation: ReturnType<typeof setTimeout> | undefined;

@@ -4,7 +4,7 @@ import { resolveReportRange } from "../../../packages/core/src/reports";
 import { parseArgs } from "node:util";
 import { readFile } from "node:fs/promises";
 import { createInterface } from "node:readline/promises";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import {
   callOperation,
@@ -55,6 +55,8 @@ Usage: devdeck <command> [options]
   start | stop | status | logs  Run and inspect the daemon
   install | uninstall          Enable/remove the login service
   service <action>             Explicit start/stop/status/logs/install/uninstall
+  simulator-profile install|status|uninstall
+                               Manage this macOS user's Apple simulator memory profile
   version | doctor             Inspect installed version and capture readiness
   update check|download        Find/download a verified Mac installer
        [--channel beta|stable] [--output DIRECTORY]
@@ -166,7 +168,7 @@ try {
   const targetDeck = process.env.DEVICE_DECK_TARGET;
   if (targetDeck && targetDeck !== "local") {
     deckNameSchema.parse(targetDeck);
-    if (["start", "stop", "install", "uninstall", "logs", "init", "network", "pair", "tailscale", "update", "decks", "sharing", "prepare-update", "cancel-update"].includes(command || ""))
+    if (["start", "stop", "install", "uninstall", "logs", "init", "network", "pair", "tailscale", "update", "decks", "sharing", "simulator-profile", "prepare-update", "cancel-update"].includes(command || ""))
       throw new DeckError("arguments", "This command manages the local Mac. Use --deck local or run it on the host Mac.", 400);
   }
   if (p[0] === "service" && !["start", "stop", "status", "logs", "install", "uninstall", "prepare-update", "cancel-update"].includes(command)) throw new DeckError("arguments", "Use service start, stop, status, logs, install or uninstall.", 400);
@@ -194,6 +196,17 @@ try {
     };
     let result: unknown;
     if (command === "sharing") result = await sharingCommand(p[1] || "status", p[2]);
+    else if (command === "simulator-profile") {
+      const action = p[1] ?? "status";
+      if (p.length > 2 || !["install", "status", "uninstall"].includes(action))
+        throw new DeckError("arguments", "Use simulator-profile install, status or uninstall.", 400);
+      const helper = path.join(root, "scripts/install-simulator-memory-profile.py");
+      const check = spawnSync("/usr/bin/python3", [helper, action], { encoding: "utf8", timeout: 30000 });
+      if (check.error) throw check.error;
+      if (check.status !== 0)
+        throw new DeckError("simulator-memory-profile", (check.stderr || check.stdout).trim() || "The simulator profile helper exited unexpectedly.", 503);
+      result = check.stdout.trim();
+    }
     else if (command === "prepare-update" || command === "cancel-update") result = await serviceMaintenanceCommand(command);
     else if (command === "decks") result = await decksCommand(p[1] || "list", p[2], { address: v.address as string | undefined, tokenFile: v["token-file"] as string | undefined, output: v.output as string | undefined });
     else if (command === "download") result = await downloadCapture(p[1], v.output as string | undefined);

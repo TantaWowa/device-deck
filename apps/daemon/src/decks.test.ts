@@ -67,6 +67,17 @@ test("Deck grants are private, durable, independently revocable and cannot admin
   assert.equal(f.local.deck.store.sessions().length, 0);
 });
 
+test("connected Decks allow the simulator launch deadline to finish", async (t) => {
+  const f = await pairedDecks(); t.after(f.close);
+  const timeout = t.mock.method(AbortSignal, "timeout");
+  const response = await f.local.connections.forward("ms", "/v1/operations/devices.simulator", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ deviceId: "tv", action: "launch" }),
+  });
+  assert.equal((await response.json()).error, "unsupported-lifecycle");
+  assert.ok(timeout.mock.calls.some((call) => call.arguments[0] === 310_000));
+});
+
 test("unknown and offline Decks fail without claiming local devices or retrying mutations", async (t) => {
   const f = await pairedDecks(); t.after(f.close);
   assert.equal((await f.local.request("/v1/decks/missing/v1/operations/sessions.reserve", reserve)).status, 404);

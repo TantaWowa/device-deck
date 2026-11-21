@@ -116,6 +116,7 @@ test('long captures and artifact downloads retain their full deadline without re
   const cases: { operation?: Operation; path?: string; deadline: number }[] = [
     { operation: 'captures.screenshot', deadline: 60_000 },
     { operation: 'recordings.stop', deadline: 180_000 },
+    { operation: 'sessions.reserve', deadline: 180_000 },
     { operation: 'sessions.release', deadline: 180_000 },
     { operation: 'sessions.takeover', deadline: 180_000 },
     { operation: 'devices.simulator', deadline: 300_000 },

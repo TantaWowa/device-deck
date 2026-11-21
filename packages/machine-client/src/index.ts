@@ -93,7 +93,7 @@ export function createMachineTransport(options: MachineTransportOptions) {
         : name === 'sessions.reserveGroup' ? 600_000
         : name === 'devices.simulator' ? 300_000
         : name === 'captures.screenshot' ? 60_000
-        : ['recordings.stop', 'sessions.release', 'sessions.releaseGroup', 'sessions.takeover'].includes(name) ? 180_000
+        : ['recordings.stop', 'sessions.reserve', 'sessions.release', 'sessions.releaseGroup', 'sessions.takeover'].includes(name) ? 180_000
         : 30_000;
       const response = await authorized(`/v1/operations/${encodeURIComponent(name)}`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(args),

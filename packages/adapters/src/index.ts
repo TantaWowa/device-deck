@@ -6,8 +6,9 @@ import { observationAdapter, type ObservationHost } from "./device-observation";
 import type { DeviceInteraction } from "../../core/src/device-interaction";
 import type { InteractiveSource, VideoProfile } from "../../core/src/live";
 import { androidKeys, rokuKeys, hidKeys, iosHardwareKeys, deviceInputMode } from "../../core/src/remote";
-import { cleanupSimulator, controlSimulator, simulatorState, SimulatorInventory, wakeSimulator, SIMULATOR_UNAVAILABLE_MESSAGE } from "./simulator";
-import { AndroidEmulators, isAndroidEmulator } from "./android-emulator";
+import { cleanupSimulator, controlSimulator, simulatorState, SimulatorInventory, verifySimulatorMemoryProfile, wakeSimulator, SIMULATOR_UNAVAILABLE_MESSAGE } from "./simulator";
+import { AndroidEmulators, isAndroidEmulator, usesAndroidLowRamProfile } from "./android-emulator";
+export { usesAndroidLowRamProfile } from "./android-emulator";
 import { idbInput as sharedIdbInput, IdbInput } from "./idb-input";
 import {
   mergeCaptureCards,
@@ -707,6 +708,10 @@ export class Adapters {
   /** Raw macOS memory pressure level output; callers treat failures as normal. */
   async memoryPressureLevel() {
     return (await this.execute("/usr/sbin/sysctl", ["-n", "kern.memorystatus_vm_pressure_level"])).stdout.toString();
+  }
+  verifySimulatorMemoryProfile(device: DeviceConfig, profile?: string) {
+    if (usesAndroidLowRamProfile(device)) return this.emulators.verifyMemoryProfile(device);
+    return verifySimulatorMemoryProfile(device, profile, this.execute);
   }
   async prepareSimulator(d: DeviceConfig) {
     if (isAndroidEmulator(d)) return this.emulators.prepare(d);

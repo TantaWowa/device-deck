@@ -34,6 +34,7 @@ type Entry = {
   bootId?: string;
   launchMarker?: string;
   transportId?: string;
+  meminfo?: string;
 };
 function fixture(initial: Entry[] = []) {
   const state = {
@@ -107,6 +108,8 @@ function fixture(initial: Entry[] = []) {
         output = entry.bootAnimation ? "running\n" : "stopped\n";
       else if (args.slice(4).join(" ") === "shell cat /proc/sys/kernel/random/boot_id")
         output = entry.bootId || "00000000-0000-0000-0000-000000000001";
+      else if (args.slice(4).join(" ") === "shell cat /proc/meminfo")
+        output = entry.meminfo ?? "MemTotal:        1506996 kB\nMemFree: 245040 kB\n";
       else if (args.slice(4).join(" ") === "exec-out screencap -p") {
         const image = entry.displayReady === false ? Buffer.alloc(0) : Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aHSkAAAAASUVORK5CYII=", "base64");
         return { stdout: image, stderr: "" };
@@ -176,6 +179,63 @@ function fixture(initial: Entry[] = []) {
   );
   return { emulator, state, calls, launches, signals, config, execute };
 }
+
+test("android-low-ram cold starts preserve the headless renderer, ADB port and group ownership", async () => {
+  const f = fixture();
+  const tagged = { ...device, tags: ["ci", "android-low-ram"] };
+  let ownership: SimulatorLaunchOwnership | undefined;
+  const result = await f.emulator.control(tagged, "launch", async owned => {
+    ownership = owned;
+  }, undefined, { headless: true });
+  assert.equal(result.changed, true);
+  assert.deepEqual(f.launches, [{
+    binary: "/sdk/emulator/emulator",
+    port: 5038,
+    args: [
+      "-avd", "TV_API_35", "-no-snapshot", "-lowram", "-memory", "1536",
+      "-no-window", "-gpu", "software", "-feature", "-Vulkan",
+      "-crash-report-mode", "disabled", "-no-metrics", "-prop", `qemu.devdeck_launch=${ownership?.marker}`,
+    ],
+  }]);
+  assert.equal((await f.emulator.control(tagged, "close", undefined, ownership)).changed, true);
+});
+
+test("a warm AVD within the low-RAM budget passes verification on its pinned transport", async () => {
+  const f = fixture([{ serial: "emulator-5560", transportId: "982", state: "device", name: "TV_API_35", booted: true }]);
+  const tagged = { ...device, tags: ["android-low-ram"] };
+  const result = await f.emulator.control(tagged, "launch");
+  const target = await f.emulator.resolve(tagged);
+  assert(target);
+  await f.emulator.verifyMemoryProfile(target);
+  assert.deepEqual(f.calls.filter(call => call.args.includes("/proc/meminfo")).map(call => call.args),
+    [["-P", "5038", "-t", "982", "shell", "cat", "/proc/meminfo"]]);
+  assert.equal(result.changed, false);
+  assert.equal(f.launches.length, 0);
+  assert(!f.calls.some(call => call.args.includes("kill")));
+});
+
+test("the checked memory budget rejects stock or unreadable RAM and leaves the AVD running", async () => {
+  const entry: Entry = { serial: "emulator-5554", state: "device", name: "TV_API_35", booted: true, meminfo: "MemTotal: 2531992 kB\n" };
+  const f = fixture([entry]);
+  const tagged = { ...device, tags: ["android-low-ram"] };
+  await assert.rejects(f.emulator.verifyMemoryProfile(tagged), /2473 MiB.*1536 MiB.*launch it through Device Deck/);
+  entry.meminfo = "MemTotal: 1572864 kB\n";
+  await f.emulator.verifyMemoryProfile(tagged);
+  entry.meminfo = "MemAvailable: 300 kB\n";
+  await assert.rejects(f.emulator.verifyMemoryProfile(tagged), /Could not read guest RAM/);
+  entry.name = "Pixel_35";
+  await assert.rejects(f.emulator.verifyMemoryProfile(tagged), /different AVD/);
+  assert.equal(f.state.entries.length, 1);
+  assert.equal(f.launches.length, 0);
+  assert(!f.calls.some(call => call.args.includes("kill")));
+});
+
+test("stock AVDs and physical devices skip memory verification", async () => {
+  const f = fixture();
+  await f.emulator.verifyMemoryProfile(device);
+  await f.emulator.verifyMemoryProfile({ ...device, kind: "physical", tags: ["android-low-ram"] });
+  assert.equal(f.calls.length, 0);
+});
 
 test("externally started emulators wait for display readiness and cache proof only for the same boot UUID", async () => {
   const entry: Entry = { serial: "emulator-5560", state: "device", name: "TV_API_35", booted: true, displayReady: false };
@@ -279,6 +339,7 @@ test("Android launch waits for its newly spawned AVD identity to become readable
   const f = fixture();
   f.state.deferLaunchIdentity = true;
   const launched = await f.emulator.control(device, "launch");
+  assert.equal(launched.action, "launch");
   assert.equal(launched.changed, true);
   assert.equal(launched.serial, "emulator-5560");
   assert.equal(f.state.sleeps, 1);

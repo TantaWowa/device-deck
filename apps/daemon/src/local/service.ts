@@ -13,7 +13,7 @@ import {
   sourceIdentity,
   atomicWrite,
 } from "../../../../packages/config/src";
-import { Adapters } from "../../../../packages/adapters/src";
+import { Adapters, usesAndroidLowRamProfile } from "../../../../packages/adapters/src";
 import { supportsWake } from "../../../../packages/core/src/remote";
 import {
   run,
@@ -142,6 +142,7 @@ export class DeckService {
     capture?: CaptureEngine,
     private readonly licensingOverride?: EntitlementService,
     groupReadiness: Partial<GroupReadinessPolicy> = {},
+    private readonly simulatorMemoryProfile?: string,
   ) {
     this.config = new ConfigStore(configFile);
     this.adapters = adapters || new Adapters(() => this.config.config);
@@ -293,6 +294,7 @@ export class DeckService {
       if (current.online) {
         try {
           const resolved = await this.adapters.verifyIdentity(current);
+          await this.adapters.verifySimulatorMemoryProfile(resolved, this.simulatorMemoryProfile);
           this.preparingGroup(groupId, preparation);
           return { ...current, connection: resolved.connection };
         } catch (error) {
@@ -723,7 +725,7 @@ export class DeckService {
       case "sessions.reserve": {
         await this.expire();
         await this.refresh();
-        return this.global.run(async () => {
+        const { reservation, device } = await this.global.run(async () => {
           const matches = matchDevices(
             await this.devices(),
             this.store.sessions(),
@@ -746,6 +748,7 @@ export class DeckService {
           if (!d.online) fail("device-offline", d.healthDetail, 409);
           if (!matchDevices(this.decorate([d]), this.store.sessions(), args.selector).length)
             fail("no-match", "The device no longer matches the requested state or capabilities. Refresh and select it again.", 409);
+          let device: DeviceConfig = d;
           if (supportsSimulatorLifecycle(d) && d.connection.type === "adb") {
             const configured = this.device(d.id);
             const resolved = await this.adapters.verifyIdentity(configured);
@@ -759,6 +762,7 @@ export class DeckService {
                 "Wait for this emulator's AVD identity to become available before reserving it. Discover again or set its exact AVD name in Edit device.",
                 409,
               );
+            device = resolved;
             const connection = {
               ...configured.connection,
               avdName: configured.connection.avdName || resolved.connection.avdName,
@@ -785,7 +789,7 @@ export class DeckService {
             (s) => s.id === d.captureSourceId,
           );
           try {
-            return this.store.reserve(
+            const reservation = this.store.reserve(
               d.id,
               source?.id || null,
               source ? sourceIdentity(source) : null,
@@ -794,6 +798,7 @@ export class DeckService {
               args.ttlMinutes || this.config.config.settings.ttl,
               Infinity,
             );
+            return { reservation, device };
           } catch (e) {
             this.store.event({
               deviceId: d.id,
@@ -804,6 +809,19 @@ export class DeckService {
             throw e;
           }
         });
+        if (!(this.simulatorMemoryProfile && device.connection.type === "simulator") && !usesAndroidLowRamProfile(device))
+          return reservation;
+        try {
+          return await this.queue(device.id).run(async () => {
+            this.store.validate(reservation.session.id, reservation.leaseToken);
+            await this.adapters.verifySimulatorMemoryProfile(device, this.simulatorMemoryProfile);
+            this.store.validate(reservation.session.id, reservation.leaseToken);
+            return reservation;
+          });
+        } catch (error) {
+          await this.closeSession(reservation.session.id, "Simulator readiness verification failed");
+          throw error;
+        }
       }
       case "sessions.reserveGroup": {
         const { leaseToken: _leaseToken, ...manifest } = args;
@@ -851,6 +869,7 @@ export class DeckService {
                 );
               const resolved = member.binding ??
                 await this.adapters.verifyIdentity(inspected);
+              await this.adapters.verifySimulatorMemoryProfile({ ...configured, connection: resolved.connection }, this.simulatorMemoryProfile);
               return [
                 member.alias,
                 {
@@ -1393,6 +1412,11 @@ export class DeckService {
             if (args.action === "close" && source?.kind === "native")
               await this.capture.closeSource(source);
             const result = await this.adapters.simulator(device, args.action);
+            if (args.action === "launch") {
+              const launched = device.connection.type === "adb" && "serial" in result && result.serial
+                ? { ...device, connection: { ...device.connection, serial: result.serial } } : device;
+              await this.adapters.verifySimulatorMemoryProfile(launched, this.simulatorMemoryProfile);
+            }
             // A manual close ends warm-pool ownership; a later manual boot is the user's.
             if (args.action === "close") this.store.dropWarmDevice(device.id);
             this.store.event({
