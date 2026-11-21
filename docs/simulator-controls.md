@@ -14,6 +14,15 @@ If a runner stores its CoreSimulator device set on a mounted volume, host bootst
 
 For Android, create the AVD in Android Studio first. **Discover** lists both running emulators and installed AVDs that are stopped. Select multiple or **Add all** to register them. Device Deck uses the existing SDK emulator executable from **Settings → Adapter executables → emulator**, Android SDK environment variables, standard SDK paths, or `PATH`. It does not install an SDK or system images. The AVD name comes from `emulator -list-avds` or a running emulator's exact `adb -s SERIAL emu avd name` response. When that console response is empty or unavailable, Device Deck reads `ro.boot.qemu.avd_name` from the same exact ADB serial. Empty or invalid identities remain blocked. These commands use the Android SDK's [launch](https://developer.android.com/studio/run/emulator-commandline) and [console](https://developer.android.com/studio/run/emulator-console) interfaces.
 
+To default future Android registrations on this Deck to 1,536 MiB, set `settings.defaultAndroidAvdMemoryProfile` to `"low-ram"`. Run these commands on the Deck host with `jq` installed to preserve the current configuration and revision.
+
+```sh
+fleet_update=$(devdeck call config.get --json | jq -c '{config: (.config | .settings.defaultAndroidAvdMemoryProfile = "low-ram"), revision}')
+devdeck call config.save "$fleet_update"
+```
+
+Dashboard **Discover** and **Add all**, `devdeck register --avd`, and new AVDs in a `config.save` request all inherit the `android-low-ram` tag. To keep an AVD at its configured RAM and reserve it for explicit requests, register it with `--tags android-full-ram`. Existing registrations keep their tags. To stop automatically tagging new registrations, set the same setting to `"stock"`. See [Android reservation and memory checks](group-reservations.md#android-emulator-memory).
+
 An Android device's optional `connection.avdName` is its persistent virtual-device identity. Launch uses `emulator -avd NAME`; after boot, Device Deck finds the actual ADB serial belonging to that AVD. New remote, screenshot and recording operations resolve that serial again, so another emulator reusing an old serial is not selected. A recording retains its resolved transport for its lifetime. Duplicate running instances with the same AVD name are reported as ambiguous.
 
 Existing serial-only emulator entries can close their exact running emulator once its AVD identity is readable. Lifecycle and reservation preflight learn and save that verified AVD name, rejecting duplicate registered identities. A stopped serial-only entry needs its AVD name set in **Edit device** before Launch is available. If an emulator is still booting or its identity is unreadable, wait and refresh; a launch timeout leaves its process running. Physical devices do not have simulator lifecycle controls.

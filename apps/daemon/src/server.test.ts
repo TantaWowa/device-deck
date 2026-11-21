@@ -558,6 +558,40 @@ test("tagged Android manual and single handoffs verify the resolved AVD serial",
   assert.deepEqual(checks, ["one", "one"]);
 });
 
+test("enrolled fleets keep full AVDs available for explicit single and group requests", async (t) => {
+  const { deck, adapters, cleanup } = await setup();
+  t.after(cleanup);
+  const config = structuredClone(deck.config.config);
+  config.settings.defaultAndroidAvdMemoryProfile = "low-ram";
+  for (const d of config.devices) {
+    d.connection = { type: "adb", avdName: d.id, serial: "avd-" + d.id, port: 5037 };
+    d.tags = ["hope", d.id === "one" ? "android-full-ram" : "android-low-ram"];
+  }
+  config.devices[0].name = "Full Television";
+  await deck.execute("config.save", { config, revision: deck.config.revision });
+  adapters.verifyIdentity = async device => device;
+  adapters.verifySimulatorMemoryProfile = async () => {};
+  const selector = { platform: "Android", model: "fixture", tags: ["hope"], state: "free" } as const;
+  const args = { selector, owner: "test", reason: "fleet policy" };
+  const low: any = await deck.execute("sessions.reserve", args);
+  assert.equal(low.session.deviceId, "two");
+  await assert.rejects(deck.execute("sessions.reserve", args), /No configured device matches/);
+  await assert.rejects(reserveWarmGroup(deck, "test/default/generic", selector), (e: any) => e.code === "group-no-match");
+  await assert.rejects(deck.execute("sessions.reserve", { ...args, selector: { ...selector, name: "Full*" } }), /No configured device matches/);
+  const full = await reserveWarmGroup(deck, "test/default/explicit", { ...selector, tags: ["hope", "android-full-ram"] });
+  assert.equal(full.devices.device.id, "one");
+  await releaseWarmGroup(deck, full);
+  for (const exact of [{ device: "one" }, { name: "full television" }]) {
+    const lease: any = await deck.execute("sessions.reserve", { ...args, selector: { ...selector, ...exact } });
+    assert.equal(lease.session.deviceId, "one");
+    await deck.execute("sessions.release", { sessionId: lease.session.id, leaseToken: lease.leaseToken });
+  }
+  const stock = structuredClone(deck.config.config);
+  stock.settings.defaultAndroidAvdMemoryProfile = "stock";
+  await deck.execute("config.save", { config: stock, revision: deck.config.revision });
+  const remaining = await reserveWarmGroup(deck, "test/default/stock", selector);
+  assert.equal(remaining.devices.device.id, "one");
+});
 test("warm pool keeps a released cold start booted, reuses it without a launch and refreshes its use time", async () => {
   const { deck, adapters, cleanup } = await setup();
   try {

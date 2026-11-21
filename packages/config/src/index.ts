@@ -4,7 +4,7 @@ import { readFile, mkdir, rename, chmod, open, unlink } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import { createHash, randomUUID } from "node:crypto";
-import { configSchema, type Config, fail } from "../../core/src/local/types";
+import { configSchema, isAndroidAvd, type Config, type DeviceConfig, fail } from "../../core/src/local/types";
 export const expand = (p: string, base: string) =>
   path.resolve(
     base,
@@ -30,7 +30,7 @@ export async function atomicWrite(file: string, data: string | Buffer) {
     throw error;
   }
 }
-export function validateConfig(value: unknown) {
+export function validateConfig(value: unknown, previousDevices?: readonly DeviceConfig[]) {
   const c = configSchema.parse(value);
   const ids = new Set<string>(),
     physicalSources = new Set<string>(),
@@ -59,7 +59,18 @@ export function validateConfig(value: unknown) {
   const deviceIds = new Set(c.devices.map((d) => d.id.toLowerCase()));
   if (deviceIds.size !== c.devices.length)
     fail("invalid-config", "Device IDs must be unique.");
+  const previousAvds = new Set(previousDevices?.filter(isAndroidAvd).map(d => d.id));
   for (const d of c.devices) {
+    if (isAndroidAvd(d)) {
+      if (d.tags?.includes("android-full-ram") && d.tags.includes("android-low-ram")) {
+        d.tags = d.tags.filter(tag => tag !== "android-low-ram");
+      } else if (previousDevices && !previousAvds.has(d.id) && c.settings.defaultAndroidAvdMemoryProfile === "low-ram" &&
+                 !d.tags?.includes("android-full-ram") && !d.tags?.includes("android-low-ram")) {
+        if (d.tags?.length === 30)
+          fail("invalid-config", "Leave room for the default android-low-ram tag, or choose an explicit Android memory profile in the 30 device tags.");
+        d.tags = [...(d.tags ?? []), "android-low-ram"];
+      }
+    }
     if (
       d.connection.type === "adb" &&
       /^emulator-\d+$/.test(d.connection.serial)
@@ -207,7 +218,8 @@ export class ConfigStore {
           "Configuration changed on disk. Reload it before saving.",
           409,
         );
-      const c = validateConfig(value);
+      const previous = current === this.raw ? this.config : validateConfig(JSON.parse(current));
+      const c = validateConfig(value, previous.devices);
       await validateChange?.(c);
       const raw = JSON.stringify(c, null, 2) + "\n";
       await atomicWrite(this.file, raw);

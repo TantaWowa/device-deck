@@ -26,7 +26,7 @@ import {
 } from "../../../../packages/capture/src";
 import {
   operations,
-  matchDevices,
+  matchReservationDevices,
   matchReservationGroup,
   supportsSimulatorLifecycle,
   supportsDeviceCleanup,
@@ -726,10 +726,11 @@ export class DeckService {
         await this.expire();
         await this.refresh();
         const { reservation, device } = await this.global.run(async () => {
-          const matches = matchDevices(
+          const matches = matchReservationDevices(
             await this.devices(),
             this.store.sessions(),
             args.selector,
+            this.config.config.settings.defaultAndroidAvdMemoryProfile,
           );
           if (!matches.length)
             fail("no-match", "No configured device matches the selector.", 404);
@@ -746,7 +747,7 @@ export class DeckService {
             fail("device-locked", "Device is locked for maintenance.", 409);
           const d = await this.adapters.inspect(this.device(matches[0].id));
           if (!d.online) fail("device-offline", d.healthDetail, 409);
-          if (!matchDevices(this.decorate([d]), this.store.sessions(), args.selector).length)
+          if (!matchReservationDevices(this.decorate([d]), this.store.sessions(), args.selector, this.config.config.settings.defaultAndroidAvdMemoryProfile).length)
             fail("no-match", "The device no longer matches the requested state or capabilities. Refresh and select it again.", 409);
           let device: DeviceConfig = d;
           if (supportsSimulatorLifecycle(d) && d.connection.type === "adb") {
@@ -949,6 +950,7 @@ export class DeckService {
               !this.simulatorActions.has(device.id) &&
               !this.deviceHasOpenGroup(device.id) &&
               !this.streams.viewing(device.id),
+            this.config.config.settings.defaultAndroidAvdMemoryProfile,
           );
           if (!selected)
             fail(
@@ -961,10 +963,11 @@ export class DeckService {
                   const selector = requested.state === "free"
                     ? { ...requested, state: undefined }
                     : requested;
-                  const matches = matchDevices(
+                  const matches = matchReservationDevices(
                     observed,
                     this.store.sessions(),
                     selector,
+                    this.config.config.settings.defaultAndroidAvdMemoryProfile,
                   );
                   return [
                     alias,

@@ -444,6 +444,13 @@
               "maximum": 5000,
               "default": 750
             },
+            "defaultAndroidAvdMemoryProfile": {
+              "type": "string",
+              "enum": [
+                "stock",
+                "low-ram"
+              ]
+            },
             "warmPool": {
               "type": "object",
               "properties": {

@@ -381,8 +381,8 @@ try {
       if (existing) config.devices[index] = registered; else config.devices.push(registered);
       for (const source of found.sources.filter((s) => s.deviceId === match.id))
         if (!config.sources.some((c: { id: string }) => c.id === source.id)) config.sources.push(source);
-      await callOperation("config.save", { config, revision: current.revision });
-      result = { registered, created: !existing };
+      const saved = await callOperation("config.save", { config, revision: current.revision });
+      result = { registered: saved.config.devices.find((device: DeviceConfig) => device.id === registered.id), created: !existing };
     } else if (command === "unregister") {
       if (!v.yes) throw new DeckError("arguments", "Unregister requires --yes.", 400);
       const current = await callOperation("config.get");
