@@ -518,6 +518,8 @@ test("group handoffs verify warm and cold simulators, roll back a failed claim a
   adapters.verifySimulatorMemoryProfile = async (device) => {
     checks.push(device.id);
     if (drift) throw new Error("profile drift");
+    assert.equal(device.connection.type, "simulator");
+    return { kind: "apple-simslim", udid: device.connection.udid };
   };
   await assert.rejects(reserveWarmGroup(deck, "test/profile/cold", { device: "one" }), /profile drift/);
   assert.equal(deck.store.group("test/profile/cold").state, "closed");
@@ -527,12 +529,18 @@ test("group handoffs verify warm and cold simulators, roll back a failed claim a
   drift = false;
   const groupId = "test/profile/warm";
   const reserved = await reserveWarmGroup(deck, groupId, { device: "one" });
+  const profile = { kind: "apple-simslim", udid: reserved.devices.device.connection.udid };
+  assert.deepEqual(reserved.devices.device.simulatorMemoryProfile, profile);
   drift = true;
   await assert.rejects(reserveWarmGroup(deck, groupId, { device: "one" }), /profile drift/);
   assert.equal(deck.store.group(groupId).state, "active");
   drift = false;
   const replayed = await reserveWarmGroup(deck, groupId, { device: "one" });
   assert.equal(replayed.devices.device.sessionId, reserved.devices.device.sessionId);
+  assert.deepEqual(replayed.devices.device.simulatorMemoryProfile, profile);
+  adapters.verifySimulatorMemoryProfile = async () => {};
+  const unenrolled = await reserveWarmGroup(deck, groupId, { device: "one" });
+  assert.ok(!("simulatorMemoryProfile" in unenrolled.devices.device));
   assert.deepEqual(checks, ["one", "one", "one", "one"]);
   assert.deepEqual(actions, ["launch:one", "close:one"]);
 });

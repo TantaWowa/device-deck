@@ -560,6 +560,8 @@ export class AndroidEmulators {
           // Quick Boot snapshots contain the previous guest's RAM and hardware configuration.
           ...(launchOptions.wipeData || lowRam ? ["-no-snapshot"] : []),
           ...(lowRam ? ["-lowram", "-memory", String(lowRamMiB)] : []),
+          ...(d.tags?.includes("android-full-ram") && process.env.DEVICE_DECK_FULL_AVD_AUDIO === "coreaudio"
+            ? ["-audio", "coreaudio"] : []),
           ...(launchOptions.headless || process.env.DEVICE_DECK_HEADLESS === "1"
             ? ["-no-window", "-gpu", "software", "-feature", "-Vulkan"] : []),
           ...(launchOwnership

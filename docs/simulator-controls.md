@@ -14,6 +14,8 @@ If a runner stores its CoreSimulator device set on a mounted volume, host bootst
 
 For Android, create the AVD in Android Studio first. **Discover** lists both running emulators and installed AVDs that are stopped. Select multiple or **Add all** to register them. Device Deck uses the existing SDK emulator executable from **Settings → Adapter executables → emulator**, Android SDK environment variables, standard SDK paths, or `PATH`. It does not install an SDK or system images. The AVD name comes from `emulator -list-avds` or a running emulator's exact `adb -s SERIAL emu avd name` response. When that console response is empty or unavailable, Device Deck reads `ro.boot.qemu.avd_name` from the same exact ADB serial. Empty or invalid identities remain blocked. These commands use the Android SDK's [launch](https://developer.android.com/studio/run/emulator-commandline) and [console](https://developer.android.com/studio/run/emulator-console) interfaces.
 
+On a shared Mac that sets `QEMU_AUDIO_DRV=none` for unattended CI, set `DEVICE_DECK_FULL_AVD_AUDIO=coreaudio` in the daemon environment to enable host audio on its designated full-memory AVD. Device Deck passes `-audio coreaudio` when it starts that AVD. Other launches inherit the service’s normal audio configuration.
+
 To default future Android registrations on this Deck to 1,536 MiB, set `settings.defaultAndroidAvdMemoryProfile` to `"low-ram"`. Run these commands on the Deck host with `jq` installed to preserve the current configuration and revision.
 
 ```sh

@@ -82,12 +82,12 @@ test("enrolled Apple profiles verify the exact UDID and allow the watcher to fin
     return { stdout: Buffer.from(JSON.stringify({ udid: udid.toLowerCase(), ok: true })), stderr: "" };
   };
   const wait = async (ms: number) => { waits.push(ms); };
-  await verifySimulatorMemoryProfile(simulator, profile, execute, wait);
+  assert.equal(await verifySimulatorMemoryProfile(simulator, profile, execute, wait), undefined);
   assert.equal(attempts, 0, "unenrolled account skips verification");
   await writeFile(profile, "{}");
   await verifySimulatorMemoryProfile({ ...simulator, kind: "physical" }, profile, execute, wait);
   assert.equal(attempts, 0);
-  await verifySimulatorMemoryProfile(simulator, profile, execute, wait);
+  assert.deepEqual(await verifySimulatorMemoryProfile(simulator, profile, execute, wait), { kind: "apple-simslim", udid });
   assert.equal(attempts, 2);
   assert.deepEqual(waits, [3000]);
 });
