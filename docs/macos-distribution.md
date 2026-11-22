@@ -58,7 +58,7 @@ Install the package, sign in as the account that owns the SDKs and devices, then
 
 The service starts when macOS boots, after any required FileVault disk unlock. It cannot run while the encrypted boot disk remains locked. It owns one inventory, reservation store, capture library and set of tool paths. Closing the menu-bar app does not stop it. The **Open at login** setting controls only the menu-bar app in the current account.
 
-The host's desktop supplies the camera bridge and its macOS Camera permission. USB capture requires that desktop and bridge to be available. Apple simulator functionality also requires a usable host desktop. Boot startup makes the core API available before GUI login; it does not remove these platform requirements.
+USB capture uses the camera bridge on a signed-in desktop with Camera permission. By default this is the host desktop. Another local account can share specific cards with the host using `devdeck sharing usb SOURCE_ID,SOURCE_ID`. That desktop runs a capture helper. The host Deck owns the streams and reservations. Use `devdeck sharing usb off` from the same account to stop sharing. Apple simulator functionality also requires a usable host desktop.
 
 Service files are separate from user data:
 
@@ -79,7 +79,9 @@ The host grants existing users access in **Mac setup… → Mac account access**
 
 All allowed accounts reserve from the same inventory and observe the same exclusive reservations. Device operations run under the host's identity and use its SDKs, simulator inventory, ADB setup and paired devices. Only the host manages configuration, executable paths and account grants. Disabling a grant invalidates that account's credentials.
 
-This shares Device Deck's API and locks, not macOS simulator homes. If a CI job passes a host-owned simulator UDID to native tools such as `xcodebuild` or `simctl`, those tools must execute under the host account as well.
+Run native tools such as `xcodebuild` and `simctl` in the account that owns the reserved simulator. To use Xcode interactively while a separate account runs CI, give the developer account its own loopback Deck with a distinct port, profile and simulator inventory. Keep the physical devices registered on the shared host. Connect the developer Deck to that host with a [Deck connection](deck-sharing.md), then use `devdeck --deck NAME` for its physical devices. This keeps all bookings for each physical device in one place.
+
+On a shared Mac, the installer adds a launchd job that checks the Apple simulator preferences cache at boot and once a minute. When the cache is missing or has incorrect permissions, Device Deck creates or replaces the 16 KB cache with group `staff` and mode `0660` after all Apple simulators have stopped. Device Deck also checks the cache before handing off an Apple simulator. If a repair is pending, the dashboard diagnostics and CLI report the reason. Close the running simulators and retry the reservation. Android and physical devices remain available.
 
 An explicit `DEVICE_DECK_HOME` or `DEVICE_DECK_CONFIG` selects a separate development profile. Omit those overrides when a runner should use the shared installation. `DEVICE_DECK_HEADLESS=1` remains available for isolated source/development profiles; it is not necessary for a runner that uses the shared service.
 
@@ -169,7 +171,7 @@ Configuration and captures survive the update. The installer rejects direct repl
 
 Keep the previous installer and back up the host's profile before any release that migrates stored data. Roll back only when the previous version can read the current data, or restore the matching profile backup. Include any custom configuration file and external capture folder in that backup plan.
 
-There is no graphical uninstaller yet. For a shared installation, an administrator must first finish all sessions, stop and remove the LaunchDaemon registration, then remove the app and its CLI link. Preserve the host's profile and captures unless their removal is explicitly wanted. Do not use the old `devdeck service uninstall` command as a shared-service uninstaller. For an older per-user installation, that command removes its login service before the app is moved to Trash.
+There is no graphical uninstaller yet. For a shared installation, an administrator must first finish all sessions, stop and remove the LaunchDaemon registration, then remove the app and its CLI link. Also boot out `system/com.tantawowa.device-deck.simulator-preferences` and remove its matching plist from `/Library/LaunchDaemons` and executable from `/Library/PrivilegedHelperTools`. Preserve the host's profile and captures unless their removal is explicitly wanted. Do not use the old `devdeck service uninstall` command as a shared-service uninstaller. For an older per-user installation, that command removes its login service before the app is moved to Trash.
 
 ## Clean-Mac acceptance
 

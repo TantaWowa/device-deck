@@ -11,6 +11,7 @@ import {
   ConfigStore,
   SerialQueue,
   sourceIdentity,
+  deviceIdentity,
   atomicWrite,
 } from "../../../../packages/config/src";
 import { Adapters, usesAndroidLowRamProfile } from "../../../../packages/adapters/src";
@@ -93,6 +94,12 @@ const simulatorProgress = {
   reset: "Resetting device…",
   slim: "Slimming simulator…",
 };
+const dailyCleanupLock = "Daily simulator app cleanup";
+function dailyCleanupCycle(time: number) {
+  const date = new Date(time);
+  if (date.getHours() < 3) date.setDate(date.getDate() - 1);
+  return date.getFullYear() * 10000 + (date.getMonth() + 1) * 100 + date.getDate();
+}
 const warmPoolLock = "Warm pool shutdown in progress";
 export class DeckService {
   readonly config: ConfigStore;
@@ -126,6 +133,8 @@ export class DeckService {
   private timer?: ReturnType<typeof setInterval>;
   private warmTimer?: ReturnType<typeof setInterval>;
   private reaping?: Promise<void>;
+  private dailyCleanup?: Promise<void>;
+  readonly maintenance = { updating: false, active: 0 };
   private shuttingDown = false;
   private changingConfig = false;
   private simulatorActions = new Map<string, "launch" | "close" | DeviceCleanupAction>();
@@ -143,6 +152,7 @@ export class DeckService {
     private readonly licensingOverride?: EntitlementService,
     groupReadiness: Partial<GroupReadinessPolicy> = {},
     private readonly simulatorMemoryProfile?: string,
+    private readonly repairSimulatorPreferences?: () => Promise<void>,
   ) {
     this.config = new ConfigStore(configFile);
     this.adapters = adapters || new Adapters(() => this.config.config);
@@ -164,18 +174,39 @@ export class DeckService {
       helperIdentity: () => JSON.stringify(this.config.config.tools),
     });
   }
+  private async checkSimulatorPreferences(device?: DeviceConfig) {
+    if (!this.repairSimulatorPreferences || (device && device.connection.type !== "simulator")) return;
+    const prefix = "Apple simulator preferences: ";
+    let failure: string | undefined;
+    try {
+      await this.repairSimulatorPreferences();
+    } catch (error) {
+      failure = prefix + (error as Error).message;
+    }
+    this.diagnostics = this.diagnostics.filter((message) => !message.startsWith(prefix));
+    if (failure) {
+      this.diagnostics.push(failure);
+      fail("simulator-preferences", failure, 503);
+    }
+  }
   async init() {
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
     await this.config.load();
     await this.licensing.init();
     this.store = new Store(path.join(this.directory, "state.sqlite"));
+    await this.checkSimulatorPreferences().catch(() => {});
     await this.recover();
+    this.syncDailyAppCleanup();
     this.diagnostics.push(...(await this.adapters.diagnostics()));
     this.timer = setInterval(() => {
       void this.expire().catch((e) => this.diagnostics.push(String(e)));
     }, 1000);
     this.timer.unref();
-    this.warmTimer = setInterval(() => void this.reapWarmPool(), 60_000);
+    this.warmTimer = setInterval(() => {
+      void this.reapWarmPool();
+      void this.runDailyAppCleanup();
+      void this.checkSimulatorPreferences().catch(() => {});
+    }, 60_000);
     this.warmTimer.unref();
   }
   warmPool() {
@@ -276,6 +307,7 @@ export class DeckService {
     configured: DeviceConfig,
     preparation: GroupPreparation,
   ) {
+    await this.checkSimulatorPreferences(configured);
     const deadline = Date.now() + this.groupReadiness.timeoutMs;
     let unavailable: Device | undefined;
     let identityError: unknown;
@@ -493,6 +525,7 @@ export class DeckService {
   private invalidateInventory(deviceId?: string) {
     const current = this.config.config, previous = this.inventoryConfig;
     const configChanged = this.inventoryRevision !== this.config.revision;
+    if (configChanged) this.syncDailyAppCleanup();
     const sameTools = previous && JSON.stringify(previous.tools) === JSON.stringify(current.tools);
     const sameSource = (id?: string | null) => !id || JSON.stringify(previous?.sources.find((s) => s.id === id)) === JSON.stringify(current.sources.find((s) => s.id === id));
     const preservedDevices = sameTools ? current.devices.filter((d) =>
@@ -749,6 +782,7 @@ export class DeckService {
           if (!d.online) fail("device-offline", d.healthDetail, 409);
           if (!matchReservationDevices(this.decorate([d]), this.store.sessions(), args.selector, this.config.config.settings.defaultAndroidAvdMemoryProfile).length)
             fail("no-match", "The device no longer matches the requested state or capabilities. Refresh and select it again.", 409);
+          await this.checkSimulatorPreferences(d);
           let device: DeviceConfig = d;
           if (supportsSimulatorLifecycle(d) && d.connection.type === "adb") {
             const configured = this.device(d.id);
@@ -861,6 +895,7 @@ export class DeckService {
           const entries = await Promise.all(
             existing.members.map(async (member) => {
               const configured = this.device(member.deviceId);
+              await this.checkSimulatorPreferences(configured);
               const inspected = await this.adapters.inspect(configured);
               if (!inspected.online)
                 fail(
@@ -1377,6 +1412,7 @@ export class DeckService {
           );
           try {
             // Learn an existing emulator's AVD only from its exact live ADB transport.
+            if (args.action === "launch") await this.checkSimulatorPreferences(device);
             const resolved = await this.adapters.prepareSimulator(device);
             const next = structuredClone(this.config.config);
             const connection = device.connection.type === "adb" && resolved.connection.type === "adb"
@@ -1490,33 +1526,8 @@ export class DeckService {
           return this.queue(target.id).run(async () => {
             await acquireSlot();
             try {
-              if (authorize && !await authorize())
-                fail("unauthorized", "Machine access expired before this device's cleanup started.", 401);
-              await this.streams.closeDevice(target.id);
-              const source = this.config.config.sources.find((s) => s.id === target.captureSourceId);
-              if (source?.kind === "native") await this.capture.closeSource(source);
-              // Reset may stop the device before a later erase step fails.
-              // A subsequent manual boot must not inherit old pool ownership.
-              if (action === "reset") this.store.dropWarmDevice(target.id);
-              const result = await this.adapters.cleanupDevice(target, action);
-              if (result.state === "shutdown") this.store.dropWarmDevice(target.id);
-              this.store.event({
-                deviceId: target.id, owner: origin, action: `cleanup-${action}`,
-                detail: action === "slim" ? "Applied and verified simslim profile"
-                  : action === "reset" ? "Reset device" : `Uninstalled ${result.removedApps ?? 0} user apps`,
-              });
-              return { id: target.id, ok: true, ...result };
-            } catch (error) {
-              const message = (error as Error).message;
-              this.store.event({ deviceId: target.id, owner: origin, action: `cleanup-${action}-failed`, detail: message });
-              return { id: target.id, ok: false, error: message };
-            } finally {
-              this.simulatorActions.delete(target.id);
-              this.store.lock(target.id, null);
-              if (this.healthPending) await this.healthPending.catch(() => {});
-              this.invalidateInventory(target.id);
-              releaseSlot();
-            }
+              return await this.cleanDevice(target, action, origin, authorize);
+            } finally { releaseSlot(); }
           });
         };
         // Cold cleanup can boot a device. Limit simultaneous boots while keeping
@@ -1557,6 +1568,7 @@ export class DeckService {
                   const previous = this.store.lockReason(id);
                   this.store.lock(id, "Restart in progress");
                   try {
+                    await this.checkSimulatorPreferences(d);
                     await this.adapters.restart(d);
                   } finally {
                     this.store.lock(id, previous || null);
@@ -2579,11 +2591,80 @@ export class DeckService {
   reapWarmPool(): Promise<void> {
     if (this.shuttingDown) return Promise.resolve();
     this.reaping ??= this.reapWarmPoolOnce()
-      .catch((error) => this.warmPoolDiagnostic(`Warm pool: ${(error as Error).message}`))
+      .catch((error) => this.maintenanceDiagnostic(`Warm pool: ${(error as Error).message}`))
       .finally(() => { this.reaping = undefined; });
     return this.reaping;
   }
-  private warmDeviceBusy(id: string) {
+  private async cleanDevice(target: DeviceConfig, action: DeviceCleanupAction, owner: string, authorize?: LiveAuthorization): Promise<DeviceCleanupResult> {
+    try {
+      if (authorize && !await authorize())
+        fail("unauthorized", "Machine access expired before this device's cleanup started.", 401);
+      await this.streams.closeDevice(target.id);
+      const source = this.config.config.sources.find((s) => s.id === target.captureSourceId);
+      if (source?.kind === "native") await this.capture.closeSource(source);
+      // Reset may stop the device before a later erase step fails.
+      // A subsequent manual boot must not inherit old pool ownership.
+      if (action === "reset") this.store.dropWarmDevice(target.id);
+      if (action !== "reset") await this.checkSimulatorPreferences(target);
+      const result = await this.adapters.cleanupDevice(target, action);
+      if (result.state === "shutdown") this.store.dropWarmDevice(target.id);
+      this.store.event({
+        deviceId: target.id, owner, action: `cleanup-${action}`,
+        detail: action === "slim" ? "Applied and verified simslim profile"
+          : action === "reset" ? "Reset device" : `Uninstalled ${result.removedApps ?? 0} user apps`,
+      });
+      return { id: target.id, ok: true, ...result };
+    } catch (error) {
+      const message = (error as Error).message;
+      this.store.event({ deviceId: target.id, owner, action: `cleanup-${action}-failed`, detail: message });
+      return { id: target.id, ok: false, error: message };
+    } finally {
+      this.simulatorActions.delete(target.id);
+      this.store.lock(target.id, null);
+      if (this.healthPending) await this.healthPending.catch(() => {});
+      this.invalidateInventory(target.id);
+    }
+  }
+  private scheduledDevices() {
+    return this.config.config.devices.filter(canLaunchSimulator);
+  }
+  private syncDailyAppCleanup() {
+    const ids = this.config.config.settings.dailySimulatorAppCleanup ? this.scheduledDevices().map(deviceIdentity) : [];
+    this.store.syncDailyAppCleanup(ids, dailyCleanupCycle(Date.now()));
+  }
+  runDailyAppCleanup(now = Date.now()): Promise<void> {
+    if (this.shuttingDown) return Promise.resolve();
+    this.dailyCleanup ??= this.runDailyAppCleanupOnce(dailyCleanupCycle(now))
+      .catch((error) => this.maintenanceDiagnostic(`Daily cleanup: ${(error as Error).message}`))
+      .finally(() => { this.dailyCleanup = undefined; });
+    return this.dailyCleanup;
+  }
+  private async runDailyAppCleanupOnce(cycle: number) {
+    await this.refresh();
+    if (!this.config.config.settings.dailySimulatorAppCleanup || this.config.error) return;
+    for (const identity of this.store.dueAppCleanups(cycle)) {
+      await this.refresh();
+      const device = await this.global.run(async () => {
+        if (this.shuttingDown || this.changingConfig || this.config.error || !this.config.config.settings.dailySimulatorAppCleanup ||
+            this.maintenance.updating || this.maintenance.active) return;
+        const target = this.scheduledDevices().find((device) => deviceIdentity(device) === identity);
+        if (!target || this.virtualDeviceBusy(target.id)) return;
+        if (this.store.hasPendingCapture(target.id)) return;
+        if (!this.store.claimDailyAppCleanup(identity, target.id, cycle, dailyCleanupLock)) return;
+        this.simulatorActions.set(target.id, "uninstall-apps");
+        this.maintenance.active++;
+        return target;
+      });
+      if (!device) continue;
+      try {
+        await this.queue(device.id).run(() => this.cleanDevice(device, "uninstall-apps", "Daily cleanup"));
+      } finally {
+        this.maintenance.active--;
+        this.store.finishDailyAppCleanup(device.id);
+      }
+    }
+  }
+  private virtualDeviceBusy(id: string) {
     return this.simulatorActions.has(id) || Boolean(this.store.lockReason(id)) ||
       this.deviceHasOpenGroup(id) || this.streams.viewing(id) ||
       this.store.sessions().some((s) => s.deviceId === id && s.state !== "closed");
@@ -2608,17 +2689,16 @@ export class DeckService {
         .filter((e) => !configured.has(e.deviceId) ||
           ["shutdown", "unavailable"].includes(configured.get(e.deviceId)!.simulatorState || ""))
         .map((e) => e.deviceId),
-      busy: entries.filter((e) => this.warmDeviceBusy(e.deviceId)).map((e) => e.deviceId),
+      busy: entries.filter((e) => this.virtualDeviceBusy(e.deviceId)).map((e) => e.deviceId),
       pressure,
     });
     for (const id of decision.drop)
-      if (!this.warmDeviceBusy(id)) this.store.dropWarmDevice(id);
+      if (!this.virtualDeviceBusy(id)) this.store.dropWarmDevice(id);
     for (const { deviceId, reason } of decision.close)
       await this.closeWarmDevice(deviceId, reason).catch((error) =>
-        this.warmPoolDiagnostic(`Warm pool could not close ${deviceId}: ${(error as Error).message}`));
+        this.maintenanceDiagnostic(`Warm pool could not close ${deviceId}: ${(error as Error).message}`));
   }
-  private warmPoolDiagnostic(message: string) {
-    // A failing shutdown retries every minute; keep the diagnostics bounded.
+  private maintenanceDiagnostic(message: string) {
     this.diagnostics.push(message);
     if (this.diagnostics.length > 100) this.diagnostics.shift();
   }
@@ -2627,7 +2707,7 @@ export class DeckService {
     // after the decision was made is skipped here rather than closed.
     const entry = await this.global.run(async () => {
       const current = this.store.warmDevice(id);
-      if (!current || this.shuttingDown || this.changingConfig || this.warmDeviceBusy(id)) return undefined;
+      if (!current || this.shuttingDown || this.changingConfig || this.virtualDeviceBusy(id)) return undefined;
       if (!this.config.config.devices.some((d) => d.id === id)) {
         this.store.dropWarmDevice(id);
         return undefined;
@@ -2661,6 +2741,7 @@ export class DeckService {
   private async recover() {
     // A warm-pool shutdown interrupted by a crash leaves no other owner.
     this.store.clearLocks(warmPoolLock);
+    this.store.recoverDailyAppCleanup(dailyCleanupLock);
     for (const owned of this.store.ownedInteractions()) {
       try {
         await this.adapters.closeOwnedWda(owned.device, owned.wdaSessionId);
@@ -2736,7 +2817,7 @@ export class DeckService {
     );
     // Warm devices stay booted across a daemon restart; only let a pass in
     // flight finish its current shutdown.
-    await this.reaping;
+    await Promise.all([this.reaping, this.dailyCleanup]);
     await this.streams.close();
     await Promise.all([this.captureCardThumbnails.close(), this.capture.close()]);
     await this.adapters.close();

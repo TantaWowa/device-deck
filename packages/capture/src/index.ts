@@ -53,12 +53,12 @@ class UsbStream extends EventEmitter {
   closeWhenUnused = false;
   idleTimer?: ReturnType<typeof setTimeout>;
   private closing?: Promise<void>;
-  constructor(id: string, cameraHelper: string, adapters: Adapters, startupTimeout: number) {
+  constructor(id: string, cameraHelper: string, adapters: Adapters, startupTimeout: number, desktop?: number) {
     super();
     this.setMaxListeners(0);
     this.startup = adapters.cameras.initialize(async (signal) => {
       signal.throwIfAborted();
-      const handle = this.handle = start(cameraHelper, ["stream", id]);
+      const handle = this.handle = start(cameraHelper, desktop === undefined ? ["stream", id] : ["--desktop", String(desktop), "stream", id]);
       handle.child.stdout.on("data", this.receive);
       void handle.completed.then(() => {
         this.error ||= handle.log() || "USB capture source disconnected";
@@ -171,7 +171,7 @@ export class CaptureEngine {
     }
     if (this.closed) fail("capture-closed", "Capture service is shutting down.", 503);
     if (!stream) {
-      stream = new UsbStream(id, this.cameraHelper, this.adapters, this.usbTimings.startupTimeoutMs ?? 12000);
+      stream = new UsbStream(id, this.cameraHelper, this.adapters, this.usbTimings.startupTimeoutMs ?? 12000, s.captureDesktopUid);
       this.streams.set(id, stream);
     }
     const retained = stream;

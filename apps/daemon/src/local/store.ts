@@ -44,6 +44,7 @@ export class Store {
       CREATE TABLE IF NOT EXISTS interaction_ownership(session_id TEXT PRIMARY KEY, payload TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS reservation_groups(id TEXT PRIMARY KEY, state TEXT NOT NULL, token_hash TEXT NOT NULL, payload TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS warm_devices(device_id TEXT PRIMARY KEY, payload TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS daily_app_cleanup(identity TEXT PRIMARY KEY, cycle INTEGER NOT NULL, running_device TEXT);
       PRAGMA user_version=1;`);
   }
   transaction<T>(action: () => T) {
@@ -366,6 +367,39 @@ export class Store {
       return group;
     });
   }
+  syncDailyAppCleanup(identities: string[], cycle: number) {
+    this.transaction(() => {
+      const enrolled = JSON.stringify(identities);
+      this.db.prepare("DELETE FROM daily_app_cleanup WHERE running_device IS NULL AND identity NOT IN (SELECT value FROM json_each(?))").run(enrolled);
+      this.db.prepare("INSERT OR IGNORE INTO daily_app_cleanup(identity, cycle) SELECT value, ? FROM json_each(?)").run(cycle, enrolled);
+    });
+  }
+  dueAppCleanups(cycle: number) {
+    return this.db.prepare("SELECT identity FROM daily_app_cleanup WHERE cycle < ? AND running_device IS NULL").all(cycle)
+      .map((row) => String(row.identity));
+  }
+  claimDailyAppCleanup(identity: string, deviceId: string, cycle: number, reason: string) {
+    return this.transaction(() => {
+      const claim = this.db.prepare("UPDATE daily_app_cleanup SET cycle=?, running_device=? WHERE identity=? AND cycle < ? AND running_device IS NULL")
+        .run(cycle, deviceId, identity, cycle);
+      if (!claim.changes) return false;
+      this.lock(deviceId, reason);
+      return true;
+    });
+  }
+  finishDailyAppCleanup(deviceId: string) {
+    this.db.prepare("UPDATE daily_app_cleanup SET running_device=NULL WHERE running_device=?").run(deviceId);
+  }
+  recoverDailyAppCleanup(reason: string) {
+    this.transaction(() => {
+      for (const row of this.db.prepare("SELECT running_device FROM daily_app_cleanup WHERE running_device IS NOT NULL").all()) {
+        const deviceId = String(row.running_device);
+        if (this.lockReason(deviceId) === reason) this.lock(deviceId, null);
+        this.finishDailyAppCleanup(deviceId);
+        this.event({ deviceId, owner: "Daily cleanup", action: "cleanup-uninstall-apps-interrupted", detail: "Service restarted during scheduled app removal" });
+      }
+    });
+  }
   warmDevices() {
     return (this.db.prepare("SELECT payload FROM warm_devices").all() as { payload: string }[])
       .map((row) => JSON.parse(row.payload) as WarmDevice);
@@ -467,6 +501,10 @@ export class Store {
         "INSERT INTO artifacts VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload",
       )
       .run(a.id, a.sessionId, JSON.stringify(a));
+  }
+  hasPendingCapture(deviceId: string) {
+    return Boolean(this.db.prepare(`SELECT 1 FROM artifacts AS a LEFT JOIN workers AS w ON w.artifact_id=a.id
+      WHERE json_extract(a.payload, '$.deviceId')=? AND (w.artifact_id IS NOT NULL OR json_extract(a.payload, '$.status') IN ('recording','finalizing')) LIMIT 1`).get(deviceId));
   }
   worker(id: string, value: unknown) {
     this.db

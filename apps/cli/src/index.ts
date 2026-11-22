@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { shareDesktopUsb } from "./usb-sharing";
 import { staleVirtualDevices } from "../../../packages/core/src/discovery";
 import { resolveReportRange } from "../../../packages/core/src/reports";
 import { parseArgs } from "node:util";
@@ -46,6 +47,7 @@ Usage: devdeck <command> [options]
 
   decks list|add|remove         Manage remote Deck connections on this Mac
   decks grant|grants|revoke     Grant or revoke another Deck's access to this Mac
+  sharing usb SOURCE_ID[,SOURCE_ID]|off   Share selected USB inputs from this desktop
   sharing status|users         Inspect the shared Mac service and local accounts
   sharing grant USER|revoke UID Allow or revoke a local Mac account
   --deck NAME                  Use a connected Deck through the local daemon
@@ -195,7 +197,7 @@ try {
       return String(v.reason);
     };
     let result: unknown;
-    if (command === "sharing") result = await sharingCommand(p[1] || "status", p[2]);
+    if (command === "sharing") result = p[1] === "usb" ? await shareDesktopUsb(p[2]) : await sharingCommand(p[1] || "status", p[2]);
     else if (command === "simulator-profile") {
       const action = p[1] ?? "status";
       if (p.length > 2 || !["install", "status", "uninstall"].includes(action))

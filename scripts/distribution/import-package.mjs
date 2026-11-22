@@ -98,7 +98,14 @@ export async function validateExpandedPackage(expanded, imported, root) {
     ["PackageInfo", "string(/pkg-info/bundle/@path)", "./Applications/Device Deck.app"],
   ]) if (xmlValue(path.join(component, file), xpath) !== value) throw new Error(`Imported package identity differs: ${xpath}`);
   if (xmlValue(path.join(expanded, "Distribution"), "string(/installer-gui-script/options/@hostArchitectures)") !== (arch === "x64" ? "x86_64" : arch)) throw new Error("Imported installer architecture differs from its metadata.");
-  await entries(payload, ["Applications"]);
+  await entries(payload, ["Applications", "Library"]);
+  const label = "com.tantawowa.device-deck.simulator-preferences";
+  const library = path.join(payload, "Library");
+  await entries(library, ["LaunchDaemons", "PrivilegedHelperTools"]);
+  await entries(path.join(library, "LaunchDaemons"), [`${label}.plist`]);
+  await entries(path.join(library, "PrivilegedHelperTools"), [label]);
+  await equalFile(path.join(library, "LaunchDaemons", `${label}.plist`), await readFile(path.join(root, "native/macos", `${label}.plist`)));
+  await equalFile(path.join(library, "PrivilegedHelperTools", label), await readFile(path.join(payload, "Applications/Device Deck.app/Contents/Resources/build/native/deck-simulator-preferences")));
   await entries(path.join(payload, "Applications"), ["Device Deck.app"]);
   const app = path.join(payload, "Applications/Device Deck.app"), contents = path.join(app, "Contents"), resources = path.join(contents, "Resources");
   await entries(app, ["Contents"]);
@@ -120,7 +127,7 @@ export async function validateExpandedPackage(expanded, imported, root) {
   if (!isDeepStrictEqual(JSON.parse(await readFile(path.join(resources, "distribution.json"), "utf8")), distribution) ||
       !isDeepStrictEqual(JSON.parse(await readFile(path.join(resources, "build/build-metadata.json"), "utf8")), metadata.build)) throw new Error("Imported embedded metadata differs from its verified sidecar.");
   const scrcpy = JSON.parse(await readFile(path.join(root, "scripts/distribution/scrcpy.json"), "utf8"));
-  await entries(path.join(resources, "build/native"), ["deck-camera", "deck-camera-native", "scrcpy-LICENSE", `scrcpy-server-v${scrcpy.version}`]);
+  await entries(path.join(resources, "build/native"), ["deck-camera", "deck-camera-native", "deck-simulator-preferences", "scrcpy-LICENSE", `scrcpy-server-v${scrcpy.version}`]);
   if (digest(await readFile(path.join(resources, "build/native", `scrcpy-server-v${scrcpy.version}`))) !== scrcpy.sha256) throw new Error("Imported scrcpy server differs from the pinned release.");
   await equalFile(path.join(resources, "build/native/scrcpy-LICENSE"), await readFile(path.join(root, "native/scrcpy-LICENSE")));
   const media = path.join(resources, "media"), lock = JSON.parse(await readFile(path.join(root, "scripts/distribution/media-sources.json"), "utf8"));
@@ -132,7 +139,7 @@ export async function validateExpandedPackage(expanded, imported, root) {
   for (const component of lock.components) if (digest(await readFile(path.join(media, "sources", path.basename(new URL(component.url).pathname)))) !== component.sha256) throw new Error(`Imported ${component.name} sources differ from the repository pin.`);
   for (const file of ["build-media.mjs", "package-support.mjs", "media-sources.json"]) await equalFile(path.join(media, "recipe", file), await readFile(path.join(root, "scripts/distribution", file)));
   const allFiles = await inspectRegularTree(app), binaries = await verifyMachOClosure(allFiles, arch);
-  const expectedBinaries = ["MacOS/Device Deck", "MacOS/devdeck", "MacOS/device-deck-service", "Resources/runtime/bin/node", "Resources/build/native/deck-camera", "Resources/build/native/deck-camera-native", "Resources/media/bin/ffmpeg", "Resources/media/bin/ffprobe"];
+  const expectedBinaries = ["MacOS/Device Deck", "MacOS/devdeck", "MacOS/device-deck-service", "Resources/runtime/bin/node", "Resources/build/native/deck-camera", "Resources/build/native/deck-camera-native", "Resources/build/native/deck-simulator-preferences", "Resources/media/bin/ffmpeg", "Resources/media/bin/ffprobe"];
   if (!isDeepStrictEqual(binaries.map(file => path.relative(contents, file)).sort(), expectedBinaries.sort())) throw new Error("Unexpected executable code in imported package.");
   command("/usr/bin/codesign", ["--verify", "--deep", "--strict", app]);
   for (const binary of binaries) {

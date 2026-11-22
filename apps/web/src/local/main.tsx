@@ -1949,6 +1949,16 @@ function SettingsView({
               />
               <small>Native Android recordings stop after 175 seconds.</small>
             </label>
+            <h2>Simulator maintenance</h2>
+            <label>
+              <input
+                type="checkbox"
+                checked={config.settings.dailySimulatorAppCleanup ?? false}
+                onChange={(e) => update("dailySimulatorAppCleanup", e.target.checked)}
+              />
+              Remove installed apps from idle simulators and emulators daily
+              <small>Runs at 03:00 on the host Mac. Removing an app also deletes its data.</small>
+            </label>
             <h2>Reservation defaults</h2>
             <label>
               Owner label

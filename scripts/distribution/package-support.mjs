@@ -95,6 +95,12 @@ DEVICE_DECK_VOLUME=\${3:-/}
 DEVICE_DECK_BIN="\${DEVICE_DECK_VOLUME%/}/usr/local/bin"
 DEVICE_DECK_CLI="$DEVICE_DECK_BIN/devdeck"
 DEVICE_DECK_TARGET="/Applications/Device Deck.app/Contents/MacOS/devdeck"
+if [ "$DEVICE_DECK_VOLUME" = "/" ]; then
+  label=com.tantawowa.device-deck.simulator-preferences
+  if ! /bin/launchctl print "system/$label" >/dev/null 2>&1; then
+    /bin/launchctl bootstrap system "/Library/LaunchDaemons/$label.plist"
+  fi
+fi
 /bin/mkdir -p "$DEVICE_DECK_BIN"
 if [ -L "$DEVICE_DECK_CLI" ] && [ "$(/usr/bin/readlink "$DEVICE_DECK_CLI")" = "$DEVICE_DECK_TARGET" ]; then
   exit 0

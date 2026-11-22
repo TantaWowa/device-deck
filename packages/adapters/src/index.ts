@@ -92,7 +92,7 @@ export class Adapters {
   constructor(private getConfig: () => Config, private execute = run, private now: () => number = Date.now, readonly idbInput: IdbInput = sharedIdbInput) {
     this.emulators = new AndroidEmulators(getConfig, execute);
     this.probes = new ProbeScheduler(execute);
-    this.cameras = new CameraDiscovery(helper, this.probes.run, now);
+    this.cameras = new CameraDiscovery(helper, this.probes.run, now, () => this.getConfig().sources);
     this.simulatorInventory = new SimulatorInventory(now);
   }
   invalidateInventory(deviceId?: string) {
@@ -456,12 +456,10 @@ export class Adapters {
   cachedCaptureCards(configs: SourceConfig[]) {
     const { devices: detected, ...observation } = this.cameras.peek();
     return {
-      sources: mergeCaptureCards(configs, detected, (id) => uid("usb", id)).map((source): Source => ({
-        ...source,
-        status: observation.observedAt === null ? "unknown" : source.status,
-        detail: observation.error || source.detail,
-        observation,
-      })),
+      sources: mergeCaptureCards(configs, detected, (id) => uid("usb", id)).map((source): Source => {
+        const observed = this.cameras.observationFor(source.captureDesktopUid, observation);
+        return { ...source, status: observed.observedAt === null ? "unknown" : source.status, detail: observed.error || source.detail, observation: observed };
+      }),
       diagnostics: observation.error ? [`USB discovery unavailable: ${observation.error}`] : [],
       observation,
     };
@@ -470,21 +468,17 @@ export class Adapters {
     if (!configs.some((source) => source.kind === "usb"))
       return configs.map((source) => ({ ...source, status: "connected" }));
     const { devices: list, ...observation } = await this.cameras.read({ force });
-    return configs.map((s) =>
-      s.kind === "native"
-        ? { ...s, status: "connected" }
-        : {
-            ...s,
-            status: observation.observedAt === null ? "unknown" : list.some((x) => x.uniqueId === s.uniqueId)
-              ? "connected"
-              : "missing",
-            detail:
-              observation.error || (list.find((x) => x.uniqueId === s.uniqueId)?.inUse === "true"
-                ? "In use by another application"
-                : undefined),
-            observation,
-          },
-    );
+    return configs.map((source): Source => {
+      if (source.kind === "native") return { ...source, status: "connected" };
+      const observed = this.cameras.observationFor(source.captureDesktopUid, observation);
+      const card = list.find(item => item.uniqueId === source.uniqueId);
+      return {
+        ...source,
+        status: observed.observedAt === null ? "unknown" : card ? "connected" : "missing",
+        detail: observed.error || (card?.inUse === "true" ? "In use by another application" : undefined),
+        observation: observed,
+      };
+    });
   }
   private async appleDevices(execute = this.execute) {
     const dir = await mkdtemp(path.join(os.tmpdir(), "deck-device-"));

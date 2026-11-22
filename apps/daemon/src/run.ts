@@ -7,6 +7,7 @@ import { hostWithPort, MachineAuthority } from "./network";
 import { DeckService } from "./local/service";
 import { dataDirectory } from "../../../packages/core/src/local/paths";
 import { atomicWrite, expand } from "../../../packages/config/src";
+import { run } from "../../../packages/adapters/src/process";
 import { root } from "../../../packages/adapters/src";
 import { DeckConnections } from "./decks";
 import { LocalAccounts } from "./local-accounts";
@@ -56,6 +57,9 @@ export async function runDaemon(
     process.platform === "darwin"
       ? path.join(userInfo().homedir, "Library/Application Support/Device Deck/simslim-profile.json")
       : undefined,
+    sharedHost ? async () => {
+      await run(path.join(root, "build/native/deck-simulator-preferences"), ["repair"], 5000);
+    } : undefined,
   );
   let shutdown: (() => Promise<void>) | undefined;
   const servers: ReturnType<typeof createService>[] = [];
@@ -75,8 +79,7 @@ export async function runDaemon(
     const credentials = createBrowserCredentials();
     const decks = new DeckConnections(directory);
     const accounts = new LocalAccounts(directory, sharedHost);
-    const maintenance = { updating: false, active: 0 };
-    const server = createService(deck, token, path.join(root, "build/web"), { bindHost, tls, authority, credentials, decks, accounts, maintenance });
+    const server = createService(deck, token, path.join(root, "build/web"), { bindHost, tls, authority, credentials, decks, accounts });
     servers.push(server);
     const port = Number(
       process.env.DEVICE_DECK_PORT ?? deck.config.config.port,
@@ -92,7 +95,7 @@ export async function runDaemon(
     // management when the external listener uses TLS or a specific interface.
     let control = server;
     if (tls || !["127.0.0.1", "0.0.0.0"].includes(bindHost)) {
-      control = createService(deck, token, path.join(root, "build/web"), { authority, credentials, decks, accounts, maintenance, networkPort: address.port, bindHost });
+      control = createService(deck, token, path.join(root, "build/web"), { authority, credentials, decks, accounts, networkPort: address.port, bindHost });
       servers.push(control);
       await new Promise<void>((resolve, reject) => {
         control.once("error", reject);

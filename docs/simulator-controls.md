@@ -89,6 +89,14 @@ the Mac's memory, with a minimum of two. Set `"enabled": false` to shut
 cold-started devices down on release, as earlier versions did; devices
 already in the pool are then shut down at the next check.
 
+## Daily app removal
+
+In Settings, turn on **Remove installed apps from idle simulators and emulators daily** and save, or set `settings.dailySimulatorAppCleanup` to `true`. The default is off. Each registered iOS or tvOS simulator and each Android emulator with a configured AVD name becomes eligible at the next 03:00 in the host Mac's time zone.
+
+The daemon checks once a minute and cleans one device at a time. It waits for leases, group work, recordings, live viewers and maintenance locks to clear. If the Mac was asleep or the service was stopped, it catches up when the device is idle. It uses **Uninstall user apps**, which removes installed apps and their data, preserves system apps and device settings, and restores the original boot state.
+
+History records the result under **Daily cleanup**. The schedule survives daemon restarts. A failed or interrupted uninstall is eligible again at the next daily cleanup. Disabling the setting cancels pending cleanups.
+
 ## Reduce Apple simulator RAM
 
 Install simslim on the Mac that hosts the simulators.

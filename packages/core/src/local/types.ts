@@ -85,6 +85,7 @@ export const sourceSchema = z
     kind: z.enum(["usb", "native"]),
     deviceId: z.string().optional(),
     uniqueId: z.string().optional(),
+    captureDesktopUid: z.number().int().min(501).max(4294967294).optional(),
   })
   .strict();
 export type SourceConfig = z.infer<typeof sourceSchema>;
@@ -100,6 +101,7 @@ export const settingsSchema = z
     captureMode: z.enum(["clean", "annotated"]).default("clean"),
     maxRecordingMinutes: z.number().int().min(1).max(120).default(15),
     previewIntervalMs: z.number().int().min(250).max(5000).default(750),
+    dailySimulatorAppCleanup: z.boolean().optional(),
     defaultAndroidAvdMemoryProfile: z.enum(["stock", "low-ram"]).optional(),
     /** Virtual devices Device Deck cold-started stay booted after release. */
     warmPool: z

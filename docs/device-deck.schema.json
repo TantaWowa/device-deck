@@ -370,6 +370,11 @@
               },
               "uniqueId": {
                 "type": "string"
+              },
+              "captureDesktopUid": {
+                "type": "integer",
+                "minimum": 501,
+                "maximum": 4294967294
               }
             },
             "required": [
@@ -443,6 +448,9 @@
               "minimum": 250,
               "maximum": 5000,
               "default": 750
+            },
+            "dailySimulatorAppCleanup": {
+              "type": "boolean"
             },
             "defaultAndroidAvdMemoryProfile": {
               "type": "string",
