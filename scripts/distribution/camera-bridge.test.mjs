@@ -15,7 +15,7 @@ before(async () => {
   await mkdir(scratch, { recursive: true });
   root = await mkdtemp(path.join(scratch, "camera-ipc-"));
   bridge = path.join(root, "deck-camera");
-  await exec("clang", ["-std=c11", "-D_DARWIN_C_SOURCE", "-Wall", "-Wextra", "-Werror", "-O2", "-target",
+  await exec("clang", [`-DDEVICE_DECK_USB_ROOT="${root}"`, "-std=c11", "-D_DARWIN_C_SOURCE", "-Wall", "-Wextra", "-Werror", "-O2", "-target",
     `${process.arch === "arm64" ? "arm64" : "x86_64"}-apple-macosx14.0`, "native/macos/camera-bridge.c", "-o", bridge]);
   // No AVFoundation, devices or real clipboard access occurs in this suite.
   const fixture = `#!${process.execPath}
@@ -24,7 +24,9 @@ const path = require('node:path');
 const [command, argument] = process.argv.slice(2);
 const directory = process.env.CAMERA_FIXTURE_DIRECTORY;
 fs.appendFileSync(path.join(directory, 'calls'), command + '\\n');
-if (command === 'list') { process.stdout.write('[{"uniqueId":"fixture","name":"Test camera"}]'); process.stderr.write('discovery fixture\\n'); }
+if (command === 'list-usb') process.stdout.write(JSON.stringify(process.argv.slice(3)));
+else if (command === 'stream-usb') process.stdout.write(argument);
+else if (command === 'list') { process.stdout.write('[{"uniqueId":"fixture","name":"Test camera"}]'); process.stderr.write('discovery fixture\\n'); }
 else if (command === 'clipboard') process.stdout.write(argument);
 else if (argument === 'burst') {
   fs.writeFileSync(path.join(directory, 'burst.pid'), String(process.pid));
@@ -163,4 +165,19 @@ macTest("broker rejects malformed requests without executing its helper", async 
   assert.equal(await exists(path.join(f.profile, "calls")), false);
   await assert.rejects(f.command(["clipboard", "relative.png"]), error => error.code === 64);
   await assert.rejects(f.command(["stream", "x".repeat(4096)]), error => error.code === 64);
+});
+
+macTest("a USB desktop shares only its selected inputs and never accepts clipboard work", async t => {
+  const uid = String(process.getuid());
+  const f = await fixture(t, false);
+  const socket = path.join(root, "com.tantawowa.device-deck.usb-" + uid, "camera.sock");
+  const provider = spawn(bridge, ["--share-usb", uid, "first", "second"], { env: f.env });
+  t.after(() => terminate(provider));
+  await until(() => exists(socket), "USB provider did not start");
+  const request = args => exec(bridge, ["--desktop", uid, ...args], { env: f.env });
+  assert.deepEqual(JSON.parse((await request(["list"])).stdout), ["first", "second"]);
+  assert.equal((await request(["stream", "second"])).stdout, "second");
+  await assert.rejects(request(["stream", "private"]), /has not shared/);
+  await assert.rejects(request(["clipboard", "/private/example"]));
+  assert.deepEqual((await readFile(path.join(f.profile,"calls"), "utf8")).trim().split("\n"), ["list-usb","stream-usb"]);
 });

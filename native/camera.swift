@@ -12,11 +12,13 @@ if args.first == "clipboard" {
  exit(0)
 }
 let devices = AVCaptureDevice.DiscoverySession(deviceTypes: [.external, .builtInWideAngleCamera], mediaType: .video, position: .unspecified).devices
-if args.first == "list" {
- let list = devices.filter { $0.deviceType == .external && $0.transportType == 0x75736220 }.map { ["uniqueId": $0.uniqueID, "name": $0.localizedName, "model": $0.modelID, "inUse": $0.isInUseByAnotherApplication ? "true" : "false"] }
+let externalUSB = devices.filter { $0.deviceType == .external && $0.transportType == 0x75736220 }
+if args.first == "list" || args.first == "list-usb" {
+ let shared = Set(args.dropFirst())
+ let list = externalUSB.filter { args.first == "list" || shared.contains($0.uniqueID) }.map { ["uniqueId": $0.uniqueID, "name": $0.localizedName, "model": $0.modelID, "inUse": $0.isInUseByAnotherApplication ? "true" : "false"] }
  let data = try JSONSerialization.data(withJSONObject: list, options: [.sortedKeys]); FileHandle.standardOutput.write(data); exit(0)
 }
-guard args.count == 2 && args[0] == "stream", let device = devices.first(where: { $0.uniqueID == args[1] }) else { die("Configured capture source is missing. Choose its unique ID from sources discovery.") }
+guard args.count == 2 && ["stream", "stream-usb"].contains(args[0]), let device = (args[0] == "stream-usb" ? externalUSB : devices).first(where: { $0.uniqueID == args[1] }) else { die("Configured capture source is missing. Choose its unique ID from sources discovery.") }
 if device.isInUseByAnotherApplication { die("Capture source is in use by another application") }
 let permission = AVCaptureDevice.authorizationStatus(for: .video)
 if permission == .notDetermined { let sem = DispatchSemaphore(value: 0); AVCaptureDevice.requestAccess(for: .video) { _ in sem.signal() }; sem.wait() }

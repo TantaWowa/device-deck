@@ -20,6 +20,9 @@
 #include <time.h>
 #include <unistd.h>
 
+#ifndef DEVICE_DECK_USB_ROOT
+#define DEVICE_DECK_USB_ROOT "/Users/Shared"
+#endif
 #define FRAME_LIMIT 32768
 #define ARG_LIMIT 4096
 #define CLIENT_LIMIT 32
@@ -84,9 +87,26 @@ static void failure_frame(int fd, const char *message, unsigned char code) {
 }
 static void close_on_exec(int fd) { fcntl(fd, F_SETFD, FD_CLOEXEC); }
 static void nonblocking(int fd) { fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK); }
-static int same_user(int fd) {
+static int peer_is(int fd, uid_t expected) {
   uid_t uid; gid_t gid;
-  return getpeereid(fd, &uid, &gid) == 0 && uid == geteuid();
+  return getpeereid(fd, &uid, &gid) == 0 && uid == expected;
+}
+static int account_uid(const char *text, uid_t *uid) {
+  char *end;
+  errno = 0;
+  unsigned long value = strtoul(text, &end, 10);
+  if (!*text || *end || errno || value < 501 || value >= UINT32_MAX || !getpwuid((uid_t)value)) return -1;
+  *uid = (uid_t)value;
+  return 0;
+}
+static int desktop_socket(uid_t desktop, int create, char *name, size_t size) {
+  char parent[PATH_MAX];
+  if (snprintf(parent, sizeof(parent), "%s/com.tantawowa.device-deck.usb-%u", DEVICE_DECK_USB_ROOT, (unsigned)desktop) >= (int)sizeof(parent)) return -1;
+  if (create && mkdir(parent, 0711) && errno != EEXIST) return -1;
+  struct stat info;
+  if (lstat(parent, &info) || !S_ISDIR(info.st_mode) || info.st_uid != desktop || (info.st_mode & 0022)) return -1;
+  if (create && chmod(parent, 0711)) return -1;
+  return snprintf(name, size, "%s/camera.sock", parent) >= (int)size ? -1 : 0;
 }
 static int private_parent(const char *socket_path) {
   char parent[PATH_MAX];
@@ -136,7 +156,7 @@ static void terminate_child(pid_t child) {
   kill(child, SIGKILL);
   while (waitpid(child, &status, 0) < 0 && errno == EINTR) {}
 }
-static void serve_client(int client, const char *native) {
+static void serve_client(int client, const char *native, char **cards) {
   unsigned char request[9];
   char argument[ARG_LIMIT];
   long long deadline = milliseconds() + 5000;
@@ -151,6 +171,11 @@ static void serve_client(int client, const char *native) {
   if (!valid_command(request[4], argument, length)) {
     failure_frame(client, "Unsupported camera command or argument.\n", 64); return;
   }
+  if (cards && request[4] != 'L') {
+    int allowed = 0;
+    for (int i = 0; cards[i]; i++) if (request[4] == 'S' && !strcmp(cards[i], argument)) allowed = 1;
+    if (!allowed) { failure_frame(client, "This desktop has not shared that USB input.\n", 77); return; }
+  }
   int output[2] = {-1, -1}, errors[2] = {-1, -1};
   if (pipe(output) || pipe(errors)) {
     if (output[0] >= 0) { close(output[0]); close(output[1]); }
@@ -164,7 +189,12 @@ static void serve_client(int client, const char *native) {
     close(output[0]); close(output[1]); close(errors[0]); close(errors[1]); close(client);
     int empty = open("/dev/null", O_RDONLY);
     if (empty >= 0) { dup2(empty, STDIN_FILENO); if (empty != STDIN_FILENO) close(empty); }
-    const char *command = request[4] == 'L' ? "list" : request[4] == 'S' ? "stream" : "clipboard";
+    if (cards && request[4] == 'L') {
+      char *args[67] = {(char *)native, "list-usb"};
+      for (int i = 0; cards[i]; i++) args[2 + i] = cards[i];
+      execv(native, args); _exit(127);
+    }
+    const char *command = request[4] == 'L' ? "list" : request[4] == 'S' ? (cards ? "stream-usb" : "stream") : "clipboard";
     char *args[] = {(char *)native, (char *)command, argument, NULL};
     if (request[4] == 'L') args[2] = NULL;
     execv(native, args);
@@ -204,9 +234,9 @@ static void serve_client(int client, const char *native) {
     frame(client, 'X', &code, 1);
   }
 }
-static int broker(const char *name, const char *native) {
+static int broker(const char *name, const char *native, uid_t client_uid, char **cards) {
   struct sockaddr_un address;
-  if (private_parent(name) || socket_address(name, &address)) {
+  if ((!cards && private_parent(name)) || socket_address(name, &address)) {
     fputs("Camera bridge needs a short socket path inside a private directory owned by the signed-in host.\n", stderr); return 1;
   }
   struct stat existing;
@@ -227,7 +257,7 @@ static int broker(const char *name, const char *native) {
   if (listener < 0) return 1;
   close_on_exec(listener);
   umask(0077);
-  if (bind(listener, (struct sockaddr *)&address, sizeof(address)) || chmod(name, 0600) || listen(listener, CLIENT_LIMIT)) {
+  if (bind(listener, (struct sockaddr *)&address, sizeof(address)) || chmod(name, cards ? 0666 : 0600) || listen(listener, CLIENT_LIMIT)) {
     perror("Cannot start camera bridge"); close(listener); return 1;
   }
   struct stat created;
@@ -246,7 +276,7 @@ static int broker(const char *name, const char *native) {
     if (client < 0) continue;
     close_on_exec(client);
     nonblocking(client);
-    if (!same_user(client)) { close(client); continue; }
+    if (!peer_is(client, client_uid)) { close(client); continue; }
     int index = 0;
     while (index < CLIENT_LIMIT && clients[index]) index++;
     if (index == CLIENT_LIMIT) { failure_frame(client, "Device Deck's camera bridge is busy. Try again.\n", 1); close(client); continue; }
@@ -254,7 +284,7 @@ static int broker(const char *name, const char *native) {
     if (!handler) {
       close(listener); owner_pid = getppid();
       setpgid(0, 0);
-      serve_client(client, native); close(client); _exit(0);
+      serve_client(client, native, cards); close(client); _exit(0);
     }
     if (handler > 0) { clients[index] = handler; setpgid(handler, handler); }
     close(client);
@@ -267,10 +297,12 @@ static int broker(const char *name, const char *native) {
   if (!lstat(name, &current) && current.st_dev == created.st_dev && current.st_ino == created.st_ino) unlink(name);
   return 0;
 }
-static int proxy(unsigned char command, const char *argument) {
+static int proxy(unsigned char command, const char *argument, uid_t desktop) {
   char name[PATH_MAX];
   const char *profile = getenv("DEVICE_DECK_HOME");
-  if (profile && profile[0]) {
+  if (desktop) {
+    if (desktop_socket(desktop, 0, name, sizeof(name))) { fputs("USB sharing is unavailable on the selected desktop.\n", stderr); return 69; }
+  } else if (profile && profile[0]) {
     if (snprintf(name, sizeof(name), "%s/camera.sock", profile) >= (int)sizeof(name)) return 1;
   } else {
     struct passwd *user = getpwuid(geteuid());
@@ -278,11 +310,12 @@ static int proxy(unsigned char command, const char *argument) {
   }
   struct sockaddr_un address;
   struct stat info;
-  if (private_parent(name) || socket_address(name, &address) || lstat(name, &info) || !S_ISSOCK(info.st_mode) || info.st_uid != geteuid() || (info.st_mode & 077)) {
+  uid_t owner = desktop ? desktop : geteuid();
+  if ((!desktop && private_parent(name)) || socket_address(name, &address) || lstat(name, &info) || !S_ISSOCK(info.st_mode) || info.st_uid != owner || (!desktop && (info.st_mode & 077))) {
     fputs(desktop_message, stderr); return 69;
   }
   int connection = socket(AF_UNIX, SOCK_STREAM, 0);
-  if (connection < 0 || connect(connection, (struct sockaddr *)&address, sizeof(address)) || !same_user(connection)) {
+  if (connection < 0 || connect(connection, (struct sockaddr *)&address, sizeof(address)) || !peer_is(connection, owner)) {
     if (connection >= 0) close(connection);
     fputs(desktop_message, stderr); return 69;
   }
@@ -314,7 +347,18 @@ int main(int argc, char **argv) {
   owner_pid = getppid();
   char native[PATH_MAX];
   if (native_path(native, sizeof(native))) { fputs("Cannot locate Device Deck's native camera helper.\n", stderr); return 1; }
-  if (argc == 3 && !strcmp(argv[1], "--broker")) return broker(argv[2], native);
+  if (argc == 3 && !strcmp(argv[1], "--broker")) return broker(argv[2], native, geteuid(), NULL);
+  if (argc >= 4 && !strcmp(argv[1], "--share-usb")) {
+    uid_t host;
+    char name[PATH_MAX];
+    if (argc > 67 || account_uid(argv[2], &host) || desktop_socket(geteuid(), 1, name, sizeof(name))) return 64;
+    return broker(name, native, host, argv + 3);
+  }
+  uid_t desktop = 0;
+  if (argc >= 4 && !strcmp(argv[1], "--desktop")) {
+    if (account_uid(argv[2], &desktop)) return 64;
+    argc -= 2; argv += 2;
+  }
   unsigned char command = argc == 2 && !strcmp(argv[1], "list") ? 'L' :
     argc == 3 && !strcmp(argv[1], "stream") ? 'S' : argc == 3 && !strcmp(argv[1], "clipboard") ? 'C' : 0;
   const char *argument = argc == 3 ? argv[2] : "";
@@ -322,7 +366,8 @@ int main(int argc, char **argv) {
     fputs("Use list, stream ID, or clipboard ABSOLUTE_PATH.\n", stderr); return 64;
   }
   const char *system_service = getenv("DEVICE_DECK_SYSTEM_SERVICE");
-  if (system_service && !strcmp(system_service, "1")) return proxy(command, argument);
+  if (desktop && command == 'C') return 64;
+  if (desktop || (system_service && !strcmp(system_service, "1"))) return proxy(command, argument, desktop);
   argv[0] = native;
   execv(native, argv);
   perror("Cannot open Device Deck's native camera helper"); return 127;

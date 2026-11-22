@@ -1,4 +1,4 @@
-import { DeckError, type Observation } from "../../core/src/local/types";
+import { DeckError, type Observation, type SourceConfig } from "../../core/src/local/types";
 import type { DetectedCard } from "../../core/src/capture-cards";
 import { run } from "./process";
 
@@ -11,6 +11,7 @@ export class CameraDiscovery {
   private devices: DetectedCard[] = [];
   private observedAt: number | null = null;
   private error: string | null = null;
+  private desktopErrors?: Map<number | undefined, string>;
   private startedAt = -Infinity;
   private nextRetryAt = 0;
   private failures = 0;
@@ -26,6 +27,7 @@ export class CameraDiscovery {
     private helper: string,
     private execute: typeof run = run,
     private now: () => number = Date.now,
+    private sources: () => SourceConfig[] = () => [],
     private ttl = 30_000,
     private cooldown = 5_000,
     private deadline = 25_000,
@@ -43,6 +45,37 @@ export class CameraDiscovery {
   }
 
   stats() { return { ...this.counters, queued: this.gateQueue.length, initializing: this.gateActive }; }
+
+  observationFor(desktop: number | undefined, observation: Observation): Observation {
+    if (!this.desktopErrors || !observation.error) return observation;
+    const error = this.desktopErrors.get(desktop) || null;
+    return { ...observation, error, stale: Boolean(error) || this.invalidated || this.now() - (observation.observedAt ?? 0) >= this.ttl };
+  }
+
+  private async listDesktop(uid: number | undefined, signal: AbortSignal): Promise<DetectedCard[]> {
+    const args = uid === undefined ? ["list"] : ["--desktop", String(uid), "list"];
+    const result = await this.execute(this.helper, args, 5_000, { signal });
+    const parsed: unknown = JSON.parse(result.stdout.toString());
+    if (!Array.isArray(parsed) || !parsed.every(card => card && typeof card.uniqueId === "string" && card.uniqueId.length && typeof card.name === "string"))
+      throw new Error("Camera discovery returned invalid device data.");
+    return parsed.map(card => ({ uniqueId: card.uniqueId, name: card.name, ...(typeof card.inUse === "string" ? { inUse: card.inUse } : {}) }));
+  }
+
+  private async collect(signal: AbortSignal) {
+    const routed = new Map(this.sources().filter(s => s.kind === "usb" && s.uniqueId && s.captureDesktopUid !== undefined).map(s => [s.uniqueId!, s.captureDesktopUid!]));
+    const desktops = [undefined, ...new Set(routed.values())];
+    const results = await Promise.allSettled(desktops.map(uid => this.listDesktop(uid, signal)));
+    const devices: DetectedCard[] = [];
+    const errors = new Map<number | undefined, string>();
+    for (const [i, result] of results.entries()) {
+      const uid = desktops[i];
+      if (result.status === "fulfilled") devices.push(...result.value.filter(card => routed.get(card.uniqueId) === uid));
+      else errors.set(uid, (uid === undefined ? "" : `USB desktop ${uid}: `) + (result.reason instanceof Error ? result.reason.message : String(result.reason)));
+    }
+    const detail = [...errors.values()].join("; ");
+    if (errors.size === results.length) throw new Error(detail);
+    return { devices, errors, error: detail || null };
+  }
 
   /** Invalidation expires the observation, never the global cooldown/backoff. */
   invalidate() { this.invalidated = true; }
@@ -62,14 +95,11 @@ export class CameraDiscovery {
       this.counters.active++;
       this.counters.peakActive = Math.max(this.counters.peakActive, this.counters.active);
       try {
-        const result = await this.execute(this.helper, ["list"], 5_000, { signal });
-        const parsed: unknown = JSON.parse(result.stdout.toString());
-        if (!Array.isArray(parsed) || !parsed.every((card) => card && typeof card.uniqueId === "string" && card.uniqueId.length && typeof card.name === "string"))
-          throw new Error("Camera discovery returned invalid device data.");
-        // Retain only the supported data contract; callers cannot mutate our cache.
-        this.devices = parsed.map((card) => ({ uniqueId: card.uniqueId, name: card.name, ...(typeof card.inUse === "string" ? { inUse: card.inUse } : {}) }));
+        const observation = await this.collect(signal);
+        this.devices = observation.devices;
+        this.desktopErrors = observation.errors;
         this.observedAt = this.now();
-        this.error = null;
+        this.error = observation.error;
         this.failures = 0;
         this.nextRetryAt = 0;
         this.invalidated = false;
@@ -78,6 +108,7 @@ export class CameraDiscovery {
         this.counters.lastDurationMs = Math.max(0, this.now() - this.startedAt);
       }
     }, AbortSignal.timeout(this.deadline), true).catch((error) => {
+      this.desktopErrors = undefined;
       this.error = (error as Error).message;
       this.counters.failures++;
       const delays = [5_000, 15_000, 30_000, 60_000];

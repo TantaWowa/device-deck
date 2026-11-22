@@ -46,6 +46,8 @@ export function validateConfig(value: unknown, previousDevices?: readonly Device
       fail("invalid-config", "USB sources require a stable uniqueId.");
     if (s.kind === "usb" && c.ignoredCaptureCardIds.includes(s.uniqueId!))
       fail("invalid-config", "A deleted capture card cannot remain configured.");
+    if (s.kind !== "usb" && s.captureDesktopUid !== undefined)
+      fail("invalid-config", "Only USB inputs can be shared from a desktop.");
     if (s.kind === "native" && !s.deviceId)
       fail("invalid-config", "Native sources require a deviceId.");
     const identity = sourceIdentity(s);

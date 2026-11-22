@@ -85,6 +85,7 @@ export const sourceSchema = z
     kind: z.enum(["usb", "native"]),
     deviceId: z.string().optional(),
     uniqueId: z.string().optional(),
+    captureDesktopUid: z.number().int().min(501).max(4294967294).optional(),
   })
   .strict();
 export type SourceConfig = z.infer<typeof sourceSchema>;

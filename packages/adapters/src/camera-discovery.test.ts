@@ -124,7 +124,7 @@ test("a pending listing gets the next initialization slot and queued deadline fa
   await discovery.close();
 
   const blocked = deferred(), running = deferred();
-  const short = new CameraDiscovery("camera", async () => { throw new Error("Must not enumerate"); }, Date.now, 30_000, 5000, 20);
+  const short = new CameraDiscovery("camera", async () => { throw new Error("Must not enumerate"); }, Date.now, () => [], 30_000, 5000, 20);
   const capture = short.initialize(async () => { running.resolve(); await blocked.promise; });
   await running.promise;
   // A live timer stands in for the active native helper during the deadline.
@@ -202,4 +202,23 @@ test("retained camera facts are display-only after a failed admission probe", as
     assert.equal(display.observation?.stale, true);
     assert.match(display.observation!.error!, /unavailable/);
   } finally { await adapters.close(); }
+});
+
+test("shared USB desktop discovery keeps host cards and filters each desktop to its configured hardware", async () => {
+  let offline = false;
+  let now = 0;
+  const discovery = new CameraDiscovery("camera", async (_, args) => {
+    if (args[0] === "list") return response([...cards, { uniqueId: "shared", name: "Host view" }]);
+    assert.deepEqual(args, ["--desktop", "501", "list"]);
+    if (offline) throw new Error("Desktop offline");
+    return response([{ uniqueId: "shared", name: "Desktop card" }, { uniqueId: "private", name: "Private" }]);
+  }, () => now, () => [{ id: "usb-card", name: "Shared", kind: "usb", uniqueId: "shared", captureDesktopUid: 501 }]);
+  assert.deepEqual((await discovery.read()).devices.map(c => c.name), ["Camera", "Desktop card"]);
+  offline = true; now = 31_000;
+  const next = await discovery.read();
+  assert.deepEqual(next.devices, cards);
+  assert.match(next.error!, /501.*Desktop offline/);
+  assert.equal(discovery.observationFor(undefined, next).error, null);
+  assert.match(discovery.observationFor(501, next).error!, /Desktop offline/);
+  await discovery.close();
 });

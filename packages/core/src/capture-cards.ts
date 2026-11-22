@@ -47,6 +47,7 @@ function physicalCard(card: SourceConfig): SourceConfig {
     name: card.name,
     kind: card.kind,
     uniqueId: card.uniqueId,
+    ...(card.captureDesktopUid !== undefined && { captureDesktopUid: card.captureDesktopUid }),
   });
   if (!parsed.success || !card.id.trim() || !card.name.trim())
     throw new Error("USB capture card details are invalid.");

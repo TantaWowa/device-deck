@@ -38,7 +38,7 @@ export class ProbeScheduler {
           signal.removeEventListener("abort", task.cancel);
           if (signal.aborted) { reject(new DeckError("probe-cancelled", "Discovery was cancelled.", 499)); this.drain(); return; }
           this.active++; this.peak = Math.max(this.peak, this.active);
-          const category = command.endsWith("deck-camera") && args[0] === "list" ? "cameraList"
+          const category = command.endsWith("deck-camera") && args.at(-1) === "list" ? "cameraList"
             : args[0] === "simctl" && args[1] === "list" ? "simulatorList"
             : args[0] === "simctl" && args[1] === "bootstatus" ? "simulatorReadiness" : "other";
           const counters = this.commands[category], began = performance.now();
