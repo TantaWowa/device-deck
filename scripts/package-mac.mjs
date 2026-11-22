@@ -209,6 +209,12 @@ if (hasMedia) {
   await writeFile(manifestFile, JSON.stringify(manifest, null, 2) + "\n");
 }
 sign(app, "native/macos/entitlements.plist");
+const preferencesLabel = "com.tantawowa.device-deck.simulator-preferences";
+const library = path.join(payload, "Library");
+await mkdir(path.join(library, "PrivilegedHelperTools"), { recursive: true });
+await mkdir(path.join(library, "LaunchDaemons"), { recursive: true });
+await cp(path.join(resources, "build/native/deck-simulator-preferences"), path.join(library, "PrivilegedHelperTools", preferencesLabel));
+await cp(`native/macos/${preferencesLabel}.plist`, path.join(library, "LaunchDaemons", `${preferencesLabel}.plist`));
 exec("/usr/bin/codesign", ["--verify", "--deep", "--strict", "--verbose=2", app]);
 for (const [filename, data] of [["preinstall", preinstall], ["postinstall", postinstall]]) {
   await writeFile(path.join(scripts, filename), data, { mode: 0o755 });

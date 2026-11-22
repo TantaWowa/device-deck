@@ -143,6 +143,7 @@ export class DeckService {
     private readonly licensingOverride?: EntitlementService,
     groupReadiness: Partial<GroupReadinessPolicy> = {},
     private readonly simulatorMemoryProfile?: string,
+    private readonly repairSimulatorPreferences?: () => Promise<void>,
   ) {
     this.config = new ConfigStore(configFile);
     this.adapters = adapters || new Adapters(() => this.config.config);
@@ -164,18 +165,37 @@ export class DeckService {
       helperIdentity: () => JSON.stringify(this.config.config.tools),
     });
   }
+  private async checkSimulatorPreferences(device?: DeviceConfig) {
+    if (!this.repairSimulatorPreferences || (device && device.connection.type !== "simulator")) return;
+    const prefix = "Apple simulator preferences: ";
+    let failure: string | undefined;
+    try {
+      await this.repairSimulatorPreferences();
+    } catch (error) {
+      failure = prefix + (error as Error).message;
+    }
+    this.diagnostics = this.diagnostics.filter((message) => !message.startsWith(prefix));
+    if (failure) {
+      this.diagnostics.push(failure);
+      fail("simulator-preferences", failure, 503);
+    }
+  }
   async init() {
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
     await this.config.load();
     await this.licensing.init();
     this.store = new Store(path.join(this.directory, "state.sqlite"));
+    await this.checkSimulatorPreferences().catch(() => {});
     await this.recover();
     this.diagnostics.push(...(await this.adapters.diagnostics()));
     this.timer = setInterval(() => {
       void this.expire().catch((e) => this.diagnostics.push(String(e)));
     }, 1000);
     this.timer.unref();
-    this.warmTimer = setInterval(() => void this.reapWarmPool(), 60_000);
+    this.warmTimer = setInterval(() => {
+      void this.reapWarmPool();
+      void this.checkSimulatorPreferences().catch(() => {});
+    }, 60_000);
     this.warmTimer.unref();
   }
   warmPool() {
@@ -276,6 +296,7 @@ export class DeckService {
     configured: DeviceConfig,
     preparation: GroupPreparation,
   ) {
+    await this.checkSimulatorPreferences(configured);
     const deadline = Date.now() + this.groupReadiness.timeoutMs;
     let unavailable: Device | undefined;
     let identityError: unknown;
@@ -749,6 +770,7 @@ export class DeckService {
           if (!d.online) fail("device-offline", d.healthDetail, 409);
           if (!matchReservationDevices(this.decorate([d]), this.store.sessions(), args.selector, this.config.config.settings.defaultAndroidAvdMemoryProfile).length)
             fail("no-match", "The device no longer matches the requested state or capabilities. Refresh and select it again.", 409);
+          await this.checkSimulatorPreferences(d);
           let device: DeviceConfig = d;
           if (supportsSimulatorLifecycle(d) && d.connection.type === "adb") {
             const configured = this.device(d.id);
@@ -861,6 +883,7 @@ export class DeckService {
           const entries = await Promise.all(
             existing.members.map(async (member) => {
               const configured = this.device(member.deviceId);
+              await this.checkSimulatorPreferences(configured);
               const inspected = await this.adapters.inspect(configured);
               if (!inspected.online)
                 fail(
@@ -1375,6 +1398,7 @@ export class DeckService {
           );
           try {
             // Learn an existing emulator's AVD only from its exact live ADB transport.
+            if (args.action === "launch") await this.checkSimulatorPreferences(device);
             const resolved = await this.adapters.prepareSimulator(device);
             const next = structuredClone(this.config.config);
             const connection = device.connection.type === "adb" && resolved.connection.type === "adb"
@@ -1496,6 +1520,7 @@ export class DeckService {
               // Reset may stop the device before a later erase step fails.
               // A subsequent manual boot must not inherit old pool ownership.
               if (action === "reset") this.store.dropWarmDevice(target.id);
+              if (action !== "reset") await this.checkSimulatorPreferences(target);
               const result = await this.adapters.cleanupDevice(target, action);
               if (result.state === "shutdown") this.store.dropWarmDevice(target.id);
               this.store.event({
@@ -1555,6 +1580,7 @@ export class DeckService {
                   const previous = this.store.lockReason(id);
                   this.store.lock(id, "Restart in progress");
                   try {
+                    await this.checkSimulatorPreferences(d);
                     await this.adapters.restart(d);
                   } finally {
                     this.store.lock(id, previous || null);

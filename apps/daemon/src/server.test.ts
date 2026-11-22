@@ -130,6 +130,7 @@ async function setup(
     retryIntervalMs?: number;
     sleep?: (ms: number) => Promise<void>;
   } = {},
+  repairSimulatorPreferences?: () => Promise<void>,
 ) {
   const dir = await mkdtemp(path.join(os.tmpdir(), "deck-service-"));
   const adapters = new TestAdapters(),
@@ -143,6 +144,7 @@ async function setup(
     licensed?.manager ?? new LicenseManager(dir),
     groupReadiness,
     path.join(dir, "simslim-profile.json"),
+    repairSimulatorPreferences,
   );
   await deck.init();
   const c = structuredClone(deck.config.config);
@@ -459,6 +461,25 @@ const reserveWarmGroup = (deck: DeckService, groupId: string, selector: Record<s
   }) as Promise<any>;
 const releaseWarmGroup = (deck: DeckService, reserved: any) =>
   deck.execute("sessions.releaseGroup", { groupId: reserved.groupId, leaseToken: reserved.leaseToken });
+
+test("simulator preferences block Apple handoff until repair, leaving Android available", async (t) => {
+  let blocked = true;
+  const { deck, cleanup } = await setup(false, {}, async () => {
+    if (blocked) throw new Error("simulators still running");
+  });
+  t.after(cleanup);
+  assert.ok(deck.diagnostics.some(message => message.includes("simulators still running")));
+  await useSimulator(deck);
+  const android = await reserve(deck, "two");
+  await assert.rejects(reserve(deck), /Apple simulator preferences/);
+  await assert.rejects(reserveWarmGroup(deck, "preferences-blocked", { device: "one" }), /Apple simulator preferences/);
+  assert.ok(deck.store.sessions().every(session => session.deviceId !== "one" || session.state === "closed"));
+  await deck.execute("sessions.release", { sessionId: android.session.id, leaseToken: android.leaseToken });
+  blocked = false;
+  const apple = await reserve(deck);
+  assert.ok(!deck.diagnostics.some(message => message.includes("Apple simulator preferences")));
+  await deck.execute("sessions.release", { sessionId: apple.session.id, leaseToken: apple.leaseToken });
+});
 
 test("single simulator reservations verify before handoff, release a failed lease and allow independent reservations", async (t) => {
   const { dir, deck, adapters, cleanup } = await setup();

@@ -81,6 +81,8 @@ All allowed accounts reserve from the same inventory and observe the same exclus
 
 This shares Device Deck's API and locks, not macOS simulator homes. If a CI job passes a host-owned simulator UDID to native tools such as `xcodebuild` or `simctl`, those tools must execute under the host account as well.
 
+On a shared Mac, the installer adds a launchd job that checks the Apple simulator preferences cache at boot and once a minute. When the cache is missing or has incorrect permissions, Device Deck creates or replaces the 16 KB cache with group `staff` and mode `0660` after all Apple simulators have stopped. Device Deck also checks the cache before handing off an Apple simulator. If a repair is pending, the dashboard diagnostics and CLI report the reason. Close the running simulators and retry the reservation. Android and physical devices remain available.
+
 An explicit `DEVICE_DECK_HOME` or `DEVICE_DECK_CONFIG` selects a separate development profile. Omit those overrides when a runner should use the shared installation. `DEVICE_DECK_HEADLESS=1` remains available for isolated source/development profiles; it is not necessary for a runner that uses the shared service.
 
 The installer creates `/usr/local/bin/devdeck` only if that path is free or already points at the installed app. It preserves unrelated files and development links. If an older launcher wins in `PATH`, inspect it with `type -a devdeck`; the installed launcher is `/Applications/Device Deck.app/Contents/MacOS/devdeck`.
@@ -169,7 +171,7 @@ Configuration and captures survive the update. The installer rejects direct repl
 
 Keep the previous installer and back up the host's profile before any release that migrates stored data. Roll back only when the previous version can read the current data, or restore the matching profile backup. Include any custom configuration file and external capture folder in that backup plan.
 
-There is no graphical uninstaller yet. For a shared installation, an administrator must first finish all sessions, stop and remove the LaunchDaemon registration, then remove the app and its CLI link. Preserve the host's profile and captures unless their removal is explicitly wanted. Do not use the old `devdeck service uninstall` command as a shared-service uninstaller. For an older per-user installation, that command removes its login service before the app is moved to Trash.
+There is no graphical uninstaller yet. For a shared installation, an administrator must first finish all sessions, stop and remove the LaunchDaemon registration, then remove the app and its CLI link. Also boot out `system/com.tantawowa.device-deck.simulator-preferences` and remove its matching plist from `/Library/LaunchDaemons` and executable from `/Library/PrivilegedHelperTools`. Preserve the host's profile and captures unless their removal is explicitly wanted. Do not use the old `devdeck service uninstall` command as a shared-service uninstaller. For an older per-user installation, that command removes its login service before the app is moved to Trash.
 
 ## Clean-Mac acceptance
 

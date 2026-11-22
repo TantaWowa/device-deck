@@ -7,6 +7,7 @@ import { hostWithPort, MachineAuthority } from "./network";
 import { DeckService } from "./local/service";
 import { dataDirectory } from "../../../packages/core/src/local/paths";
 import { atomicWrite, expand } from "../../../packages/config/src";
+import { run } from "../../../packages/adapters/src/process";
 import { root } from "../../../packages/adapters/src";
 import { DeckConnections } from "./decks";
 import { LocalAccounts } from "./local-accounts";
@@ -56,6 +57,9 @@ export async function runDaemon(
     process.platform === "darwin"
       ? path.join(userInfo().homedir, "Library/Application Support/Device Deck/simslim-profile.json")
       : undefined,
+    sharedHost ? async () => {
+      await run(path.join(root, "build/native/deck-simulator-preferences"), ["repair"], 5000);
+    } : undefined,
   );
   let shutdown: (() => Promise<void>) | undefined;
   const servers: ReturnType<typeof createService>[] = [];
