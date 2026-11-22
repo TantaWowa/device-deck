@@ -47,14 +47,13 @@ export function createService(
     credentials?: ReturnType<typeof createBrowserCredentials>;
     decks?: DeckConnections;
     accounts?: LocalAccounts;
-    maintenance?: { updating: boolean; active: number };
   } = {},
 ) {
   const { tickets, browsers } = options.credentials || createBrowserCredentials();
   const authority = options.authority || new MachineAuthority(deck.directory);
   const connections = options.decks || new DeckConnections(deck.directory);
   const accounts = options.accounts || new LocalAccounts(deck.directory);
-  const maintenance = options.maintenance || { updating: false, active: 0 };
+  const maintenance = deck.maintenance;
   const handler: http.RequestListener = async (req, res) => {
     const reply = (status: number, body: unknown) => {
       res.writeHead(status, { "Content-Type": "application/json" });

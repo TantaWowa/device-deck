@@ -79,8 +79,7 @@ export async function runDaemon(
     const credentials = createBrowserCredentials();
     const decks = new DeckConnections(directory);
     const accounts = new LocalAccounts(directory, sharedHost);
-    const maintenance = { updating: false, active: 0 };
-    const server = createService(deck, token, path.join(root, "build/web"), { bindHost, tls, authority, credentials, decks, accounts, maintenance });
+    const server = createService(deck, token, path.join(root, "build/web"), { bindHost, tls, authority, credentials, decks, accounts });
     servers.push(server);
     const port = Number(
       process.env.DEVICE_DECK_PORT ?? deck.config.config.port,
@@ -96,7 +95,7 @@ export async function runDaemon(
     // management when the external listener uses TLS or a specific interface.
     let control = server;
     if (tls || !["127.0.0.1", "0.0.0.0"].includes(bindHost)) {
-      control = createService(deck, token, path.join(root, "build/web"), { authority, credentials, decks, accounts, maintenance, networkPort: address.port, bindHost });
+      control = createService(deck, token, path.join(root, "build/web"), { authority, credentials, decks, accounts, networkPort: address.port, bindHost });
       servers.push(control);
       await new Promise<void>((resolve, reject) => {
         control.once("error", reject);

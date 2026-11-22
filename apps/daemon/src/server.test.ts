@@ -2071,6 +2071,149 @@ test("failed group renewal changes no member or group expiry", async () => {
     await cleanup();
   }
 });
+test("daily app removal starts at the next host-local 03:00 and only cleans registered simulators and named AVDs", async t => {
+  let now = new Date(2030, 0, 4, 13).getTime();
+  t.mock.method(Date, "now", () => now);
+  const { deck, adapters, cleanup } = await setup();
+  const calls: string[] = [];
+  adapters.cleanupDevice = async (device, action) => {
+    assert.equal(action, "uninstall-apps");
+    calls.push(device.id);
+    return { removedApps: 2, state: "shutdown" as const };
+  };
+  try {
+    await useSimulator(deck);
+    const config = structuredClone(deck.config.config);
+    config.devices.push(
+      { ...config.devices[1], id: "avd", name: "named AVD", captureSourceId: null, connection: { type: "adb", serial: "emulator-5556", avdName: "Phone", port: 5037 } },
+      { ...config.devices[1], id: "transient", name: "serial only", captureSourceId: null, connection: { type: "adb", serial: "emulator-5558", port: 5037 } },
+      { ...config.devices[1], id: "usb", name: "physical", kind: "physical", captureSourceId: null, connection: { type: "adb", serial: "usb", port: 5037 } },
+    );
+    await deck.execute("config.save", { config, revision: deck.config.revision });
+    await deck.runDailyAppCleanup();
+    assert.deepEqual(calls, []);
+    config.settings.dailySimulatorAppCleanup = true;
+    await deck.execute("config.save", { config, revision: deck.config.revision });
+    await deck.runDailyAppCleanup();
+    now = new Date(2030, 0, 5, 2, 59).getTime();
+    await deck.runDailyAppCleanup();
+    assert.deepEqual(calls, []);
+    now = new Date(2030, 0, 5, 3).getTime();
+    await Promise.all([deck.runDailyAppCleanup(), deck.runDailyAppCleanup()]);
+    assert.deepEqual([...calls].sort(), ["avd", "one"]);
+    await deck.runDailyAppCleanup();
+    assert.equal(calls.length, 2);
+    assert.equal(deck.store.events().filter(e => e.owner === "Daily cleanup" && e.detail === "Uninstalled 2 user apps").length, 2);
+    now = new Date(2030, 0, 8, 16).getTime();
+    config.devices[0].connection = { type: "simulator", os: "tvos", udid: "2EAB280F-D6E0-4510-AD1B-4E30E5E862AA" };
+    await deck.execute("config.save", { config, revision: deck.config.revision });
+    await deck.runDailyAppCleanup();
+    assert.deepEqual(calls.slice(2), ["avd"]);
+    config.settings.dailySimulatorAppCleanup = false;
+    await deck.execute("config.save", { config, revision: deck.config.revision });
+    config.settings.dailySimulatorAppCleanup = true;
+    await deck.execute("config.save", { config, revision: deck.config.revision });
+    await deck.runDailyAppCleanup();
+    assert.equal(calls.length, 3);
+  } finally { await cleanup(); }
+});
+
+test("daily app removal waits for idle admission and holds the device against new leases and service updates", async t => {
+  let now = new Date(2030, 0, 4, 1).getTime();
+  t.mock.method(Date, "now", () => now);
+  const { deck, adapters, cleanup } = await setup();
+  let start!: () => void, finish!: () => void;
+  const started = new Promise<void>(resolve => { start = resolve; });
+  const barrier = new Promise<void>(resolve => { finish = resolve; });
+  let calls = 0;
+  adapters.cleanupDevice = async () => { calls++; start(); await barrier; return { removedApps: 0, state: "booted" as const }; };
+  try {
+    await useSimulator(deck);
+    const config = structuredClone(deck.config.config);
+    config.settings.dailySimulatorAppCleanup = true;
+    await deck.execute("config.save", { config, revision: deck.config.revision });
+    now = new Date(2030, 0, 4, 3).getTime();
+    const lease = await reserve(deck);
+    await deck.runDailyAppCleanup();
+    await deck.execute("sessions.release", { sessionId: lease.session.id, leaseToken: lease.leaseToken });
+    const group = await reserveWarmGroup(deck, "test/daily/busy-group", { device: "one" });
+    const member = deck.store.session(group.devices.device.sessionId);
+    deck.store.putSession({ ...member, state: "closed" });
+    await deck.runDailyAppCleanup();
+    deck.store.putSession(member);
+    await releaseWarmGroup(deck, group);
+    deck.store.lock("one", "Maintenance");
+    await deck.runDailyAppCleanup();
+    assert.equal(deck.store.lockReason("one"), "Maintenance");
+    deck.store.lock("one", null);
+    const artifact = { id: "pending-capture", deviceId: "one", sessionId: lease.session.id, owner: "test", sourceId: "screen-one",
+      name: "video", path: "video.mp4", logPath: "video.log", kind: "recording" as const, mode: "clean" as const, tags: [],
+      createdAt: now, duration: 0, bytes: 0, status: "finalizing" as const, origin: "API" as const };
+    deck.store.putArtifact(artifact);
+    await deck.runDailyAppCleanup();
+    deck.store.putArtifact({ ...artifact, status: "interrupted" });
+    deck.store.worker(artifact.id, {});
+    await deck.runDailyAppCleanup();
+    deck.store.clearWorker(artifact.id);
+    const viewing = t.mock.method(deck.streams, "viewing", () => true);
+    await deck.runDailyAppCleanup();
+    viewing.mock.restore();
+    deck.maintenance.updating = true;
+    await deck.runDailyAppCleanup();
+    deck.maintenance.updating = false;
+    assert.equal(calls, 0);
+    const work = deck.runDailyAppCleanup();
+    await started;
+    assert.equal(deck.maintenance.active, 1);
+    await assert.rejects(reserve(deck), /Uninstalling apps/);
+    const attempted = await deck.execute("devices.cleanup", { ids: ["one"], action: "reset", confirmed: true }) as { ok: boolean }[];
+    assert.equal(attempted[0].ok, false);
+    finish();
+    await work;
+    assert.equal(deck.maintenance.active, 0);
+    assert.equal(deck.store.lockReason("one"), undefined);
+    assert.equal(calls, 1);
+  } finally { finish(); await cleanup(); }
+});
+
+test("daily app removal survives restart, catches up once after downtime and defers an interrupted attempt until the next day", async t => {
+  let now = new Date(2030, 0, 4, 13).getTime();
+  t.mock.method(Date, "now", () => now);
+  const fixture = await setup();
+  let deck = fixture.deck;
+  const calls: string[] = [];
+  fixture.adapters.cleanupDevice = async d => { calls.push(d.id); return { removedApps: 1, state: "shutdown" as const }; };
+  const restart = async () => {
+    await deck.close();
+    deck = new DeckService(fixture.dir, undefined, fixture.adapters, fixture.capture, new LicenseManager(fixture.dir));
+    await deck.init();
+  };
+  try {
+    await useSimulator(deck);
+    const config = structuredClone(deck.config.config);
+    config.settings.dailySimulatorAppCleanup = true;
+    await deck.execute("config.save", { config, revision: deck.config.revision });
+    now = new Date(2030, 0, 10, 7).getTime();
+    await restart();
+    await deck.runDailyAppCleanup();
+    await restart();
+    await deck.runDailyAppCleanup();
+    assert.deepEqual(calls, ["one"]);
+    now = new Date(2030, 0, 11, 4).getTime();
+    const [identity] = deck.store.dueAppCleanups(20300111);
+    assert.equal(deck.store.claimDailyAppCleanup(identity, "one", 20300111, "Daily simulator app cleanup"), true);
+    deck.store.lock("two", "Daily simulator app cleanup");
+    await restart();
+    assert.equal(deck.store.lockReason("one"), undefined);
+    assert.equal(deck.store.lockReason("two"), "Daily simulator app cleanup");
+    await deck.runDailyAppCleanup();
+    assert.equal(calls.length, 1);
+    now = new Date(2030, 0, 12, 3).getTime();
+    await deck.runDailyAppCleanup();
+    assert.equal(calls.length, 2);
+  } finally { await deck.close(); await rm(fixture.dir, { recursive: true, force: true }); }
+});
+
 test("device cleanup requires confirmation and rejects physical, reserved and locked targets", async () => {
   const { deck, adapters, cleanup } = await setup();
   const calls: string[] = [];

@@ -444,6 +444,9 @@
               "maximum": 5000,
               "default": 750
             },
+            "dailySimulatorAppCleanup": {
+              "type": "boolean"
+            },
             "defaultAndroidAvdMemoryProfile": {
               "type": "string",
               "enum": [
