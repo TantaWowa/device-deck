@@ -180,6 +180,23 @@ function fixture(initial: Entry[] = []) {
   return { emulator, state, calls, launches, signals, config, execute };
 }
 
+test("a shared Deck can enable CoreAudio for its full AVD while retaining the CI audio driver on other launches", async (t) => {
+  const variable = "DEVICE_DECK_FULL_AVD_AUDIO";
+  const previous = process.env[variable];
+  process.env[variable] = "coreaudio";
+  t.after(() => {
+    if (previous === undefined) delete process.env[variable];
+    else process.env[variable] = previous;
+  });
+  for (const tag of ["android-full-ram", "android-low-ram", "ci"]) {
+    const f = fixture();
+    await f.emulator.control({ ...device, tags: [tag] }, "launch");
+    const args = f.launches[0].args;
+    if (tag === "android-full-ram") assert.deepEqual(args.slice(args.indexOf("-audio"), args.indexOf("-audio") + 2), ["-audio", "coreaudio"]);
+    else assert.ok(!args.includes("-audio"));
+  }
+});
+
 test("android-low-ram cold starts preserve the headless renderer, ADB port and group ownership", async () => {
   const f = fixture();
   const tagged = { ...device, tags: ["ci", "android-low-ram"] };
