@@ -159,7 +159,7 @@ export async function verifySimulatorMemoryProfile(
         detail = "The helper did not confirm the requested UDID.";
         break;
       }
-      if (result.ok === true) return;
+      if (result.ok === true) return { kind: "apple-simslim" as const, udid };
       detail = "The helper reported profile drift.";
     }
     if (attempt < 5) await wait(3000);

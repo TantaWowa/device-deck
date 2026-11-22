@@ -294,9 +294,9 @@ export class DeckService {
       if (current.online) {
         try {
           const resolved = await this.adapters.verifyIdentity(current);
-          await this.adapters.verifySimulatorMemoryProfile(resolved, this.simulatorMemoryProfile);
+          const simulatorMemoryProfile = await this.adapters.verifySimulatorMemoryProfile(resolved, this.simulatorMemoryProfile);
           this.preparingGroup(groupId, preparation);
-          return { ...current, connection: resolved.connection };
+          return { device: { ...current, connection: resolved.connection }, simulatorMemoryProfile };
         } catch (error) {
           if (!isTransientGroupIdentityError(error)) throw error;
           identityError = error;
@@ -870,7 +870,7 @@ export class DeckService {
                 );
               const resolved = member.binding ??
                 await this.adapters.verifyIdentity(inspected);
-              await this.adapters.verifySimulatorMemoryProfile({ ...configured, connection: resolved.connection }, this.simulatorMemoryProfile);
+              const simulatorMemoryProfile = await this.adapters.verifySimulatorMemoryProfile({ ...configured, connection: resolved.connection }, this.simulatorMemoryProfile);
               return [
                 member.alias,
                 {
@@ -880,6 +880,7 @@ export class DeckService {
                   platform: resolved.platform,
                   kind: resolved.kind,
                   connection: resolved.connection,
+                  ...(simulatorMemoryProfile && { simulatorMemoryProfile }),
                   startedByGroup: member.startedByGroup,
                 },
               ] as const;
@@ -1096,7 +1097,7 @@ export class DeckService {
                   this.device(observed.id),
                   preparation,
                 );
-                return { alias, member, device: current };
+                return { alias, member, ...current };
               } catch (error) {
                 if (!preparation.cancelled) {
                   preparation.cancelled = true;
@@ -1168,7 +1169,7 @@ export class DeckService {
         }
         const devices = Object.fromEntries(
           prepared.map((result) => {
-            const { alias, device } = (result as PromiseFulfilledResult<any>).value;
+            const { alias, device, simulatorMemoryProfile } = (result as PromiseFulfilledResult<any>).value;
             const member = activated.members.find((item) => item.alias === alias)!;
             return [
               alias,
@@ -1179,6 +1180,7 @@ export class DeckService {
                 platform: device.platform,
                 kind: device.kind,
                 connection: device.connection,
+                ...(simulatorMemoryProfile && { simulatorMemoryProfile }),
                 startedByGroup: member.startedByGroup,
               },
             ];
