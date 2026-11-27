@@ -427,6 +427,33 @@ export class AndroidEmulators {
       return undefined;
     }
   }
+  private async closeAvd(d: DeviceConfig, port: number, pinTransport: boolean, ownership?: SimulatorLaunchOwnership) {
+    try {
+      const current = await this.locate(d);
+      if (!current) return ownership ? await this.closeOwnedProcess(d, ownership) : false;
+      if (!current.avdName) fail("emulator-identity-pending", "This emulator's AVD identity is not available yet. Wait and refresh before launching or closing it.", 409);
+      const { serial } = current;
+      const args = pinTransport
+        ? (await freezeAdbTransport(this.resolved(d, current), this.adb(), this.execute)).args
+        : ["-P", String(port), "-s", serial];
+      if (ownership && await this.currentOwnershipMarker(d, serial, ownership, args) !== ownership.marker)
+        fail("emulator-ownership-missing", "The running Android transport does not carry this launch's marker.", 409);
+      await this.execute(this.adb(), [...args, "emu", "kill"]);
+      for (let attempt = 0; attempt < 30; attempt++) {
+        if (!(await this.running(port)).some(entry => entry.serial === serial)) return true;
+        await this.sleep(1000);
+      }
+      fail("emulator-transition", "Android emulator is still closing. Refresh its status before trying again.", 409);
+    } catch (error) {
+      if (!ownership) throw error;
+      // ADB can stall during discovery, pinning, shutdown or verification. Its serial can be reused.
+      // Only a unique process with the saved launch marker and AVD name qualifies for host-side shutdown.
+      if (await this.closeOwnedProcess(d, ownership)) return true;
+      if (error instanceof DeckError && error.code === "emulator-identity-pending")
+        fail("emulator-ownership-missing", "No emulator process carries this launch's marker and AVD name.", 409);
+      throw error;
+    }
+  }
   async control(
     d: DeviceConfig,
     action: "launch" | "close",
@@ -439,112 +466,15 @@ export class AndroidEmulators {
     if (!isAndroidEmulator(d) || d.connection.type !== "adb")
       fail("unsupported-lifecycle", "This target is not an Android emulator.");
     const c = d.connection;
-    let current: Awaited<ReturnType<AndroidEmulators["running"]>>[number] | undefined;
-    try {
-      current = await this.locate(d);
-    } catch (error) {
-      if (
-        action !== "close" ||
-        !ownership ||
-        !(error instanceof DeckError) ||
-        error.code !== "emulator-identity-pending"
-      )
-        throw error;
-      const changed = await this.closeOwnedProcess(d, ownership);
-      if (!changed)
-        fail(
-          "emulator-ownership-missing",
-          "An unidentified emulator is present, but it does not carry this reservation group's launch marker. Cleanup will not stop an unrelated process.",
-          409,
-        );
-      return {
-        deviceId: d.id,
-        action,
-        state: "shutdown" as const,
-        changed,
-      };
-    }
-    if (current && !current.avdName)
-      fail(
-        "emulator-identity-pending",
-        "This emulator's AVD identity is not available yet. Wait and refresh before launching or closing it.",
-        409,
-      );
-    if (action === "launch" && (launchOptions.wipeData || launchOptions.requireStopped) && current)
-      fail(
-        "emulator-transition",
-        "This AVD started again before cleanup. Close it before retrying; no data was erased.",
-        409,
-      );
     if (action === "close") {
-      if (!current) {
-        const changed = ownership
-          ? await this.closeOwnedProcess(d, ownership)
-          : false;
-        return {
-          deviceId: d.id,
-          action,
-          state: "shutdown" as const,
-          changed,
-        };
-      }
-      const serial = current.serial;
-      const transportArgs = launchOptions.pinTransport
-        ? (await freezeAdbTransport(this.resolved(d, current), this.adb(), this.execute)).args
-        : ["-P", String(c.port), "-s", serial];
-      if (
-        ownership &&
-        (await this.currentOwnershipMarker(d, serial, ownership, transportArgs)) !==
-          ownership.marker
-      ) {
-        const changed = await this.closeOwnedProcess(d, ownership);
-        if (!changed)
-          fail(
-            "emulator-ownership-missing",
-            "This AVD is running, but its transport does not carry this reservation group's launch marker. Cleanup will not stop a replacement process.",
-            409,
-          );
-        return {
-          deviceId: d.id,
-          action,
-          state: "shutdown" as const,
-          changed,
-        };
-      }
-      try {
-        await this.execute(this.adb(), [
-          ...transportArgs,
-          "emu",
-          "kill",
-        ]);
-      } catch (error) {
-        if (!ownership || !(await this.closeOwnedProcess(d, ownership)))
-          throw error;
-        return {
-          deviceId: d.id,
-          action,
-          state: "shutdown" as const,
-          changed: true,
-        };
-      }
-      for (let attempt = 0; attempt < 30; attempt++) {
-        if (
-          !(await this.running(c.port)).some((entry) => entry.serial === serial)
-        )
-          return {
-            deviceId: d.id,
-            action,
-            state: "shutdown" as const,
-            changed: true,
-          };
-        await this.sleep(1000);
-      }
-      fail(
-        "emulator-transition",
-        "Android emulator is still closing. Refresh its status before trying again.",
-        409,
-      );
+      const changed = await this.closeAvd(d, c.port, Boolean(launchOptions.pinTransport), ownership);
+      return { deviceId: d.id, action, state: "shutdown" as const, changed };
     }
+    const current = await this.locate(d);
+    if (current && !current.avdName)
+      fail("emulator-identity-pending", "This emulator's AVD identity is not available yet. Wait and refresh before launching or closing it.", 409);
+    if ((launchOptions.wipeData || launchOptions.requireStopped) && current)
+      fail("emulator-transition", "This AVD started again before cleanup. Close it before retrying; no data was erased.", 409);
     if (!c.avdName)
       fail(
         "emulator-identity-required",

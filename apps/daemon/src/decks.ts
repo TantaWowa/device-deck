@@ -1,3 +1,4 @@
+import { requestDeadline } from "../../../packages/core/src/request-deadline";
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
@@ -133,7 +134,7 @@ export class DeckConnections {
         : 180_000;
       return await fetch(`${deck.address}${route}`, {
         ...init, headers, redirect: "error",
-        signal: AbortSignal.any([AbortSignal.timeout(timeoutMs), ...(init.signal ? [init.signal] : [])]),
+        ...requestDeadline(timeoutMs, init.signal),
       });
     } catch {
       throw new DeckError("deck-unavailable", `Deck ${deck.name} is unreachable. No local operation was attempted. If a mutation was sent, inspect the host before retrying.`, 502);
