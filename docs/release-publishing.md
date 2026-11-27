@@ -1,6 +1,6 @@
 # Publish Mac installers
 
-The Mac distribution workflow builds Apple silicon and Intel packages on matching runners. Pull requests and runs without `publish` produce unsigned test artifacts. Publishing from `main` requires Developer ID signing, Apple notarization and bundled FFmpeg. Missing signing configuration fails the build; it does not publish an unsigned fallback.
+The Mac distribution workflow builds the arm64 package on an Apple silicon runner. Pull requests and runs without `publish` produce unsigned test artifacts. Publishing from `main` requires Developer ID signing, Apple notarization and bundled FFmpeg. Missing signing configuration fails the build; it does not publish an unsigned fallback.
 
 The `0.9.0-beta.2` installers predate this workflow and remain unsigned. Version `0.9.0-beta.3` introduces the signed setup. Record the [clean-Mac acceptance checks](macos-distribution.md#clean-mac-acceptance) separately and state any outstanding beta acceptance work in the release notes. Publishing a release does not replace older assets or deploy the website.
 
@@ -39,13 +39,13 @@ The signing helper imports the certificates into a temporary runner keychain, de
 ## Build and publish
 
 1. Increment `package.json` to a new version. Existing release assets are immutable and are not overwritten.
-2. Complete the clean-Mac checks for the candidate on each supported architecture. Keep any unverified behavior explicit in the release notes.
+2. Complete the clean-Mac checks for the candidate on Apple silicon. Keep any unverified behavior explicit in the release notes.
 3. Run **Mac distribution** on `main` with **publish** enabled.
-4. Confirm both architecture jobs and the publication job finish successfully. Check the published `.pkg`, `.pkg.sha256` and metadata JSON for both architectures.
+4. Confirm the arm64 package job and the publication job finish successfully. Check the published `.pkg`, `.pkg.sha256` and metadata JSON for arm64.
 
 Each job builds FFmpeg and its static dependencies from `scripts/distribution/media-sources.json`, verifies the source checksums, and includes matching sources, notices and the build recipe. Tests use that encoder bundle. The package proof checks the actual installer payload as well as the staged application's lifecycle.
 
-The packager signs executable code and the application, signs the installer, submits it to Apple's notarization service, staples the ticket and verifies it. The release gate checks both architectures, version, commit, bundled-media metadata, checksums and signing status before publication. An Apple signing or notarization failure must be resolved before publishing.
+The packager signs executable code and the application, signs the installer, submits it to Apple's notarization service, staples the ticket and verifies it. The release gate checks the arm64 architecture, version, commit, bundled-media metadata, checksums and signing status before publication. An Apple signing or notarization failure must be resolved before publishing.
 
 Downloads are public and require no Device Deck license. The graphical updater downloads and verifies the installer, waits for the shared service to become idle, requests administrator authorization, and restarts the service after installation. Old unsigned betas still require a manual installer run.
 

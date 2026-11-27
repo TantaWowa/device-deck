@@ -3,6 +3,7 @@ import { build as vite } from "vite";
 import { mkdir, rename, readFile, writeFile, rm } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
 import { prepareScrcpy } from "./prepare-scrcpy.mjs";
+if (process.platform !== "darwin" || process.arch !== "arm64") throw new Error("Device Deck requires Apple silicon and native arm64 Node.");
 const mode = "free";
 const { version } = JSON.parse(await readFile("package.json", "utf8"));
 // Remove stale success metadata before starting any part of the build.
@@ -16,7 +17,7 @@ execFileSync(
     "build/swift-cache",
     "-O",
     "-target",
-    `${process.arch === "arm64" ? "arm64" : "x86_64"}-apple-macosx14.0`,
+    "arm64-apple-macosx14.0",
     "-Xlinker",
     "-sectcreate",
     "-Xlinker",
@@ -33,12 +34,12 @@ execFileSync(
 );
 execFileSync("clang", [
   "-std=c11", "-D_DARWIN_C_SOURCE", "-Wall", "-Wextra", "-Werror", "-O2", "-target",
-  `${process.arch === "arm64" ? "arm64" : "x86_64"}-apple-macosx14.0`,
+  "arm64-apple-macosx14.0",
   "native/macos/camera-bridge.c", "-o", "build/native/deck-camera",
 ], { stdio: "inherit" });
 execFileSync("clang", [
   "-std=c11", "-D_DARWIN_C_SOURCE", "-Wall", "-Wextra", "-Werror", "-O2", "-target",
-  `${process.arch === "arm64" ? "arm64" : "x86_64"}-apple-macosx14.0`,
+  "arm64-apple-macosx14.0",
   "native/macos/simulator-preferences.c", "-o", "build/native/deck-simulator-preferences",
 ], { stdio: "inherit" });
 await bundle({

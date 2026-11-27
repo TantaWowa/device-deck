@@ -23,11 +23,9 @@ test("capture build includes required codecs and annotations without detecting h
   const flags = buildSteps("ffmpeg", config)[0][1];
   for (const flag of ["--disable-autodetect", "--disable-shared", "--enable-static", "--enable-gpl", "--enable-libx264", "--enable-libass", "--enable-zlib", "--enable-videotoolbox", "--pkg-config-flags=--static"]) assert.ok(flags.includes(flag), flag);
   assert.ok(!flags.includes("--enable-nonfree"));
-  for (const arch of ["arm64", "x64"]) {
-    const cmake = buildSteps("harfbuzz", { ...config, arch })[0][1];
-    assert.ok(cmake.includes(`-DCMAKE_OSX_ARCHITECTURES=${arch === "x64" ? "x86_64" : arch}`));
-    assert.ok(cmake.includes("-DBUILD_SHARED_LIBS=OFF"));
-    assert.ok(cmake.includes("-DHB_HAVE_GLIB=OFF"));
-    assert.ok(cmake.includes("-DHB_HAVE_ICU=OFF"));
-  }
+  const cmake = buildSteps("harfbuzz", config)[0][1];
+  assert.ok(cmake.includes("-DCMAKE_OSX_ARCHITECTURES=arm64"));
+  assert.ok(cmake.includes("-DBUILD_SHARED_LIBS=OFF"));
+  assert.ok(cmake.includes("-DHB_HAVE_GLIB=OFF"));
+  assert.ok(cmake.includes("-DHB_HAVE_ICU=OFF"));
 });

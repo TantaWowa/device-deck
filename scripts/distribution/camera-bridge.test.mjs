@@ -16,7 +16,7 @@ before(async () => {
   root = await mkdtemp(path.join(scratch, "camera-ipc-"));
   bridge = path.join(root, "deck-camera");
   await exec("clang", [`-DDEVICE_DECK_USB_ROOT="${root}"`, "-std=c11", "-D_DARWIN_C_SOURCE", "-Wall", "-Wextra", "-Werror", "-O2", "-target",
-    `${process.arch === "arm64" ? "arm64" : "x86_64"}-apple-macosx14.0`, "native/macos/camera-bridge.c", "-o", bridge]);
+    "arm64-apple-macosx14.0", "native/macos/camera-bridge.c", "-o", bridge]);
   // No AVFoundation, devices or real clipboard access occurs in this suite.
   const fixture = `#!${process.execPath}
 const fs = require('node:fs');

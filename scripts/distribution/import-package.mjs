@@ -16,7 +16,7 @@ export function requireExpectedCheckout(root, expectedCommit) {
 
 export function validateImportMetadata(metadata, { version, expectedCommit, expectedArch, runtime }) {
   const arch = metadata?.arch;
-  if (!["arm64", "x64"].includes(arch) || (expectedArch && arch !== expectedArch)) throw new Error("Imported architecture does not match the requested Mac architecture.");
+  if (arch !== "arm64" || (expectedArch && arch !== expectedArch)) throw new Error("Imported architecture does not match the requested Mac architecture.");
   const filename = `device-deck-${version}-macos-${arch}.pkg`;
   for (const [key, value] of Object.entries({ schemaVersion: 1, application: bundleId, version, arch,
     mode: "free", media: "bundled", signing: "ad-hoc", minimumOS, channel: version.includes("-") ? "beta" : "stable", file: filename })) {
@@ -97,7 +97,7 @@ export async function validateExpandedPackage(expanded, imported, root) {
     ["PackageInfo", "string(/pkg-info/bundle/@id)", bundleId],
     ["PackageInfo", "string(/pkg-info/bundle/@path)", "./Applications/Device Deck.app"],
   ]) if (xmlValue(path.join(component, file), xpath) !== value) throw new Error(`Imported package identity differs: ${xpath}`);
-  if (xmlValue(path.join(expanded, "Distribution"), "string(/installer-gui-script/options/@hostArchitectures)") !== (arch === "x64" ? "x86_64" : arch)) throw new Error("Imported installer architecture differs from its metadata.");
+  if (xmlValue(path.join(expanded, "Distribution"), "string(/installer-gui-script/options/@hostArchitectures)") !== "arm64") throw new Error("Imported installer architecture differs from its metadata.");
   await entries(payload, ["Applications", "Library"]);
   const label = "com.tantawowa.device-deck.simulator-preferences";
   const library = path.join(payload, "Library");

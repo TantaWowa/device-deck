@@ -14,15 +14,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   package:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - architecture: arm64
-            runner: macos-15
-          - architecture: x64
-            runner: macos-15-intel
-    runs-on: ${{ matrix.runner }}
+    runs-on: macos-15
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -36,11 +28,11 @@ jobs:
         if: github.event_name == 'workflow_dispatch' && inputs.publish
         run: test "$GITHUB_REF" = refs/heads/main
       - name: Install media build tools
-        run: brew install cmake pkgconf nasm
+        run: brew install cmake pkgconf
       - run: npm ci
       - name: Build pinned media dependencies
         run: |
-          media="$HOME/hope-scratch/device-deck-media/${{ matrix.architecture }}/bundle"
+          media="$HOME/hope-scratch/device-deck-media/arm64/bundle"
           node scripts/distribution/build-media.mjs --output "$media"
           echo "DEVICE_DECK_MEDIA_BUNDLE=$media" >> "$GITHUB_ENV"
           echo "$media/bin" >> "$GITHUB_PATH"
@@ -73,24 +65,24 @@ jobs:
       - name: Prove staged application lifecycle
         run: |
           version=$(node -p 'require("./package.json").version')
-          npm run proof:mac -- --app "work/distribution/staging/${{ matrix.architecture }}/payload/Applications/Device Deck.app" --package "work/distribution/device-deck-$version-macos-${{ matrix.architecture }}.pkg"
+          npm run proof:mac -- --app "work/distribution/staging/arm64/payload/Applications/Device Deck.app" --package "work/distribution/device-deck-$version-macos-arm64.pkg"
       - name: Collect release files
         run: |
           version=$(node -p 'require("./package.json").version')
-          name="device-deck-$version-macos-${{ matrix.architecture }}"
+          name="device-deck-$version-macos-arm64"
           mkdir release-assets
           cp "work/distribution/$name.pkg" "work/distribution/$name.pkg.sha256" "work/distribution/$name.json" release-assets/
       - name: Verify public release metadata and checksums
         if: github.event_name == 'workflow_dispatch' && inputs.publish && github.ref == 'refs/heads/main'
         run: |
           version=$(node -p 'require("./package.json").version')
-          node scripts/distribution/verify-release.mjs --directory release-assets --version "$version" --commit "$GITHUB_SHA" --arch "${{ matrix.architecture }}"
+          node scripts/distribution/verify-release.mjs --directory release-assets --version "$version" --commit "$GITHUB_SHA"
       - name: Remove temporary signing credentials
         if: always() && github.event_name == 'workflow_dispatch' && inputs.publish && github.ref == 'refs/heads/main'
         run: node scripts/distribution/ci-signing.mjs --cleanup
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: device-deck-${{ matrix.architecture }}
+          name: device-deck-arm64
           path: release-assets/*
           if-no-files-found: error
   publish:
@@ -109,10 +101,9 @@ jobs:
           package-manager-cache: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
-          pattern: device-deck-*
-          merge-multiple: true
+          name: device-deck-arm64
           path: installers
-      - name: Verify both public installers
+      - name: Verify the Apple silicon installer
         run: |
           version=$(node -p 'require("./package.json").version')
           node scripts/distribution/verify-release.mjs --directory installers --version "$version" --commit "$GITHUB_SHA"
@@ -126,7 +117,7 @@ jobs:
           cat > "$RUNNER_TEMP/device-deck-release-notes.md" <<'NOTES'
           Device Deck is free and open source under MIT. Local use needs no account or license.
 
-          These Mac installers are signed with Developer ID and notarized by Apple. They include Node, FFmpeg and ffprobe. Download the arm64 installer for Apple silicon or the x64 installer for Intel, install it, then open Device Deck from Applications.
+          Device Deck requires an Apple silicon Mac. Download the signed, Apple-notarized arm64 installer, install it, then open Device Deck from Applications. Node, FFmpeg and ffprobe are included.
 
           Already using the shared Mac service? Keep the menu-bar app open and choose Check for updates → Download update → Install and reopen. Finish active reservations and recordings first, or choose Install when idle. The app safely stops and restarts the shared service for all allowed accounts. Quitting the menu-bar app alone does not stop that service.
 

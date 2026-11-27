@@ -72,7 +72,7 @@ test("public updates select matching architecture and channel without credential
   assert.equal(beta?.manifest.version, "0.9.0-beta.10");
   assert.equal(beta?.manifest.signing, "developer-id-notarized");
   assert.equal((await checkMacUpdates({ transport, arch: "arm64", channel: "stable" }))?.manifest.version, "0.8.0");
-  assert.equal((await checkMacUpdates({ transport, arch: "x64" }))?.manifest.version, "1.0.0");
+  assert.equal(await checkMacUpdates({ transport, arch: "x64" }), undefined);
   assert.equal(await checkMacUpdates({ transport, arch: "riscv64" }), undefined);
   assert.equal(compareVersions("1.0.0", "1.0.0-beta.10"), 1);
 });

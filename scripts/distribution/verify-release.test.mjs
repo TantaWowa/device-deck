@@ -10,23 +10,23 @@ const version = "1.0.0-beta.1", commit = "a".repeat(40);
 async function fixture(t) {
   const directory = await mkdtemp(path.join(os.tmpdir(), "device-deck-release-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
-  for (const arch of ["arm64", "x64"]) {
-    const name = `device-deck-${version}-macos-${arch}`, file = `${name}.pkg`;
-    const bytes = Buffer.from(`package fixture ${arch}`), sha256 = createHash("sha256").update(bytes).digest("hex");
-    await writeFile(path.join(directory, file), bytes);
-    await writeFile(path.join(directory, `${file}.sha256`), `${sha256}  ${file}\n`);
-    await writeFile(path.join(directory, `${name}.json`), JSON.stringify({ schemaVersion: 1,
-      application: "com.tantawowa.device-deck", version, arch, mode: "free", media: "bundled",
-      signing: "developer-id-notarized", file, bytes: bytes.length, sha256,
-      build: { version, arch, mode: "free", commit } }));
-  }
+  const arch = "arm64";
+  const name = `device-deck-${version}-macos-${arch}`, file = `${name}.pkg`;
+  const bytes = Buffer.from(`package fixture ${arch}`), sha256 = createHash("sha256").update(bytes).digest("hex");
+  await writeFile(path.join(directory, file), bytes);
+  await writeFile(path.join(directory, `${file}.sha256`), `${sha256}  ${file}\n`);
+  await writeFile(path.join(directory, `${name}.json`), JSON.stringify({ schemaVersion: 1,
+    application: "com.tantawowa.device-deck", version, arch, mode: "free", media: "bundled",
+    signing: "developer-id-notarized", file, bytes: bytes.length, sha256,
+    build: { version, arch, mode: "free", commit } }));
   return { directory, version, commit };
 }
 
-test("release integrity gate accepts a complete matching pair and rejects missing architectures", async t => {
+test("release integrity gate accepts the arm64 package and rejects Intel artifacts", async t => {
   const options = await fixture(t);
-  assert.equal((await verifyReleaseArtifacts(options)).length, 6);
-  await rm(path.join(options.directory, `device-deck-${version}-macos-x64.pkg`));
+  assert.equal((await verifyReleaseArtifacts(options)).length, 3);
+  await assert.rejects(verifyReleaseArtifacts({ ...options, architectures: ["x64"] }), /arm64/);
+  await writeFile(path.join(options.directory, `device-deck-${version}-macos-x64.pkg`), "old Intel installer");
   await assert.rejects(verifyReleaseArtifacts(options), /exactly/);
 });
 

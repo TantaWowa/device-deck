@@ -36,6 +36,7 @@ function assetURL(value: unknown, version: string, filename: string) {
   } catch { return undefined; }
 }
 export async function checkMacUpdates({ channel = "beta", arch = process.arch, transport = fetch }: { channel?: "beta" | "stable"; arch?: string; transport?: typeof fetch } = {}): Promise<MacRelease | undefined> {
+  if (arch !== "arm64") return undefined;
   const response = await transport(`${repository}/releases?per_page=100`, { headers: { Accept: "application/vnd.github+json" }, signal: AbortSignal.timeout(15000) });
   if (!response.ok) throw new Error(`GitHub release lookup failed (${response.status}).`);
   const releases = await response.json();
@@ -90,7 +91,7 @@ export async function checkMacUpdates({ channel = "beta", arch = process.arch, t
 }
 export async function downloadMacUpdate(release: MacRelease, directory: string, transport = fetch) {
   const m = release.manifest;
-  if (path.basename(m.filename) !== m.filename || !/^device-deck-.*\.pkg$/.test(m.filename)) throw new Error("Invalid installer filename.");
+  if (path.basename(m.filename) !== m.filename || m.filename !== `device-deck-${m.version}-macos-arm64.pkg`) throw new Error("Invalid installer filename.");
   const url = assetURL(m.url, m.version, m.filename);
   if (!url || m.signing !== "developer-id-notarized" || !/^[a-f0-9]{64}$/.test(m.sha256) || !Number.isSafeInteger(m.bytes) || m.bytes < 1 || m.bytes > 2 * 1024 ** 3) throw new Error("Invalid signed installer manifest.");
   const response = await transport(url, { signal: AbortSignal.timeout(300000) });

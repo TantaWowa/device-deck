@@ -26,10 +26,10 @@ const { values } = parseArgs({ options: {
 } });
 if (values.help) {
   console.log(`Build a Device Deck macOS installer (macOS 14+).
-  node scripts/package-mac.mjs [--arch arm64|x64]
+  node scripts/package-mac.mjs [--arch arm64]
        [--media-bundle DIR] [--skip-build] [--output DIR] [--release]
   node scripts/package-mac.mjs --release --from-package PATH.pkg
-       --expected-commit FULL_SHA [--arch arm64|x64] [--output DIR]
+       --expected-commit FULL_SHA [--arch arm64] [--output DIR]
 
 Default: free app, ad-hoc signature, unsigned installer, external FFmpeg.
 --release requires Developer ID identities and notarization credentials:
@@ -47,7 +47,8 @@ Verify its GitHub run, artifact ID and archive digest before invoking this comma
   process.exit(0);
 }
 const mode = "free", release = values.release;
-if (process.platform !== "darwin") throw new Error("Build the Mac package on macOS.");
+if (process.platform !== "darwin" || process.arch !== "arm64") throw new Error("Device Deck requires Apple silicon and native arm64 Node.");
+if (values.arch && values.arch !== "arm64") throw new Error("Device Deck packages support only arm64.");
 const pkg = JSON.parse(await readFile("package.json", "utf8"));
 const runtime = JSON.parse(await readFile("scripts/distribution/node-runtime.json", "utf8"));
 if (values["from-package"]) {
@@ -58,7 +59,6 @@ const imported = values["from-package"] ? await inspectUnsignedPackage(values["f
   version: pkg.version, expectedCommit: values["expected-commit"], expectedArch: values.arch, runtime,
 }) : undefined;
 const arch = imported?.arch || values.arch || process.arch;
-if (!["arm64", "x64"].includes(arch) || (!imported && arch !== process.arch)) throw new Error("Build each package on its target architecture; use --from-package to sign a verified build from another Mac.");
 const hasMedia = Boolean(imported || values["media-bundle"]);
 const applicationIdentity = process.env.DEVICE_DECK_APPLICATION_IDENTITY;
 const installerIdentity = process.env.DEVICE_DECK_INSTALLER_IDENTITY;
@@ -158,17 +158,17 @@ if (imported) {
     await cp(source, path.join(resources, "media"), { recursive: true });
   }
   exec("/usr/bin/xcrun", ["swiftc", "-module-cache-path", path.join(root, "build/swift-cache"), "-O", "-target",
-    `${arch === "arm64" ? "arm64" : "x86_64"}-apple-macosx${minimumOS}`, "native/macos/app.swift", "-o", path.join(contents, "MacOS/Device Deck")]);
+    `arm64-apple-macosx${minimumOS}`, "native/macos/app.swift", "-o", path.join(contents, "MacOS/Device Deck")]);
   exec("/usr/bin/xcrun", ["swiftc", "-module-cache-path", path.join(root, "build/swift-cache"), "-O", "-target",
-    `${arch === "arm64" ? "arm64" : "x86_64"}-apple-macosx${minimumOS}`, "native/macos/service-manager.swift", "-o", path.join(contents, "MacOS/device-deck-service")]);
-  exec("/usr/bin/xcrun", ["clang", "-O2", "-target", `${arch === "arm64" ? "arm64" : "x86_64"}-apple-macosx${minimumOS}`,
+    `arm64-apple-macosx${minimumOS}`, "native/macos/service-manager.swift", "-o", path.join(contents, "MacOS/device-deck-service")]);
+  exec("/usr/bin/xcrun", ["clang", "-O2", "-target", `arm64-apple-macosx${minimumOS}`,
     "native/macos/cli.c", "-o", path.join(contents, "MacOS/devdeck")]);
   exec("/usr/bin/plutil", ["-lint", path.join(contents, "Info.plist")]);
 }
+const binaryFiles = await verifyMachOClosure(await walk(app), arch);
 const packagedNode = path.join(resources, "runtime/bin/node");
 const runtimeInfo = JSON.parse(execFileSync(packagedNode, ["-p", "JSON.stringify({version:process.version,arch:process.arch})"], { encoding: "utf8" }));
-if (runtimeInfo.version !== `v${runtime.version}` || runtimeInfo.arch !== arch) throw new Error("Bundled Node version or execution architecture mismatch. Intel imports require working x86 translation on Apple silicon.");
-const binaryFiles = await verifyMachOClosure(await walk(app), arch);
+if (runtimeInfo.version !== `v${runtime.version}` || runtimeInfo.arch !== arch) throw new Error("Bundled Node version or execution architecture mismatch.");
 // Installer ownership becomes root:wheel. Normalize permissions before signing
 // so a restrictive build-shell umask cannot make the installed app unreadable.
 async function normalizePermissions(directory) {
@@ -227,7 +227,7 @@ exec("/usr/bin/pkgbuild", ["--root", payload, "--identifier", bundleId, "--versi
   "--install-location", "/", "--ownership", "recommended", "--component-plist", components, "--scripts", scripts, component]);
 const installer = path.join(out, `${name}.pkg`);
 const distributionXML = path.join(staging, "Distribution.xml");
-await writeFile(distributionXML, `<?xml version="1.0" encoding="utf-8"?><installer-gui-script minSpecVersion="2"><title>Device Deck ${xml(pkg.version)}</title><options customize="never" require-scripts="true" hostArchitectures="${arch === "x64" ? "x86_64" : "arm64"}"/><domains enable_localSystem="true" enable_currentUserHome="false" enable_anywhere="false"/><allowed-os-versions><os-version min="${minimumOS}"/></allowed-os-versions><choices-outline><line choice="default"/></choices-outline><choice id="default" visible="false"><pkg-ref id="${bundleId}"/></choice><pkg-ref id="${bundleId}" version="${packageVersion}" onConclusion="none">component.pkg</pkg-ref></installer-gui-script>`);
+await writeFile(distributionXML, `<?xml version="1.0" encoding="utf-8"?><installer-gui-script minSpecVersion="2"><title>Device Deck ${xml(pkg.version)}</title><options customize="never" require-scripts="true" hostArchitectures="arm64"/><domains enable_localSystem="true" enable_currentUserHome="false" enable_anywhere="false"/><allowed-os-versions><os-version min="${minimumOS}"/></allowed-os-versions><choices-outline><line choice="default"/></choices-outline><choice id="default" visible="false"><pkg-ref id="${bundleId}"/></choice><pkg-ref id="${bundleId}" version="${packageVersion}" onConclusion="none">component.pkg</pkg-ref></installer-gui-script>`);
 exec("/usr/bin/productbuild", ["--distribution", distributionXML, "--package-path", staging,
   ...(release ? ["--sign", installerIdentity, "--timestamp"] : []), installer]);
 if (release) {
