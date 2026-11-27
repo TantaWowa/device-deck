@@ -1,3 +1,4 @@
+import { requestDeadline } from "./request-deadline";
 import { readFile } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import path from "node:path";
@@ -67,7 +68,7 @@ export async function callOperation(
       "X-Device-Deck": "local",
     },
     body: JSON.stringify(args),
-    signal: AbortSignal.any([AbortSignal.timeout(operation === "devices.cleanup" ? 1_800_000 : operation === "sessions.reserveGroup" ? 600000 : operation === "devices.simulator" ? 300000 : operation === "inventory" ? 30_000 : 180000), ...(signal ? [signal] : [])]),
+    ...requestDeadline(operation === "devices.cleanup" ? 1_800_000 : operation === "sessions.reserveGroup" ? 600000 : operation === "devices.simulator" ? 300000 : operation === "inventory" ? 30_000 : 180000, signal),
     redirect: "error",
   });
   const body = await response.json();

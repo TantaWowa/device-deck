@@ -42,6 +42,7 @@ function fixture(initial: Entry[] = []) {
     names: ["TV_API_35", "Pixel_35"],
     launchError: undefined as string | undefined,
     autoBoot: true,
+    adbUnavailable: false,
     deferLaunchIdentity: false,
     sleeps: 0,
     processes: [] as { pid: number; command: string }[],
@@ -72,6 +73,7 @@ function fixture(initial: Entry[] = []) {
   const execute: typeof run = async (command, args) => {
     calls.push({ command, args });
     let output: string;
+    if (state.adbUnavailable && command.endsWith("/adb")) throw new Error("adb: Timed out after 15 seconds.");
     if (command === "/bin/ps")
       output = state.processes
         .map((process) => `${process.pid} ${process.command}`)
@@ -400,6 +402,15 @@ test("group-owned Android launch cleanup uses its durable marker when ADB identi
     !f.calls.some((call) => call.args.includes("kill")),
     "offline ADB is not used for owned fallback cleanup",
   );
+});
+
+test("cold app cleanup restores the marked emulator when ADB stops responding", async () => {
+  const f = fixture();
+  f.state.processes.push({ pid: 4999, command: "/sdk/emulator/qemu-system -avd TV_API_35" });
+  f.state.onUninstall = () => { f.state.adbUnavailable = true; };
+  await assert.rejects(f.emulator.cleanup(device, "uninstall-apps"), /Timed out/);
+  assert.deepEqual(f.signals, [{ pid: 4123, signal: "SIGTERM" }]);
+  assert.deepEqual(f.state.processes.map(p => p.pid), [4999]);
 });
 
 test("group-owned Android cleanup verifies the live ADB transport marker before graceful close", async () => {
