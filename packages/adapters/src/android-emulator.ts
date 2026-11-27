@@ -350,6 +350,21 @@ export class AndroidEmulators {
       );
     return matches[0];
   }
+  async hasOwnedProcess(device: DeviceConfig, ownership: SimulatorLaunchOwnership) {
+    return Boolean(await this.ownedProcess(device, ownership));
+  }
+
+  private async ownsConsole(device: DeviceConfig, serial: string, ownership: SimulatorLaunchOwnership) {
+    const port = /^emulator-(\d+)$/.exec(serial)?.[1];
+    const pid = await this.ownedProcess(device, ownership);
+    if (!port || !pid) return false;
+    // Some images omit custom -prop values in the guest. Bind the ADB console port
+    // to the exact marker-bearing process before using its pinned transport.
+    const listeners = await this.execute("/usr/sbin/lsof",
+      ["-nP", "-a", "-p", String(pid), "-iTCP:" + port, "-sTCP:LISTEN", "-Fn"], 5000).catch(() => undefined);
+    return Boolean(listeners?.stdout.toString().split(/\r?\n/).some(line =>
+      line.startsWith("n") && line.endsWith(":" + port))) && await this.ownedProcess(device, ownership) === pid;
+  }
   private async closeOwnedProcess(
     d: DeviceConfig,
     ownership: SimulatorLaunchOwnership,
@@ -645,7 +660,8 @@ export class AndroidEmulators {
       // Verify identity on the same immutable transport used by every mutation.
       // A replacement AVD reusing this serial receives a different transport ID.
       const { args } = await freezeAdbTransport(target, this.adb(), this.execute);
-      if (ownership && (await this.currentOwnershipMarker(device, target.connection.serial, ownership, args)) !== ownership.marker)
+      if (ownership && (await this.currentOwnershipMarker(device, target.connection.serial, ownership, args)) !== ownership.marker &&
+          !await this.ownsConsole(device, target.connection.serial, ownership))
         fail("emulator-ownership-missing", "The temporary emulator was replaced during cleanup. No further apps will be removed.", 409);
       if (action === "uninstall-apps") {
         const packages = await androidUserApps(this.adb(), args, this.execute);

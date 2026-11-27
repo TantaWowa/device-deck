@@ -233,7 +233,10 @@ can freeze while its OS still answers. A stopped simulator is a normal state.
 The monitor takes a short lease to check an idle Roku and skips an occupied
 Roku. History records health transitions. After three consecutive unresponsive
 samples, the monitor rechecks an idle, restart-capable device under a lock.
-It attempts at most one restart per device per 30 minutes. An offline device
+It attempts at most one restart per device per 30 minutes. For a warm Android
+emulator with a hung ADB connection, it can stop the exact process it launched
+and boot that AVD again. A Roku software reboot requires the developer installer
+credentials described below and a responsive management interface. An offline device
 or a device without a restart transport requires operator attention.
 
 Enable **Remove apps installed during reservations** or set

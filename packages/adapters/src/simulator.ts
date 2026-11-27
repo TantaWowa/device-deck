@@ -309,7 +309,11 @@ async function shutdownSimulatorForCleanup(device: DeviceConfig, udid: string, e
   } catch (error) {
     if ((await simulatorState(device, execute, false)) !== "shutdown") throw error;
   }
-  const state = await simulatorState(device, execute, false);
+  let state = await simulatorState(device, execute, false);
+  for (let attempt = 0; attempt < 10 && (state === "stopping" || state === "starting"); attempt++) {
+    await new Promise(resolve => setTimeout(resolve, 250));
+    state = await simulatorState(device, execute, false);
+  }
   if (state !== "shutdown")
     fail("simulator-transition", `Simulator is ${state}; shutdown could not be verified.`, 409);
 }

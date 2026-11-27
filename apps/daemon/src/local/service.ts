@@ -2718,7 +2718,8 @@ export class DeckService {
           });
         }
         if ((device.connection.type === "roku" ? lease : !this.store.lockReason(device.id)) && !this.shuttingDown) {
-          const probe = await this.adapters.fleetProbe(device);
+          const owned = this.store.warmDevice(device.id)?.simulatorLaunch;
+          const probe = await this.adapters.fleetProbe(device, owned);
           state = probe.state;
           detail = probe.detail;
           failures = ["unresponsive", "offline"].includes(state) ? (previous?.state === state ? previous.failures + 1 : 1) : 0;
@@ -2735,12 +2736,18 @@ export class DeckService {
               });
               if (!claimed) return;
               try {
-                const confirm = await this.adapters.fleetProbe(device);
+                const ownership = this.store.warmDevice(device.id)?.simulatorLaunch;
+                const confirm = await this.adapters.fleetProbe(device, ownership);
                 if (confirm.state !== "unresponsive" || !confirm.restartable) {
                   state = confirm.state; detail = confirm.detail; failures = 0; return;
                 }
                 lastRestart = Date.now();
-                await this.adapters.restart(device);
+                if (ownership) {
+                  await this.adapters.simulator(device, "close", undefined, ownership);
+                  await this.adapters.simulator(device, "launch", async simulatorLaunch => {
+                    this.store.putWarmDevice({ deviceId: device.id, simulatorLaunch, lastUsedAt: Date.now() });
+                  });
+                } else await this.adapters.restart(device);
                 state = "restarting"; detail = "Restart requested after three failed health checks"; failures = 0;
               } finally {
                 this.maintenance.active--;

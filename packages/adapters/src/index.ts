@@ -714,9 +714,11 @@ export class Adapters {
     if (isAndroidEmulator(d)) return this.emulators.prepare(d);
     return d;
   }
-  async fleetProbe(device: DeviceConfig) {
+  async fleetProbe(device: DeviceConfig, ownership?: SimulatorLaunchOwnership) {
     const observed = await this.inspect(device);
     if (!observed.online) {
+      if (ownership && isAndroidEmulator(device) && await this.emulators.hasOwnedProcess(device, ownership))
+        return { state: "unresponsive", detail: "The Deck-owned emulator process is running but its guest is unavailable.", restartable: true };
       if (observed.connection.type === "simulator" && observed.simulatorState === "starting" &&
           await simulatorState(device, this.execute, false) === "booted")
         return { state: "unresponsive", detail: "CoreSimulator reports Booted but the OS readiness probe timed out.", restartable: true };

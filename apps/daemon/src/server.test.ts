@@ -53,6 +53,7 @@ class TestAdapters extends Adapters {
   constructor() {
     super(() => config);
   }
+  async prepareSimulator(device: DeviceConfig) { return device; }
   async diagnostics() {
     return [];
   }
