@@ -28,11 +28,11 @@ We are adding a [generic device plugin API](https://device-deck.tantawowa.com/do
 
 ## Install the Mac application
 
-Requires macOS 14 or later. [Download Device Deck 0.9.0-beta.3 for Apple silicon or Intel](https://device-deck.tantawowa.com/install). The signed, Apple-notarized installers include Node, FFmpeg, ffprobe and the dashboard. Normal installation and setup need no Terminal commands, Homebrew, restart or logout.
+Requires macOS 14 or later. [Download Device Deck 0.9.0-beta.6 for Apple silicon or Intel](https://device-deck.tantawowa.com/install). The signed, Apple-notarized installers include Node, FFmpeg, ffprobe and the dashboard. Normal installation and setup need no Terminal commands, Homebrew, restart or logout.
 
 Open Device Deck from Applications, choose **Start shared service**, and approve the administrator prompt. The core service starts immediately and runs at boot; **Open menu-bar app at login** controls the menu app used for camera access. Allow existing Mac accounts, including CI runners, from **Mac setup… → Mac account access**.
 
-Follow the [Mac setup walkthrough](https://device-deck.tantawowa.com/docs/install/) for permissions, device tools and updates from the app. See the [beta.3 release notes](https://github.com/TantaWowa/device-deck/releases/tag/v0.9.0-beta.3) for validation results and beta limitations, or the [Mac distribution guide](https://device-deck.tantawowa.com/docs/macos-distribution/) for packaging and service details. Older unsigned betas need the signed installer downloaded manually once.
+Follow the [Mac setup walkthrough](https://device-deck.tantawowa.com/docs/install/) for permissions, device tools and updates from the app. See the [beta.6 release notes](https://github.com/TantaWowa/device-deck/releases/tag/v0.9.0-beta.6) for validation results and beta limitations, or the [Mac distribution guide](https://device-deck.tantawowa.com/docs/macos-distribution/) for packaging and service details. Older unsigned betas need the signed installer downloaded manually once.
 
 ## Your first device session
 

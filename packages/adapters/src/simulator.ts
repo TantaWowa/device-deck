@@ -310,7 +310,7 @@ async function shutdownSimulatorForCleanup(device: DeviceConfig, udid: string, e
     if ((await simulatorState(device, execute, false)) !== "shutdown") throw error;
   }
   let state = await simulatorState(device, execute, false);
-  for (let attempt = 0; attempt < 10 && (state === "stopping" || state === "starting"); attempt++) {
+  for (let attempt = 0; attempt < 12 && state !== "shutdown" && state !== "unavailable"; attempt++) {
     await new Promise(resolve => setTimeout(resolve, 250));
     state = await simulatorState(device, execute, false);
   }

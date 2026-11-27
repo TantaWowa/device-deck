@@ -3911,3 +3911,27 @@ test("fleet health confirms repeated failures and restarts only an idle target, 
     await deck.execute("sessions.release", { sessionId: held.session.id, leaseToken: held.leaseToken });
   } finally { await cleanup(); }
 });
+
+test("physical reservation cleanup preserves existing and store-installed apps across expiry and idle time", async () => {
+  const { deck, adapters, cleanup } = await setup();
+  const apps = new Map([["existing-test", "test"], ["personal", "store"]]);
+  adapters.reservationApps = async () => ({
+    list: async (onlyTest = false) => [...apps].filter(([, kind]) => !onlyTest || kind === "test").map(([id]) => id),
+    remove: async id => { apps.delete(id); },
+  });
+  try {
+    const config = structuredClone(deck.config.config);
+    config.settings.reservationAppCleanup = true;
+    config.devices[0].kind = "physical";
+    await deck.execute("config.save", { config, revision: deck.config.revision });
+    const { session } = await reserve(deck);
+    apps.set("sideload", "test"); apps.set("new-store-app", "store");
+    deck.store.putSession({ ...deck.store.session(session.id), expiresAt: Date.now() - 1 });
+    await deck.expire();
+    assert.deepEqual([...apps.keys()], ["existing-test", "personal", "new-store-app"]);
+    apps.set("installed-between-reservations", "test");
+    const next = await reserve(deck);
+    await deck.execute("sessions.release", { sessionId: next.session.id, leaseToken: next.leaseToken });
+    assert.ok(apps.has("installed-between-reservations"));
+  } finally { await cleanup(); }
+});

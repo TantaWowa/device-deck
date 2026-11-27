@@ -1,3 +1,4 @@
+import { SerialQueue } from "../../config/src";
 import { androidUserApps, uninstallAndroidApp } from "./installed-apps";
 import os from "node:os";
 import path from "node:path";
@@ -26,6 +27,7 @@ export const isAndroidEmulator = (d: DeviceConfig) =>
 export const usesAndroidLowRamProfile = (d: DeviceConfig) =>
   isAndroidEmulator(d) && Boolean(d.tags?.includes("android-low-ram"));
 export class AndroidEmulators {
+  private cleanupQueues = new Map<number, SerialQueue>();
   private readyBoots = new Map<string, string>();
   constructor(
     private config: () => Config,
@@ -630,6 +632,14 @@ export class AndroidEmulators {
   async cleanup(d: DeviceConfig, action: "uninstall-apps" | "reset", keepApps?: ReadonlySet<string>) {
     if (!isAndroidEmulator(d) || d.connection.type !== "adb")
       fail("unsupported-cleanup", "Cleanup is supported only for Android emulators.");
+    // A cold guest briefly has an ADB serial but no identifiable AVD name.
+    // Do not launch another maintenance guest on that server during this interval.
+    const port = d.connection.port;
+    let queue = this.cleanupQueues.get(port);
+    if (!queue) { queue = new SerialQueue(); this.cleanupQueues.set(port, queue); }
+    return queue.run(() => this.cleanupAvd(d, action, keepApps));
+  }
+  private async cleanupAvd(d: DeviceConfig, action: "uninstall-apps" | "reset", keepApps?: ReadonlySet<string>) {
     const device = await this.prepare(d);
     if (device.connection.type !== "adb" || !device.connection.avdName)
       fail("emulator-identity-required", "Configure this emulator's exact AVD name before cleanup.", 409);
