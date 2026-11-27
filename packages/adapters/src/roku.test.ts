@@ -70,3 +70,24 @@ test("Roku ECP input sends an explicitly empty form POST accepted by physical Ul
     await new Promise<void>((r) => server.close(() => r()));
   }
 });
+
+test("Roku reservation tracks only the developer slot and verifies the serial on each inventory", async t => {
+  let xml = '<apps><app id="12">Store channel</app></apps>';
+  let serial = "lab";
+  t.mock.method(globalThis, "fetch", async (url: string) => new Response(url.endsWith("/query/device-info")
+    ? `<device-info><serial-number>${serial}</serial-number></device-info>` : xml));
+  const config = validateConfig({ schemaVersion: 1, devices: [], sources: [], settings: { folder: "/tmp" }, tools: {} });
+  const adapter = new Adapters(() => config);
+  try {
+    const apps = await adapter.reservationApps({
+      id: "lab", name: "lab", platform: "Roku", kind: "physical", model: "", visibility: "local", captureSourceId: null,
+      connection: { type: "roku", serial, host: "localhost" },
+    });
+    assert.deepEqual(await apps.list(), []);
+    xml = '<apps><app id="12">Store channel</app><app id="dev">New test</app></apps>';
+    assert.deepEqual(await apps.list(), ["dev"]);
+    await assert.rejects(apps.remove("12"), /Only the Roku sideload slot/);
+    serial = "replaced";
+    await assert.rejects(apps.remove("dev"), /serial changed/);
+  } finally { await adapter.close(); }
+});

@@ -1,3 +1,5 @@
+import { SerialQueue } from "../../config/src";
+import { androidUserApps, uninstallAndroidApp } from "./installed-apps";
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
@@ -25,6 +27,7 @@ export const isAndroidEmulator = (d: DeviceConfig) =>
 export const usesAndroidLowRamProfile = (d: DeviceConfig) =>
   isAndroidEmulator(d) && Boolean(d.tags?.includes("android-low-ram"));
 export class AndroidEmulators {
+  private cleanupQueues = new Map<number, SerialQueue>();
   private readyBoots = new Map<string, string>();
   constructor(
     private config: () => Config,
@@ -349,6 +352,21 @@ export class AndroidEmulators {
       );
     return matches[0];
   }
+  async hasOwnedProcess(device: DeviceConfig, ownership: SimulatorLaunchOwnership) {
+    return Boolean(await this.ownedProcess(device, ownership));
+  }
+
+  private async ownsConsole(device: DeviceConfig, serial: string, ownership: SimulatorLaunchOwnership) {
+    const port = /^emulator-(\d+)$/.exec(serial)?.[1];
+    const pid = await this.ownedProcess(device, ownership);
+    if (!port || !pid) return false;
+    // Some images omit custom -prop values in the guest. Bind the ADB console port
+    // to the exact marker-bearing process before using its pinned transport.
+    const listeners = await this.execute("/usr/sbin/lsof",
+      ["-nP", "-a", "-p", String(pid), "-iTCP:" + port, "-sTCP:LISTEN", "-Fn"], 5000).catch(() => undefined);
+    return Boolean(listeners?.stdout.toString().split(/\r?\n/).some(line =>
+      line.startsWith("n") && line.endsWith(":" + port))) && await this.ownedProcess(device, ownership) === pid;
+  }
   private async closeOwnedProcess(
     d: DeviceConfig,
     ownership: SimulatorLaunchOwnership,
@@ -611,9 +629,17 @@ export class AndroidEmulators {
     );
   }
 
-  async cleanup(d: DeviceConfig, action: "uninstall-apps" | "reset") {
+  async cleanup(d: DeviceConfig, action: "uninstall-apps" | "reset", keepApps?: ReadonlySet<string>) {
     if (!isAndroidEmulator(d) || d.connection.type !== "adb")
       fail("unsupported-cleanup", "Cleanup is supported only for Android emulators.");
+    // A cold guest briefly has an ADB serial but no identifiable AVD name.
+    // Do not launch another maintenance guest on that server during this interval.
+    const port = d.connection.port;
+    let queue = this.cleanupQueues.get(port);
+    if (!queue) { queue = new SerialQueue(); this.cleanupQueues.set(port, queue); }
+    return queue.run(() => this.cleanupAvd(d, action, keepApps));
+  }
+  private async cleanupAvd(d: DeviceConfig, action: "uninstall-apps" | "reset", keepApps?: ReadonlySet<string>) {
     const device = await this.prepare(d);
     if (device.connection.type !== "adb" || !device.connection.avdName)
       fail("emulator-identity-required", "Configure this emulator's exact AVD name before cleanup.", 409);
@@ -644,43 +670,16 @@ export class AndroidEmulators {
       // Verify identity on the same immutable transport used by every mutation.
       // A replacement AVD reusing this serial receives a different transport ID.
       const { args } = await freezeAdbTransport(target, this.adb(), this.execute);
-      if (ownership && (await this.currentOwnershipMarker(device, target.connection.serial, ownership, args)) !== ownership.marker)
+      if (ownership && (await this.currentOwnershipMarker(device, target.connection.serial, ownership, args)) !== ownership.marker &&
+          !await this.ownsConsole(device, target.connection.serial, ownership))
         fail("emulator-ownership-missing", "The temporary emulator was replaced during cleanup. No further apps will be removed.", 409);
       if (action === "uninstall-apps") {
-        // Older Android releases silently return an empty package list for
-        // --user all. Enumerate numeric user IDs so every profile is covered.
-        const users = await this.execute(this.adb(), [...args, "shell", "pm", "list", "users"], 30000);
-        if (users.stderr.trim())
-          fail("app-list-invalid", `Android could not list all user profiles: ${users.stderr.trim().slice(-600)}`, 502);
-        const userIds = new Set<string>();
-        for (const line of users.stdout.toString().split(/\r?\n/).map((value) => value.trim()).filter(Boolean)) {
-          if (line === "Users:") continue;
-          const match = /^UserInfo\{(\d+):.*\}(?:\s+.*)?$/.exec(line);
-          if (!match)
-            fail("app-list-invalid", "Android returned an invalid user-profile list. No apps were removed.", 502);
-          userIds.add(match[1]);
-        }
-        if (!userIds.size)
-          fail("app-list-invalid", "Android returned no user profiles. No apps were removed.", 502);
-        const packages = new Set<string>();
-        for (const userId of userIds) {
-          // -3 excludes system packages; adb uninstall removes each package for all users.
-          const listed = await this.execute(this.adb(), [...args, "shell", "pm", "list", "packages", "-3", "--user", userId], 30000);
-          if (listed.stderr.trim())
-            fail("app-list-invalid", `Android could not list apps for user ${userId}: ${listed.stderr.trim().slice(-600)}`, 502);
-          for (const line of listed.stdout.toString().split(/\r?\n/).map((value) => value.trim()).filter(Boolean)) {
-            const match = /^package:([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)$/.exec(line);
-            if (!match)
-              fail("app-list-invalid", "Android returned an invalid installed-app list. No apps were removed.", 502);
-            packages.add(match[1]);
-          }
-        }
+        const packages = await androidUserApps(this.adb(), args, this.execute);
         const errors: string[] = [];
         for (const appId of packages) {
+          if (keepApps?.has(appId)) continue;
           try {
-            const result = await this.execute(this.adb(), [...args, "uninstall", appId], 60000);
-            if (result.stdout.toString().trim() !== "Success")
-              throw new Error((result.stdout.toString().trim() || result.stderr.trim() || "Uninstall did not report success").slice(-400));
+            await uninstallAndroidApp(this.adb(), args, appId, this.execute);
             removedApps++;
           } catch (error) {
             errors.push(`${appId}: ${(error as Error).message}`);

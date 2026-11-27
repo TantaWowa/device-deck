@@ -1,4 +1,6 @@
-import { ANDROID_GESTURES, startScrcpy } from "./scrcpy";
+import { androidUserApps, uninstallAndroidApp } from "./installed-apps";
+import { dataDirectory } from "../../core/src/local/paths";
+import { ANDROID_GESTURES, freezeAdbTransport, startScrcpy } from "./scrcpy";
 import { androidAdbPort, androidBootReady, androidFeatures, avdInputMode, avdProfile } from "./android-state";
 import { IOS_GESTURES, startIdbInteractive } from "./interactive";
 import { openWda, startWdaInteractive, wdaScreen, wdaScreenshot, WDA_GESTURES } from "./webdriveragent";
@@ -6,7 +8,7 @@ import { observationAdapter, type ObservationHost } from "./device-observation";
 import type { DeviceInteraction } from "../../core/src/device-interaction";
 import type { InteractiveSource, VideoProfile } from "../../core/src/live";
 import { androidKeys, rokuKeys, hidKeys, iosHardwareKeys, deviceInputMode } from "../../core/src/remote";
-import { cleanupSimulator, controlSimulator, simulatorState, SimulatorInventory, verifySimulatorMemoryProfile, wakeSimulator, SIMULATOR_UNAVAILABLE_MESSAGE } from "./simulator";
+import { userInstalledSimulatorApps, cleanupSimulator, controlSimulator, simulatorState, SimulatorInventory, verifySimulatorMemoryProfile, wakeSimulator, SIMULATOR_UNAVAILABLE_MESSAGE } from "./simulator";
 import { AndroidEmulators, isAndroidEmulator, usesAndroidLowRamProfile } from "./android-emulator";
 export { usesAndroidLowRamProfile } from "./android-emulator";
 import { idbInput as sharedIdbInput, IdbInput } from "./idb-input";
@@ -20,7 +22,7 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID, createHash } from "node:crypto";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import { run, available, start, stop } from "./process";
 import { healthProbeRunner, ProbeScheduler } from "./health-probes";
@@ -582,6 +584,7 @@ export class Adapters {
           );
         result.online = true;
         result.capabilities.push("key", "text");
+        if (existsSync(path.join(dataDirectory(), "roku-developer.netrc"))) result.capabilities.push("restart");
       }
       if (c.type === "simulator") {
         result.simulatorState = await (inventory ? this.simulatorInventory.state(d, execute) : simulatorState(d, execute));
@@ -711,16 +714,100 @@ export class Adapters {
     if (isAndroidEmulator(d)) return this.emulators.prepare(d);
     return d;
   }
-  async cleanupDevice(d: DeviceConfig, action: DeviceCleanupAction) {
+  async fleetProbe(device: DeviceConfig, ownership?: SimulatorLaunchOwnership) {
+    const observed = await this.inspect(device);
+    if (!observed.online) {
+      if (ownership && isAndroidEmulator(device) && await this.emulators.hasOwnedProcess(device, ownership))
+        return { state: "unresponsive", detail: "The Deck-owned emulator process is running but its guest is unavailable.", restartable: true };
+      if (observed.connection.type === "simulator" && observed.simulatorState === "starting" &&
+          await simulatorState(device, this.execute, false) === "booted")
+        return { state: "unresponsive", detail: "CoreSimulator reports Booted but the OS readiness probe timed out.", restartable: true };
+      const state = observed.simulatorState === "shutdown" ? "stopped" : observed.simulatorState === "starting" ? "starting" : "offline";
+      return { state, detail: observed.healthDetail, restartable: false };
+    }
+    const c = observed.connection;
+    try {
+      if (c.type === "simulator") {
+        await userInstalledSimulatorApps(c.udid, this.execute);
+      } else if (c.type === "adb") {
+        const adb = this.tool("adb");
+        const { args } = await freezeAdbTransport(observed, adb, this.execute);
+        const reply = await this.execute(adb, [...args, "shell", "am", "get-current-user"], 10_000);
+        if (!/^\d+$/.test(reply.stdout.toString().trim())) throw new Error("Android activity manager did not return the current user.");
+      } else if (c.type === "roku") {
+        const response = await fetch(`http://${c.host}:8060/query/active-app`, { redirect: "error", signal: AbortSignal.timeout(5000) });
+        if (!response.ok || !/<active-app\s*>[^]*<\/active-app>/.test(await response.text()))
+          throw new Error("Roku did not answer the active-app query.");
+      }
+      return { state: "healthy", detail: observed.healthDetail, restartable: false };
+    } catch (error) {
+      return { state: "unresponsive", detail: (error as Error).message,
+        restartable: observed.capabilities.includes("restart") && !["identity-mismatch", "identity-unverified", "device-offline", "simulator-app-list-invalid"].includes((error as { code?: string }).code || "") };
+    }
+  }
+  /** Bind the inventory and uninstall to the same verified device transport. */
+  async reservationApps(device: DeviceConfig) {
+    const d = await this.verifyIdentity(device);
+    const c = d.connection;
+    if (c.type === "simulator") {
+      return {
+        list: () => userInstalledSimulatorApps(c.udid, this.execute),
+        remove: async (id: string) => { await this.execute("xcrun", ["simctl", "uninstall", c.udid, id], 60_000); },
+      };
+    }
+    if (c.type === "adb") {
+      const adb = this.tool("adb");
+      const { args } = await freezeAdbTransport(d, adb, this.execute);
+      return {
+        list: (newTestOnly = false) => androidUserApps(adb, args, this.execute, newTestOnly && d.kind === "physical"),
+        remove: (id: string) => uninstallAndroidApp(adb, args, id, this.execute),
+      };
+    }
+    if (c.type === "roku") {
+      const list = async () => {
+        if ((await this.rokuInfo(c.host)).serial !== c.serial)
+          fail("identity-mismatch", "Roku serial changed before app inventory.", 409);
+        const response = await fetch(`http://${c.host}:8060/query/apps`, { redirect: "error", signal: AbortSignal.timeout(5000) });
+        const xml = await response.text();
+        if (!response.ok || !/<apps>[^]*<\/apps>/.test(xml) || /<app\b(?![^>]*\bid="[^"]+")/.test(xml))
+          fail("app-list-invalid", "Roku returned an incomplete channel list.", 502);
+        return /<app\b[^>]*\bid="dev"/.test(xml) ? ["dev"] : [];
+      };
+      return { list, remove: async (id: string) => {
+        if (id !== "dev") fail("unsupported-cleanup", "Only the Roku sideload slot can be cleared.");
+        if (!(await list()).length) return;
+        await this.rokuInstaller(c, "Delete");
+        if ((await list()).length) fail("app-uninstall-failed", "Roku still reports a sideloaded app after removal.", 502);
+      } };
+    }
+    if (c.type === "apple-device") {
+      return {
+        list: async (): Promise<string[]> => {
+          const result = await this.execute("xcrun", ["devicectl", "device", "info", "apps", "--device", c.udid,
+            "--no-include-default-apps", "--json-output", "-", "--quiet"], 30_000);
+          const apps = JSON.parse(result.stdout.toString()).result?.apps;
+          if (!Array.isArray(apps) || !apps.every(app => typeof app?.bundleIdentifier === "string" &&
+            /^[a-zA-Z0-9][a-zA-Z0-9.-]*$/.test(app.bundleIdentifier)))
+            fail("app-list-invalid", "Apple returned an invalid developer-app list.", 502);
+          return apps.map(app => app.bundleIdentifier);
+        },
+        remove: async (id: string) => {
+          await this.execute("xcrun", ["devicectl", "device", "uninstall", "app", "--device", c.udid, id], 60_000);
+        },
+      };
+    }
+    return fail("unsupported-cleanup", "This device connection cannot remove reservation apps.");
+  }
+  async cleanupDevice(d: DeviceConfig, action: DeviceCleanupAction, keepApps?: ReadonlySet<string>) {
     if (action === "slim") {
       if (d.connection.type !== "simulator" || d.kind !== "virtual")
         fail("unsupported-cleanup", "Slimming requires an Apple simulator.");
       if (!await available("simslim"))
         fail("missing-helper", "Install simslim on the Deck host with brew install mobai-app/tap/simslim.", 503);
     } else if (isAndroidEmulator(d)) {
-      return this.emulators.cleanup(d, action);
+      return this.emulators.cleanup(d, action, keepApps);
     }
-    return cleanupSimulator(d, action, this.execute);
+    return cleanupSimulator(d, action, this.execute, keepApps);
   }
   async verifyIdentity(d: DeviceConfig, execute?: typeof run) {
     if (isAndroidEmulator(d)) d = (await this.emulators.resolve(d, true, execute))!;
@@ -994,10 +1081,26 @@ export class Adapters {
       "Configure a USB capture input for this device.",
     );
   }
+  private async rokuInstaller(c: Extract<DeviceConfig["connection"], { type: "roku" }>, action: "Delete" | "Reboot") {
+    if ((await this.rokuInfo(c.host)).serial !== c.serial)
+      fail("identity-mismatch", "The Roku serial does not match its registration.", 409);
+    const credentials = path.join(dataDirectory(), "roku-developer.netrc");
+    const file = await stat(credentials).catch(() => undefined);
+    if (!file?.isFile() || (file.mode & 0o077) !== 0 || file.uid !== process.getuid?.())
+      fail("roku-credentials", "Configure an owner-only roku-developer.netrc in the Deck profile.", 409);
+    const page = action === "Delete" ? "plugin_install" : "plugin_swup";
+    const { stdout } = await this.execute("/usr/bin/curl", ["--disable", "--silent", "--show-error", "--fail", "--digest",
+      "--netrc-file", credentials, "--form", `mysubmit=${action}`, "--max-time", "30", `http://${c.host}/${page}`], 35_000);
+    if (/class=["'](?:error|error-msg)["']|class="\w*error\w*"[^>]*>[^<]+/i.test(stdout.toString()))
+      fail("roku-installer-failed", `Roku rejected its ${action.toLowerCase()} request.`, 502);
+  }
   async restart(d: DeviceConfig) {
+    if (d.connection.type === "roku") return this.rokuInstaller(d.connection, "Reboot");
     if (d.connection.type === "adb") {
       d = await this.verifyIdentity(d);
-      await run(this.tool("adb"), [...this.adb(d), "reboot"]);
+      const adb = this.tool("adb");
+      const { args } = await freezeAdbTransport(d, adb, this.execute);
+      await this.execute(adb, [...args, "reboot"]);
       return;
     }
     if (d.connection.type === "simulator") {

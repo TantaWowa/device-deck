@@ -53,6 +53,7 @@ class TestAdapters extends Adapters {
   constructor() {
     super(() => config);
   }
+  async prepareSimulator(device: DeviceConfig) { return device; }
   async diagnostics() {
     return [];
   }
@@ -3854,5 +3855,83 @@ test("wake and unrelated configuration changes retain known feed observations", 
     assert.equal(saved.devices.find((device) => device.id === "one")?.observation?.observedAt, null);
     assert.equal(saved.devices.find((device) => device.id === "two")?.online, true);
     assert.equal(saved.sources.find((source) => source.id === "screen-two")?.status, "connected");
+  } finally { await cleanup(); }
+});
+
+test("reservation app cleanup preserves the baseline, retries a failed release and cleans idle additions before handoff", async () => {
+  const { deck, adapters, cleanup } = await setup();
+  const installed = new Set(["existing"]);
+  adapters.reservationApps = async () => ({
+    list: async () => [...installed],
+    remove: async id => { installed.delete(id); },
+  });
+  try {
+    const config = structuredClone(deck.config.config);
+    config.settings.reservationAppCleanup = true;
+    await deck.execute("config.save", { config, revision: deck.config.revision });
+    const first = await reserve(deck);
+    installed.add("first-test");
+    let failOnce = true;
+    adapters.reservationApps = async () => ({
+      list: async () => [...installed],
+      remove: async id => {
+        if (failOnce) { failOnce = false; throw new Error("USB disconnected"); }
+        installed.delete(id);
+      },
+    });
+    const release = { sessionId: first.session.id, leaseToken: first.leaseToken };
+    await assert.rejects(deck.execute("sessions.release", release), /USB disconnected/);
+    assert.equal(deck.store.session(first.session.id).state, "closing");
+    await deck.execute("sessions.release", release);
+    assert.deepEqual([...installed], ["existing"]);
+    installed.add("left-while-idle");
+    const next = await reserve(deck);
+    assert.deepEqual([...installed], ["existing"]);
+    await deck.execute("sessions.release", { sessionId: next.session.id, leaseToken: next.leaseToken });
+  } finally { await cleanup(); }
+});
+
+test("fleet health confirms repeated failures and restarts only an idle target, with a cooldown", async t => {
+  const { deck, adapters, cleanup } = await setup();
+  let now = Date.now();
+  t.mock.method(Date, "now", () => now);
+  adapters.fleetProbe = async () => ({ state: "unresponsive", detail: "activity manager timed out", restartable: true });
+  const restarted: string[] = [];
+  adapters.restart = async device => { restarted.push(device.id); };
+  try {
+    const config = structuredClone(deck.config.config);
+    config.settings.fleetHealthChecks = true;
+    await deck.execute("config.save", { config, revision: deck.config.revision });
+    const held = await reserve(deck, "two");
+    for (let scan = 0; scan < 6; scan++) {
+      await Promise.all([deck.execute("fleet.health", {}), deck.execute("fleet.health", {})]);
+      now += 60_000;
+    }
+    assert.deepEqual(restarted, ["one"]);
+    await deck.execute("sessions.release", { sessionId: held.session.id, leaseToken: held.leaseToken });
+  } finally { await cleanup(); }
+});
+
+test("physical reservation cleanup preserves existing and store-installed apps across expiry and idle time", async () => {
+  const { deck, adapters, cleanup } = await setup();
+  const apps = new Map([["existing-test", "test"], ["personal", "store"]]);
+  adapters.reservationApps = async () => ({
+    list: async (onlyTest = false) => [...apps].filter(([, kind]) => !onlyTest || kind === "test").map(([id]) => id),
+    remove: async id => { apps.delete(id); },
+  });
+  try {
+    const config = structuredClone(deck.config.config);
+    config.settings.reservationAppCleanup = true;
+    config.devices[0].kind = "physical";
+    await deck.execute("config.save", { config, revision: deck.config.revision });
+    const { session } = await reserve(deck);
+    apps.set("sideload", "test"); apps.set("new-store-app", "store");
+    deck.store.putSession({ ...deck.store.session(session.id), expiresAt: Date.now() - 1 });
+    await deck.expire();
+    assert.deepEqual([...apps.keys()], ["existing-test", "personal", "new-store-app"]);
+    apps.set("installed-between-reservations", "test");
+    const next = await reserve(deck);
+    await deck.execute("sessions.release", { sessionId: next.session.id, leaseToken: next.leaseToken });
+    assert.ok(apps.has("installed-between-reservations"));
   } finally { await cleanup(); }
 });

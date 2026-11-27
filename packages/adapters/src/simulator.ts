@@ -274,7 +274,7 @@ export async function wakeSimulator(
   return { method: "Simulator Home button" };
 }
 
-async function userInstalledSimulatorApps(udid: string, execute: Runner) {
+export async function userInstalledSimulatorApps(udid: string, execute: Runner) {
   const listing = await execute("xcrun", ["simctl", "listapps", udid], 60000);
   // listapps writes a property list, not JSON. Let Apple's parser handle its
   // quoting and escapes; a private file avoids interpolating app data in a shell.
@@ -309,7 +309,11 @@ async function shutdownSimulatorForCleanup(device: DeviceConfig, udid: string, e
   } catch (error) {
     if ((await simulatorState(device, execute, false)) !== "shutdown") throw error;
   }
-  const state = await simulatorState(device, execute, false);
+  let state = await simulatorState(device, execute, false);
+  for (let attempt = 0; attempt < 12 && state !== "shutdown" && state !== "unavailable"; attempt++) {
+    await new Promise(resolve => setTimeout(resolve, 250));
+    state = await simulatorState(device, execute, false);
+  }
   if (state !== "shutdown")
     fail("simulator-transition", `Simulator is ${state}; shutdown could not be verified.`, 409);
 }
@@ -319,6 +323,7 @@ export async function cleanupSimulator(
   device: DeviceConfig,
   action: DeviceCleanupAction,
   execute: Runner = run,
+  keepApps?: ReadonlySet<string>,
 ): Promise<{ removedApps?: number; state?: "booted" | "shutdown"; warning?: string }> {
   if (device.kind !== "virtual" || device.connection.type !== "simulator" ||
       !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(device.connection.udid))
@@ -374,7 +379,7 @@ export async function cleanupSimulator(
       ownsBoot = true;
       await execute("xcrun", ["simctl", "bootstatus", udid, "-b"], 240000);
     }
-    const apps = await userInstalledSimulatorApps(udid, execute);
+    const apps = (await userInstalledSimulatorApps(udid, execute)).filter(id => !keepApps?.has(id));
     totalApps = apps.length;
     for (const appId of apps) {
       try {

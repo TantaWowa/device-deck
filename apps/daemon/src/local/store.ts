@@ -44,6 +44,8 @@ export class Store {
       CREATE TABLE IF NOT EXISTS interaction_ownership(session_id TEXT PRIMARY KEY, payload TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS reservation_groups(id TEXT PRIMARY KEY, state TEXT NOT NULL, token_hash TEXT NOT NULL, payload TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS warm_devices(device_id TEXT PRIMARY KEY, payload TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS virtual_app_baselines(identity TEXT PRIMARY KEY, apps TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS reservation_apps(session_id TEXT PRIMARY KEY, identity TEXT NOT NULL, apps TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS daily_app_cleanup(identity TEXT PRIMARY KEY, cycle INTEGER NOT NULL, running_device TEXT);
       PRAGMA user_version=1;`);
   }
@@ -64,6 +66,26 @@ export class Store {
         payload: string;
       }[]
     ).map((r) => JSON.parse(r.payload) as Session);
+  }
+  endHealthProbe(id: string) {
+    this.db.prepare("DELETE FROM sessions WHERE id=? AND json_extract(payload,'$.healthProbe')=1").run(id);
+  }
+  virtualAppBaseline(identity: string) {
+    const row = this.db.prepare("SELECT apps FROM virtual_app_baselines WHERE identity=?").get(identity);
+    return row && JSON.parse(String(row.apps)) as string[];
+  }
+  setVirtualAppBaseline(identity: string, apps: string[]) {
+    this.db.prepare("INSERT OR REPLACE INTO virtual_app_baselines VALUES (?,?)").run(identity, JSON.stringify(apps));
+  }
+  reservationApps(sessionId: string) {
+    const row = this.db.prepare("SELECT identity,apps FROM reservation_apps WHERE session_id=?").get(sessionId);
+    return row && { identity: String(row.identity), apps: JSON.parse(String(row.apps)) as string[] };
+  }
+  recordReservationApps(sessionId: string, identity: string, apps: string[]) {
+    this.db.prepare("INSERT INTO reservation_apps VALUES (?,?,?)").run(sessionId, identity, JSON.stringify(apps));
+  }
+  clearReservationApps(sessionId: string) {
+    this.db.prepare("DELETE FROM reservation_apps WHERE session_id=?").run(sessionId);
   }
   ownedInteractions() {
     return (this.db.prepare("SELECT payload FROM interaction_ownership").all() as { payload: string }[]).map((row) => JSON.parse(row.payload) as OwnedInteraction);
@@ -110,6 +132,7 @@ export class Store {
     reason: string,
     ttlMinutes: number,
     maxSessions = Infinity,
+    healthProbe = false,
   ) {
     return this.transaction(() => {
       if (this.lockReason(deviceId))
@@ -147,6 +170,7 @@ export class Store {
         sourceId,
         owner,
         reason,
+        ...(healthProbe && { healthProbe: true }),
         createdAt: Date.now(),
         expiresAt: Date.now() + ttlMinutes * 60000,
         state: "active",
@@ -162,7 +186,7 @@ export class Store {
           hash(leaseToken),
           JSON.stringify(session),
         );
-      this.event({
+      if (!healthProbe) this.event({
         deviceId,
         sessionId: session.id,
         owner,

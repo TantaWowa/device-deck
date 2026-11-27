@@ -101,6 +101,8 @@ export const settingsSchema = z
     captureMode: z.enum(["clean", "annotated"]).default("clean"),
     maxRecordingMinutes: z.number().int().min(1).max(120).default(15),
     previewIntervalMs: z.number().int().min(250).max(5000).default(750),
+    reservationAppCleanup: z.boolean().optional(),
+    fleetHealthChecks: z.boolean().optional(),
     dailySimulatorAppCleanup: z.boolean().optional(),
     defaultAndroidAvdMemoryProfile: z.enum(["stock", "low-ram"]).optional(),
     /** Virtual devices Device Deck cold-started stay booted after release. */
@@ -245,6 +247,8 @@ export const canLaunchSimulator = (d: DeviceConfig) =>
   supportsSimulatorLifecycle(d) &&
   (d.connection.type !== "adb" || Boolean(d.connection.avdName));
 export const supportsDeviceCleanup = supportsSimulatorLifecycle;
+export const supportsReservationApps = (d: DeviceConfig) =>
+  ["simulator", "adb", "apple-device", "roku"].includes(d.connection.type);
 export const deviceCleanupActionSchema = z.enum(["uninstall-apps", "reset", "slim"]);
 export type DeviceCleanupAction = z.infer<typeof deviceCleanupActionSchema>;
 export type DeviceCleanupResult =
@@ -268,6 +272,7 @@ export type Session = {
   closeReason?: string;
   groupId?: string;
   groupAlias?: string;
+  healthProbe?: boolean;
 };
 export type SimulatorLaunchOwnership = {
   type: "android-emulator";
@@ -493,6 +498,7 @@ export const operations = {
       confirmed: z.literal(true).optional(),
     })
     .strict(),
+  "fleet.health": z.object({}).strict(),
   "devices.cleanup": z
     .object({
       ids: z.array(z.string().min(1)).min(1).max(100),

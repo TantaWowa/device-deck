@@ -222,3 +222,42 @@ To check a running simulator repeatedly, run
 real input to whatever is on screen, prints a pass/fail count per input and
 whether a companion restart happened, and exits non-zero on any failure. It does
 not boot, shut down or reserve the simulator.
+
+## Fleet health and reservation app cleanup
+
+Enable **Check device health every minute** in Settings on each Deck, or set
+`settings.fleetHealthChecks` to true. Use `devdeck health` for this host,
+`--deck NAME` for another host, or `--fleet` for this host and its connected
+Decks. A scan checks OS readiness and the app service where available. An app
+can freeze while its OS still answers. A stopped simulator is a normal state.
+The monitor takes a short lease to check an idle Roku and skips an occupied
+Roku. History records health transitions. After three consecutive unresponsive
+samples, the monitor rechecks an idle, restart-capable device under a lock.
+It attempts at most one restart per device per 30 minutes. For a warm Android
+emulator with a hung ADB connection, it can stop the exact process it launched
+and boot that AVD again. A Roku software reboot requires the developer installer
+credentials described below and a responsive management interface. An offline device
+or a device without a restart transport requires operator attention.
+
+Enable **Remove apps installed during reservations** or set
+`settings.reservationAppCleanup` to true. Device Deck saves the installed app
+IDs before handing out a single or group reservation. At release or expiry it
+removes newly added user apps. A failed cleanup keeps the device reserved
+while Device Deck retries. The app records survive service restarts. Virtual
+devices also clear additions since the last baseline before the next handoff.
+A replacement build with an existing app ID counts as the same app.
+
+Physical Android devices preserve pre-existing packages and remove new packages
+with a shell or unspecified installer. Physical Apple devices with a CoreDevice
+connection track developer-installed apps. Roku tracks the sideload slot. A
+slot occupied at handoff is preserved. To allow removal from an initially empty
+slot, put the matching installer credentials in a host-owner-only
+`roku-developer.netrc` in the Deck profile, using a separate `machine HOST`
+entry for each configured Roku, login `rokudev`, and its developer password.
+
+Run `devdeck reset-apps --fleet` to preview an immediate sweep. Add `--yes`
+to remove **all user-installed apps and their data** from the selected idle
+virtual devices. Physical devices, reservations and maintenance locks are
+listed as skipped. Run the command from each independent Deck profile you
+manage. Results include per-device removal counts and failures. The next
+reservation on a swept virtual device starts with an empty user-app baseline.

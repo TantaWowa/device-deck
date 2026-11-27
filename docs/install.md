@@ -1,8 +1,8 @@
 # Install Device Deck on your Mac
 
-Install **Device Deck 0.9.0-beta.3** on macOS 14 or later. The installers are signed and Apple-notarized, with Node, FFmpeg, ffprobe and the dashboard included. Normal installation and setup need no Terminal commands or Homebrew. You do not need to restart or log out.
+Install **Device Deck 0.9.0-beta.6** on macOS 14 or later. The installers are signed and Apple-notarized, with Node, FFmpeg, ffprobe and the dashboard included. Normal installation and setup need no Terminal commands or Homebrew. You do not need to restart or log out.
 
-Device Deck is free and open source under MIT. You do not need a Device Deck account or license key. See the [beta.3 release notes](https://github.com/TantaWowa/device-deck/releases/tag/v0.9.0-beta.3) for validation results and remaining beta limitations.
+Device Deck is free and open source under MIT. You do not need a Device Deck account or license key. See the [beta.6 release notes](https://github.com/TantaWowa/device-deck/releases/tag/v0.9.0-beta.6) for validation results and remaining beta limitations.
 
 Want help from Codex or Claude? [Set up with an agent](agent-setup.md) gives you copyable prompts for this installation and for adding capture cards, devices and simulators.
 
@@ -12,8 +12,8 @@ Want help from Codex or Claude? [Set up with an agent](agent-setup.md) gives you
 
    | Your Mac | Download |
    | --- | --- |
-   | Apple M-series chip | [Apple silicon installer, arm64](https://github.com/TantaWowa/device-deck/releases/download/v0.9.0-beta.3/device-deck-0.9.0-beta.3-macos-arm64.pkg) |
-   | Intel processor | [Intel installer, x64](https://github.com/TantaWowa/device-deck/releases/download/v0.9.0-beta.3/device-deck-0.9.0-beta.3-macos-x64.pkg) |
+   | Apple M-series chip | [Apple silicon installer, arm64](https://github.com/TantaWowa/device-deck/releases/download/v0.9.0-beta.6/device-deck-0.9.0-beta.6-macos-arm64.pkg) |
+   | Intel processor | [Intel installer, x64](https://github.com/TantaWowa/device-deck/releases/download/v0.9.0-beta.6/device-deck-0.9.0-beta.6-macos-x64.pkg) |
 
 2. Open the downloaded `.pkg`, choose **Continue**, then follow the macOS installer through **Install** and administrator approval.
 3. When installation finishes, open **Device Deck** from **Applications**.
