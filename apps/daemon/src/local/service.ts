@@ -31,6 +31,7 @@ import {
   matchReservationGroup,
   supportsSimulatorLifecycle,
   supportsDeviceCleanup,
+  supportsReservationApps,
   canLaunchSimulator,
   fail,
   type Config,
@@ -93,6 +94,7 @@ const simulatorProgress = {
   "uninstall-apps": "Uninstalling apps…",
   reset: "Resetting device…",
   slim: "Slimming simulator…",
+  restart: "Restarting unresponsive device…",
 };
 const dailyCleanupLock = "Daily simulator app cleanup";
 function dailyCleanupCycle(time: number) {
@@ -134,10 +136,13 @@ export class DeckService {
   private warmTimer?: ReturnType<typeof setInterval>;
   private reaping?: Promise<void>;
   private dailyCleanup?: Promise<void>;
+  private appCleanupRetry = new Map<string, number>();
+  private fleetHealthWork?: Promise<void>;
+  private fleetHealth = new Map<string, { deviceId: string; name: string; checkedAt: number; state: string; detail: string; failures: number; lastRestart?: number }>();
   readonly maintenance = { updating: false, active: 0 };
   private shuttingDown = false;
   private changingConfig = false;
-  private simulatorActions = new Map<string, "launch" | "close" | DeviceCleanupAction>();
+  private simulatorActions = new Map<string, "launch" | "close" | "restart" | DeviceCleanupAction>();
   private readonly groupReadiness: GroupReadinessPolicy;
   diagnostics: string[] = [];
   inventoryDiagnostics() {
@@ -174,6 +179,49 @@ export class DeckService {
       helperIdentity: () => JSON.stringify(this.config.config.tools),
     });
   }
+  private tracksApps(device: DeviceConfig) {
+    return this.config.config.settings.reservationAppCleanup && supportsReservationApps(device);
+  }
+  private async snapshotReservationApps(sessionId: string, device: DeviceConfig) {
+    if (!this.tracksApps(device)) return;
+    const apps = await this.adapters.reservationApps(device);
+    const installed = await apps.list();
+    const identity = deviceIdentity(device);
+    const prior = device.kind === "virtual" ? this.store.virtualAppBaseline(identity) : undefined;
+    const baseline = prior ? installed.filter(id => prior.includes(id)) : installed;
+    if (prior) {
+      for (const id of installed) if (!prior.includes(id)) await apps.remove(id);
+    }
+    this.store.transaction(() => {
+      this.store.recordReservationApps(sessionId, identity, baseline);
+      if (device.kind === "virtual") this.store.setVirtualAppBaseline(identity, baseline);
+    });
+  }
+  private async removeReservationApps(session: Session) {
+    const baseline = this.store.reservationApps(session.id);
+    if (!baseline) return;
+    const device = this.device(session.deviceId);
+    if (deviceIdentity(device) !== baseline.identity)
+      fail("identity-mismatch", "The reservation's device identity changed before app cleanup.", 409);
+    const keep = new Set(baseline.apps);
+    let removed = 0;
+    if (canLaunchSimulator(device)) {
+      const result = await this.adapters.cleanupDevice(device, "uninstall-apps", keep);
+      removed = result.removedApps ?? 0;
+    } else {
+      const apps = await this.adapters.reservationApps(device);
+      for (const id of await apps.list(true)) {
+        if (keep.has(id)) continue;
+        await apps.remove(id);
+        removed++;
+      }
+    }
+    this.store.transaction(() => {
+      this.store.clearReservationApps(session.id);
+      this.store.event({ deviceId: device.id, sessionId: session.id, owner: session.owner,
+        action: "reservation-app-cleanup", detail: `Removed ${removed} new apps` });
+    });
+  }
   private async checkSimulatorPreferences(device?: DeviceConfig) {
     if (!this.repairSimulatorPreferences || (device && device.connection.type !== "simulator")) return;
     const prefix = "Apple simulator preferences: ";
@@ -205,6 +253,7 @@ export class DeckService {
     this.warmTimer = setInterval(() => {
       void this.reapWarmPool();
       void this.runDailyAppCleanup();
+      if (this.config.config.settings.fleetHealthChecks) void this.checkFleetHealth().catch(error => this.maintenanceDiagnostic(String(error)));
       void this.checkSimulatorPreferences().catch(() => {});
     }, 60_000);
     this.warmTimer.unref();
@@ -696,6 +745,10 @@ export class DeckService {
             backend: adapter.capabilities.backend, startedAt, finishedAt: new Date().toISOString(),
             sha256: createHash("sha256").update(JSON.stringify(payload)).digest("hex") } };
         });
+      case "fleet.health":
+        await this.checkFleetHealth();
+        return this.config.config.devices.map(device => this.fleetHealth.get(deviceIdentity(device)) ??
+          { deviceId: device.id, name: device.name, state: "unchecked" });
       case "inventory":
         this.inventoryReads[`inventory:${origin}`] = (this.inventoryReads[`inventory:${origin}`] || 0) + 1;
         return this.snapshot(args.deviceIds);
@@ -844,17 +897,18 @@ export class DeckService {
             throw e;
           }
         });
-        if (!(this.simulatorMemoryProfile && device.connection.type === "simulator") && !usesAndroidLowRamProfile(device))
+        if (!this.tracksApps(device) && !(this.simulatorMemoryProfile && device.connection.type === "simulator") && !usesAndroidLowRamProfile(device))
           return reservation;
         try {
           return await this.queue(device.id).run(async () => {
             this.store.validate(reservation.session.id, reservation.leaseToken);
             await this.adapters.verifySimulatorMemoryProfile(device, this.simulatorMemoryProfile);
+            await this.snapshotReservationApps(reservation.session.id, device);
             this.store.validate(reservation.session.id, reservation.leaseToken);
             return reservation;
           });
         } catch (error) {
-          await this.closeSession(reservation.session.id, "Simulator readiness verification failed");
+          await this.closeSession(reservation.session.id, "Reservation preparation failed");
           throw error;
         }
       }
@@ -1132,6 +1186,7 @@ export class DeckService {
                   this.device(observed.id),
                   preparation,
                 );
+                await this.snapshotReservationApps(member.sessionId, current.device);
                 return { alias, member, ...current };
               } catch (error) {
                 if (!preparation.cancelled) {
@@ -2406,6 +2461,15 @@ export class DeckService {
           await stop(pairing.handle);
         }
         if (s.sourceId) await this.capture.closeSource(this.source(s));
+        try {
+          await this.removeReservationApps(s);
+          this.appCleanupRetry.delete(s.id);
+        } catch (error) {
+          this.appCleanupRetry.set(s.id, Date.now() + 60_000);
+          this.store.event({ deviceId: s.deviceId, sessionId: s.id, owner: s.owner,
+            action: "reservation-app-cleanup-failed", detail: (error as Error).message });
+          throw error;
+        }
         s.state = "closed";
         s.endedAt = Date.now();
         this.store.putSession(s);
@@ -2432,7 +2496,8 @@ export class DeckService {
         .filter(
           (group) =>
             group.state !== "closed" &&
-            (group.expiresAt <= now || group.state === "closing"),
+            (group.expiresAt <= now || group.state === "closing") &&
+            group.members.every(member => (this.appCleanupRetry.get(member.sessionId) ?? 0) <= now),
         )
         .map((group) =>
           this.closeReservationGroup(group.id, "Reservation group expired"),
@@ -2441,9 +2506,9 @@ export class DeckService {
         .sessions()
         .filter(
           (session) =>
-            !session.groupId &&
-            session.state === "active" &&
-            session.expiresAt <= now,
+            !session.groupId && !session.healthProbe &&
+            ((session.state === "active" && session.expiresAt <= now) ||
+             (session.state === "closing" && this.store.reservationApps(session.id) && (this.appCleanupRetry.get(session.id) ?? 0) <= now)),
         )
         .map((session) => this.closeSession(session.id, "Reservation expired")),
     ]);
@@ -2607,6 +2672,7 @@ export class DeckService {
       if (action === "reset") this.store.dropWarmDevice(target.id);
       if (action !== "reset") await this.checkSimulatorPreferences(target);
       const result = await this.adapters.cleanupDevice(target, action);
+      if (action === "uninstall-apps" || action === "reset") this.store.setVirtualAppBaseline(deviceIdentity(target), []);
       if (result.state === "shutdown") this.store.dropWarmDevice(target.id);
       this.store.event({
         deviceId: target.id, owner, action: `cleanup-${action}`,
@@ -2625,6 +2691,77 @@ export class DeckService {
       this.invalidateInventory(target.id);
     }
   }
+  private checkFleetHealth() {
+    this.fleetHealthWork ??= this.scanFleetHealth().finally(() => { this.fleetHealthWork = undefined; });
+    return this.fleetHealthWork;
+  }
+
+  private async scanFleetHealth() {
+    await this.refresh();
+    for (const device of this.config.config.devices) {
+      if (this.shuttingDown || this.maintenance.updating || this.config.error) return;
+      const identity = deviceIdentity(device);
+      const previous = this.fleetHealth.get(identity);
+      const now = Date.now();
+      // Concurrent callers share a scan. Repeated CLI reads cannot accelerate the recovery threshold.
+      if (previous && now - previous.checkedAt < 45_000) continue;
+      const busy = (ownLease?: string) => this.simulatorActions.has(device.id) || Boolean(this.store.lockReason(device.id)) ||
+        this.deviceHasOpenGroup(device.id) || this.streams.viewing(device.id) || this.store.hasPendingCapture(device.id) ||
+        this.store.sessions().some(session => session.deviceId === device.id && session.id !== ownLease && session.state !== "closed");
+      let lease: string | undefined;
+      let state = "busy", detail = "Reserved or in maintenance", failures = 0, lastRestart = previous?.lastRestart;
+      try {
+        if (device.connection.type === "roku") {
+          lease = await this.global.run(async () => {
+            if (busy() || this.shuttingDown || this.maintenance.updating) return;
+            return this.store.reserve(device.id, null, null, "Fleet health", "Read Roku health", 1, Infinity, true).session.id;
+          });
+        }
+        if ((device.connection.type === "roku" ? lease : !this.store.lockReason(device.id)) && !this.shuttingDown) {
+          const probe = await this.adapters.fleetProbe(device);
+          state = probe.state;
+          detail = probe.detail;
+          failures = ["unresponsive", "offline"].includes(state) ? (previous?.state === state ? previous.failures + 1 : 1) : 0;
+          if (state === "unresponsive" && probe.restartable && failures >= 3 &&
+              this.config.config.settings.fleetHealthChecks && (!lastRestart || now - lastRestart >= 30 * 60_000)) {
+            await this.queue(device.id).run(async () => {
+              const claimed = await this.global.run(async () => {
+                if (this.shuttingDown || this.changingConfig || this.maintenance.updating || busy(lease) ||
+                    !this.config.config.settings.fleetHealthChecks || deviceIdentity(this.device(device.id)) !== identity) return false;
+                this.simulatorActions.set(device.id, "restart");
+                this.store.lock(device.id, "Fleet health restart");
+                this.maintenance.active++;
+                return true;
+              });
+              if (!claimed) return;
+              try {
+                const confirm = await this.adapters.fleetProbe(device);
+                if (confirm.state !== "unresponsive" || !confirm.restartable) {
+                  state = confirm.state; detail = confirm.detail; failures = 0; return;
+                }
+                lastRestart = Date.now();
+                await this.adapters.restart(device);
+                state = "restarting"; detail = "Restart requested after three failed health checks"; failures = 0;
+              } finally {
+                this.maintenance.active--;
+                this.simulatorActions.delete(device.id);
+                this.store.lock(device.id, null);
+                this.invalidateInventory(device.id);
+              }
+            });
+          }
+        }
+      } catch (error) {
+        state = "error"; detail = (error as Error).message;
+      } finally {
+        if (lease) this.store.endHealthProbe(lease);
+      }
+      this.fleetHealth.set(identity, { deviceId: device.id, name: device.name, checkedAt: Date.now(), state, detail, failures, lastRestart });
+      if (previous?.state !== state && state !== "busy")
+        this.store.event({ deviceId: device.id, owner: "Fleet health", action: "fleet-health", detail: `${state}: ${detail}` });
+    }
+  }
+
   private scheduledDevices() {
     return this.config.config.devices.filter(canLaunchSimulator);
   }
@@ -2741,6 +2878,8 @@ export class DeckService {
   private async recover() {
     // A warm-pool shutdown interrupted by a crash leaves no other owner.
     this.store.clearLocks(warmPoolLock);
+    this.store.clearLocks("Fleet health restart");
+    for (const session of this.store.sessions()) if (session.healthProbe) this.store.endHealthProbe(session.id);
     this.store.recoverDailyAppCleanup(dailyCleanupLock);
     for (const owned of this.store.ownedInteractions()) {
       try {
@@ -2766,7 +2905,7 @@ export class DeckService {
       await this.manifest(a).catch(() => {});
     }
     for (const s of this.store.sessions().filter((s) => s.state !== "closed")) {
-      const pending = this.store.ownedInteractions().some((owned) => owned.sessionId === s.id) || this.store
+      const pending = this.store.reservationApps(s.id) || this.store.ownedInteractions().some((owned) => owned.sessionId === s.id) || this.store
         .workers()
         .some((w) => this.store.artifact(w.id).sessionId === s.id);
       s.state = pending ? "closing" : "closed";
@@ -2798,6 +2937,7 @@ export class DeckService {
     this.shuttingDown = true;
     clearInterval(this.timer);
     clearInterval(this.warmTimer);
+    await this.fleetHealthWork;
     await Promise.all(
       this.store
         .groups()

@@ -449,6 +449,12 @@
               "maximum": 5000,
               "default": 750
             },
+            "reservationAppCleanup": {
+              "type": "boolean"
+            },
+            "fleetHealthChecks": {
+              "type": "boolean"
+            },
             "dailySimulatorAppCleanup": {
               "type": "boolean"
             },

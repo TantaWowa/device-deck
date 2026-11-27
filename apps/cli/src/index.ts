@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { fleetCommand } from "./fleet";
 import { shareDesktopUsb } from "./usb-sharing";
 import { staleVirtualDevices } from "../../../packages/core/src/discovery";
 import { resolveReportRange } from "../../../packages/core/src/reports";
@@ -70,6 +71,9 @@ Usage: devdeck <command> [options]
   pair [--revoke]               Issue a local portal pairing code or revoke access
   tailscale enable|status|disable  Manage private HTTPS access over Tailscale
        [--allow-user LOGIN,LOGIN] [--https-port PORT]
+  health [--fleet]              Check devices on this Deck or all connected Decks
+  reset-apps [filters] [--fleet] [--yes]
+                               Preview idle virtual devices; --yes removes their user apps
   discover                     Find connected targets and capture cards
   api                          Describe installed API schemas and agent workflow
   feeds                        List capture feeds and stable IDs
@@ -158,7 +162,7 @@ const optionTypes: Record<string, { type: "string" | "boolean" }> =
       "token-file",
     ].map((k) => [k, { type: "string" }]),
   );
-for (const key of ["json", "help", "clipboard", "yes", "mux", "browser", "version", "tailscale", "revoke", "stale-virtual"])
+for (const key of ["fleet", "json", "help", "clipboard", "yes", "mux", "browser", "version", "tailscale", "revoke", "stale-virtual"])
   optionTypes[key] = { type: "boolean" };
 try {
   const { values: v, positionals: p } = parseArgs({
@@ -197,7 +201,13 @@ try {
       return String(v.reason);
     };
     let result: unknown;
-    if (command === "sharing") result = p[1] === "usb" ? await shareDesktopUsb(p[2]) : await sharingCommand(p[1] || "status", p[2]);
+    if (command === "reset-apps" || command === "health") {
+      if ((v.fleet && targetDeck && targetDeck !== "local") || p.length > 1)
+        throw new DeckError("arguments", "Choose --fleet or --deck NAME and pass selectors as flags.", 400);
+      const rows = await fleetCommand(command, targetDeck || "local", Boolean(v.fleet), selector, Boolean(v.yes));
+      if (rows.some(row => row.ok === false)) process.exitCode = 1;
+      result = rows;
+    } else if (command === "sharing") result = p[1] === "usb" ? await shareDesktopUsb(p[2]) : await sharingCommand(p[1] || "status", p[2]);
     else if (command === "simulator-profile") {
       const action = p[1] ?? "status";
       if (p.length > 2 || !["install", "status", "uninstall"].includes(action))

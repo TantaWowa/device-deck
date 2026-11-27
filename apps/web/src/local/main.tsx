@@ -1959,6 +1959,18 @@ function SettingsView({
               Remove installed apps from idle simulators and emulators daily
               <small>Runs at 03:00 on the host Mac. Removing an app also deletes its data.</small>
             </label>
+            <h2>Fleet maintenance</h2>
+            <label>
+              <input type="checkbox" checked={config.settings.fleetHealthChecks ?? false}
+                onChange={(e) => update("fleetHealthChecks", e.target.checked)} />
+              Check device health every minute
+            </label>
+            <label>
+              <input type="checkbox" checked={config.settings.reservationAppCleanup ?? false}
+                onChange={(e) => update("reservationAppCleanup", e.target.checked)} />
+              Remove apps installed during reservations
+              <small>Tracks user apps on Apple simulators and Android devices, and developer apps on connected Apple devices.</small>
+            </label>
             <h2>Reservation defaults</h2>
             <label>
               Owner label
