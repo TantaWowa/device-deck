@@ -4,6 +4,6 @@ deck_root=${0:A:h}
 cd "$deck_root" || exit 1
 export DEVICE_DECK_HOME=${DEVICE_DECK_HOME:-$deck_root/work/local-deck}
 if [[ "$1" == start ]]; then
-  exec node --import tsx "$deck_root/scripts/start-local.ts"
+  exec /usr/bin/arch -arm64 node --import tsx "$deck_root/scripts/start-local.ts"
 fi
-exec node "$deck_root/build/devdeck.mjs" "$@"
+exec /usr/bin/arch -arm64 node "$deck_root/build/devdeck.mjs" "$@"

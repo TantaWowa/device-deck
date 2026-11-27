@@ -10,6 +10,7 @@ import {
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { applicationBuildPayload } from "./distribution/package-support.mjs";
+if (process.platform !== "darwin" || process.arch !== "arm64") throw new Error("Device Deck requires Apple silicon and native arm64 Node.");
 const destination = path.resolve("work/package/device-deck");
 const { version } = JSON.parse(await readFile("package.json", "utf8"));
 await rm(destination, { recursive: true, force: true });
@@ -30,7 +31,7 @@ await cp("README.md", path.join(destination, "README.md"));
 await cp("LICENSE", path.join(destination, "LICENSE"));
 await writeFile(
   path.join(destination, "devdeck"),
-  `#!/bin/sh\nset -eu\nDEVICE_DECK_APP_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)\nexec node "$DEVICE_DECK_APP_DIR/build/devdeck.mjs" "$@"\n`,
+  `#!/bin/sh\nset -eu\nDEVICE_DECK_APP_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)\nexec /usr/bin/arch -arm64 node "$DEVICE_DECK_APP_DIR/build/devdeck.mjs" "$@"\n`,
 );
 await chmod(path.join(destination, "devdeck"), 0o755);
 const notices = [];

@@ -11,7 +11,7 @@ const version = "1.2.3-beta.4", expectedCommit = "a".repeat(40);
 const runtime = { version: "24.17.0", darwin: { arm64: "b".repeat(64), x64: "c".repeat(64) } };
 const expected = { version, expectedCommit, runtime };
 const bytes = Buffer.from("immutable unsigned native CI artifact");
-function metadata(arch = "x64") {
+function metadata(arch = "arm64") {
   return { schemaVersion: 1, application: bundleId, version, arch, mode: "free", media: "bundled", signing: "ad-hoc", minimumOS,
     channel: "beta", file: `device-deck-${version}-macos-${arch}.pkg`, bytes: bytes.length, sha256: digest(bytes),
     runtime: { name: "node", version: runtime.version, sha256: runtime.darwin[arch] },
@@ -30,22 +30,23 @@ async function artifact(directory, data = metadata()) {
   return file;
 }
 
-test("import binds both native architectures to the source commit, product and pinned Node", () => {
-  for (const arch of ["arm64", "x64"]) assert.equal(validateImportMetadata(metadata(arch), { ...expected, expectedArch: arch }), arch);
+test("import binds the Apple silicon package to the source commit, product and pinned Node", () => {
+  assert.equal(validateImportMetadata(metadata(), expected), "arm64");
+  assert.throws(() => validateImportMetadata(metadata("x64"), expected), /architecture/);
   for (const [field, value] of Object.entries({ schemaVersion: 2, application: "another.app", version: "1.2.4", arch: "universal", mode: "licensed", media: "external", signing: "developer-id-notarized", minimumOS: "10.0", channel: "stable", file: "other.pkg", bytes: 2 ** 32, sha256: "bad" }))
     assert.throws(() => validateImportMetadata({ ...metadata(), [field]: value }, expected), undefined, field);
-  for (const [field, value] of Object.entries({ schema: 2, version: "1.2.4", arch: "arm64", mode: "licensed", commit: "d".repeat(40), builtAt: "invalid" })) {
+  for (const [field, value] of Object.entries({ schema: 2, version: "1.2.4", arch: "x64", mode: "licensed", commit: "d".repeat(40), builtAt: "invalid" })) {
     const data = metadata(); data.build[field] = value;
     assert.throws(() => validateImportMetadata(data, expected), undefined, `build.${field}`);
   }
-  assert.throws(() => validateImportMetadata(metadata(), { ...expected, expectedArch: "arm64" }), /architecture/);
-  const data = metadata(); data.runtime.sha256 = runtime.darwin.arm64;
+  assert.throws(() => validateImportMetadata(metadata(), { ...expected, expectedArch: "x64" }), /architecture/);
+  const data = metadata(); data.runtime.sha256 = runtime.darwin.x64;
   assert.throws(() => validateImportMetadata(data, expected), /Node runtime/);
 });
 
 test("import requires byte size, SHA-256 and checksum filename agreement before expansion", async t => {
   const file = await artifact(await temporary(t));
-  assert.deepEqual(await inspectUnsignedPackage(file, expected), { file, metadata: metadata(), arch: "x64" });
+  assert.deepEqual(await inspectUnsignedPackage(file, expected), { file, metadata: metadata(), arch: "arm64" });
   await writeFile(file, Buffer.alloc(bytes.length, 65));
   await assert.rejects(inspectUnsignedPackage(file, expected), /checksum/);
   await writeFile(file, bytes);
@@ -90,14 +91,14 @@ async function expandedFixture(directory) {
   await mkdir(path.join(component, "Payload"));
   await writeFile(path.join(component, "Bom"), "");
   await writeFile(path.join(component, "PackageInfo"), `<pkg-info identifier="${bundleId}" version="1.2.3" install-location="/"><bundle id="${bundleId}" path="./Applications/Device Deck.app"/></pkg-info>`);
-  await writeFile(path.join(directory, "Distribution"), '<installer-gui-script><options hostArchitectures="x86_64"/></installer-gui-script>');
+  await writeFile(path.join(directory, "Distribution"), '<installer-gui-script><options hostArchitectures="arm64"/></installer-gui-script>');
   await writeFile(path.join(component, "Scripts/preinstall"), preinstall);
   await writeFile(path.join(component, "Scripts/postinstall"), postinstall);
   return component;
 }
 
 test("expanded packages reject injected top-level payload and modified installer scripts", async t => {
-  const directory = await temporary(t), component = await expandedFixture(directory), imported = { metadata: metadata(), arch: "x64" };
+  const directory = await temporary(t), component = await expandedFixture(directory), imported = { metadata: metadata(), arch: "arm64" };
   await writeFile(path.join(directory, "extra.pkg"), "");
   await assert.rejects(validateExpandedPackage(directory, imported, directory), /Unexpected imported payload layout/);
   await rm(path.join(directory, "extra.pkg"));
@@ -106,14 +107,14 @@ test("expanded packages reject injected top-level payload and modified installer
 });
 
 test("installer XML rejects external entities and mismatched package identity before code inspection", { skip: process.platform !== "darwin" }, async t => {
-  const directory = await temporary(t), component = await expandedFixture(directory), imported = { metadata: metadata(), arch: "x64" };
+  const directory = await temporary(t), component = await expandedFixture(directory), imported = { metadata: metadata(), arch: "arm64" };
   const info = path.join(component, "PackageInfo"), original = await readFile(info, "utf8");
   await writeFile(info, '<!DOCTYPE pkg-info [<!ENTITY file SYSTEM "file:///etc/passwd">]>' + original);
   await assert.rejects(validateExpandedPackage(directory, imported, directory), /cannot declare entities/);
   await writeFile(info, original.replace(`identifier="${bundleId}"`, 'identifier="another.app"'));
   await assert.rejects(validateExpandedPackage(directory, imported, directory), /identity differs/);
   await writeFile(info, original);
-  await writeFile(path.join(directory, "Distribution"), '<installer-gui-script><options hostArchitectures="arm64"/></installer-gui-script>');
+  await writeFile(path.join(directory, "Distribution"), '<installer-gui-script><options hostArchitectures="x86_64"/></installer-gui-script>');
   await assert.rejects(validateExpandedPackage(directory, imported, directory), /architecture differs/);
 });
 

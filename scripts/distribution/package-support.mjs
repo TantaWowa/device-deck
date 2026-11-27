@@ -148,7 +148,7 @@ export async function verifyMachOClosure(files, arch) {
     const type = execFileSync("/usr/bin/file", ["-b", file], { encoding: "utf8" });
     if (!type.includes("Mach-O")) continue;
     const architectures = execFileSync("/usr/bin/lipo", ["-archs", file], { encoding: "utf8" }).trim().split(/\s+/);
-    if (!architectures.includes(arch === "x64" ? "x86_64" : arch)) throw new Error(`Wrong architecture: ${file}`);
+    if (arch !== "arm64" || architectures.length !== 1 || architectures[0] !== arch) throw new Error(`Wrong architecture: ${file}`);
     for (const library of linkedLibraries(file)) {
       if (library.startsWith("/System/Library/") || library.startsWith("/usr/lib/")) continue;
       if (library.startsWith("@loader_path/")) {

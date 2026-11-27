@@ -2,15 +2,15 @@
 
 For `0.9.0-beta.3`, the release process produces Developer ID signed, notarized packages with bundled recording tools and shared Mac setup. The older public installers through `0.9.0-beta.2` are unsigned, use external FFmpeg and start a per-user service at login. Check the release notes for the selected installer; the presence of this documentation does not mean a candidate has been published. See [the install guide](install.md) for setup. The clean-Mac acceptance checks below remain unverified until their results are recorded.
 
-The new package includes the menu-bar app, a pinned private Node 24 runtime, daemon, dashboard, CLI, TUI, MCP server, camera helper, FFmpeg and ffprobe. It supports macOS 14 or later on Apple silicon and Intel. Build each architecture on a matching Mac; both packages can then be signed on a single Mac as described below.
+The new package includes the menu-bar app, a pinned private Node 24 runtime, daemon, dashboard, CLI, TUI, MCP server, camera helper, FFmpeg and ffprobe. It supports macOS 14 or later on Apple silicon. Build, sign and test the arm64 package on an Apple silicon Mac using native arm64 Node.
 
 ## Build an unsigned test package
 
-The build Mac needs Node 24 or later, Xcode command-line tools, CMake and pkg-config. Intel builds also need NASM. These are build-machine tools; end users do not need them to install the app or record with its bundled encoder.
+The build Mac needs Node 24 or later, Xcode command-line tools, CMake and pkg-config. These are build-machine tools; end users do not need them to install the app or record with its bundled encoder.
 
 ```sh
 npm ci
-brew install cmake pkgconf nasm
+brew install cmake pkgconf
 node scripts/distribution/build-media.mjs --output "$HOME/hope-scratch/device-deck-media/bundle"
 export DEVICE_DECK_MEDIA_BUNDLE="$HOME/hope-scratch/device-deck-media/bundle"
 export PATH="$DEVICE_DECK_MEDIA_BUNDLE/bin:$PATH"
@@ -125,43 +125,34 @@ npm run package:mac -- --release --media-bundle "$DEVICE_DECK_MEDIA_BUNDLE"
 
 The key path must be absolute and readable. Set all three API-key variables together. A complete API-key configuration takes precedence over `DEVICE_DECK_NOTARY_PROFILE`; partial API configuration fails even if a profile is set. The private key is passed to `notarytool` by path and is never included in the package. API authentication replaces only the notarization profile; both Developer ID signing identities are still required.
 
-`--release` requires valid identities, notarization configuration and bundled media. The packager signs nested code and the app with the hardened runtime, signs and notarizes the installer, staples the ticket and verifies the result. It never falls back to unsigned output after a signing failure. Follow [release publishing](release-publishing.md) for CI secrets, both-architecture verification and immutable GitHub releases.
+`--release` requires valid identities, notarization configuration and bundled media. The packager signs nested code and the app with the hardened runtime, signs and notarizes the installer, staples the ticket and verifies the result. It never falls back to unsigned output after a signing failure. Follow [release publishing](release-publishing.md) for CI secrets, arm64 verification and immutable GitHub releases.
 
 ### Build in CI and keep signing keys on this Mac
 
-Run the Mac workflow with publication disabled at the final merged commit. Both native runners build and prove unsigned packages with bundled media. Keep the Developer ID private keys in the local signing Mac's keychain; this route does not require uploading them to GitHub.
+Run the Mac workflow with publication disabled at the final merged commit. The Apple silicon runner builds and proves the unsigned package with bundled media. Keep the Developer ID private keys in the local signing Mac's keychain; this route does not require uploading them to GitHub.
 
-Before import, verify the successful workflow run's repository, exact commit and both native proof results. Record the immutable run and artifact IDs, verify each downloaded artifact archive against the SHA-256 supplied by GitHub's artifact API, then extract its installer, JSON metadata and checksum together into a private input directory. A matching sidecar alone does not establish the artifact's origin; the local command relies on that verified GitHub receipt.
+Before import, verify the successful workflow run's repository, exact commit and the native arm64 proof result. Record the immutable run and artifact IDs, verify each downloaded artifact archive against the SHA-256 supplied by GitHub's artifact API, then extract its installer, JSON metadata and checksum together into a private input directory. A matching sidecar alone does not establish the artifact's origin; the local command relies on that verified GitHub receipt.
 
 Use a clean checkout at that exact merged commit, with the local signing and notarization environment configured above. Keep input and output directories separate. For example, substitute the verified full commit and downloaded filename:
 
 ```sh
 npm run package:mac -- --release \
-  --from-package "$HOME/hope-scratch/device-deck-ci-input/x64/device-deck-VERSION-macos-x64.pkg" \
+  --from-package "$HOME/hope-scratch/device-deck-ci-input/arm64/device-deck-VERSION-macos-arm64.pkg" \
   --expected-commit FULL_MERGED_COMMIT_SHA \
-  --output "$HOME/hope-scratch/device-deck-signed/x64"
+  --output "$HOME/hope-scratch/device-deck-signed/arm64"
 ```
 
-Repeat for `arm64`. Intel imports on Apple silicon require working Rosetta to run the bundled Node and encoder checks. The command checks the clean source commit, version, architecture, size, SHA-256, embedded metadata, package identity, installer scripts, source pins, app layout, library dependencies and ad-hoc code signatures before executing imported code. It rejects linked or writable payloads and unexpected native executables. It preserves the compiled native binaries, signs them locally, refreshes media checksums, seals the app and rebuilds the installer with this checkout's verified scripts. The signed metadata records the original package filename, size, SHA-256 and commit under `sourcePackage`.
+The command checks the clean source commit, version, architecture, size, SHA-256, embedded metadata, package identity, installer scripts, source pins, app layout, library dependencies and ad-hoc code signatures before executing imported code. It rejects linked or writable payloads and unexpected native executables. It preserves the compiled native binaries, signs them locally, refreshes media checksums, seals the app and rebuilds the installer with this checkout's verified scripts. The signed metadata records the original package filename, size, SHA-256 and commit under `sourcePackage`.
 
-Prove each signed result with a temporary copy of its bundled Node, so Intel checks use the Intel runtime even on an Apple silicon signing Mac. Run the verifier outside the app bundle: otherwise the installer's running-app check sees the verifier itself and correctly refuses replacement after the test daemon stops. A regular copy preserves the runtime and leaves the signed app unchanged; do not use a symlink.
+Run the signed package proof with native arm64 Node installed outside the app bundle. The proof checks whether the staged app is still running after shutdown, so the verifier must run outside it.
 
 ```sh
-(
-set -eu
-SIGNED_APP="$HOME/hope-scratch/device-deck-signed/x64/staging/x64/payload/Applications/Device Deck.app"
-mkdir -p "$HOME/hope-scratch"
-PROOF_RUNTIME=$(mktemp -d "$HOME/hope-scratch/device-deck-proof-runtime.XXXXXX")
-trap 'rm -rf "$PROOF_RUNTIME"' EXIT
-cp "$SIGNED_APP/Contents/Resources/runtime/bin/node" "$PROOF_RUNTIME/node"
-cmp "$SIGNED_APP/Contents/Resources/runtime/bin/node" "$PROOF_RUNTIME/node"
-"$PROOF_RUNTIME/node" scripts/proof-mac-package.mjs \
-  --app "$SIGNED_APP" \
-  --package "$HOME/hope-scratch/device-deck-signed/x64/device-deck-VERSION-macos-x64.pkg"
-)
+npm run proof:mac -- \
+  --app "$HOME/hope-scratch/device-deck-signed/arm64/staging/arm64/payload/Applications/Device Deck.app" \
+  --package "$HOME/hope-scratch/device-deck-signed/arm64/device-deck-VERSION-macos-arm64.pkg"
 ```
 
-Retain both native CI proof results, local signed-package proof results and GitHub artifact receipts with the release evidence. Run the release artifact integrity gate against the final commit before uploading the two signed installers and their matching sidecars. A translated Intel proof does not replace the native Intel CI proof or clean-Mac acceptance.
+Retain the native CI proof, signed-package proof and GitHub artifact receipt with the release evidence. Run the release integrity gate against the final commit before uploading the arm64 installer, checksum and metadata.
 
 ## Updates and removal
 
@@ -177,7 +168,7 @@ There is no graphical uninstaller yet. For a shared installation, an administrat
 
 These checks require installed packages and real macOS account/session behavior. Unit tests and a staged-app proof do not establish them. They remain release acceptance work until results are recorded for the candidate.
 
-- Download the signed package on a clean Apple silicon Mac and a clean Intel Mac. Confirm normal Gatekeeper opening and installation without Node, Homebrew or FFmpeg already installed.
+- Download the signed package on a clean Apple silicon Mac. Confirm normal Gatekeeper opening and installation without Node, Homebrew or FFmpeg already installed.
 - Open the app, complete the administrator prompt and verify the registered host account. Reopen setup and confirm it does not create a second service.
 - Reboot, complete any FileVault disk unlock, and avoid logging in to the host desktop. Verify core API readiness through an allowed runner account and confirm reservations use the existing store.
 - Log in to the host desktop, allow Camera access with Device Deck attribution, and record a real USB capture with annotation and screenshot output. Verify clear behavior when permission is denied or the host desktop becomes unavailable.

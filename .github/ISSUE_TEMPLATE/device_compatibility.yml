@@ -16,7 +16,7 @@ body:
     id: mac
     attributes:
       label: macOS version and Mac architecture
-      placeholder: "macOS version, Apple silicon or Intel"
+      placeholder: "macOS version and Apple M-series chip"
     validations:
       required: true
   - type: textarea

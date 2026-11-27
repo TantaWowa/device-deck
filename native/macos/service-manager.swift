@@ -196,7 +196,7 @@ struct ReleaseVersion {
 func distribution(_ app: String) throws -> [String: Any] {
     guard let metadata = try JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: app + "/Contents/Resources/distribution.json"))) as? [String: Any],
           metadata["schemaVersion"] as? Int == 1, metadata["application"] as? String == bundleIdentifier,
-          let arch = metadata["arch"] as? String, ["arm64", "x64"].contains(arch),
+          metadata["arch"] as? String == "arm64",
           let version = metadata["version"] as? String else { try fail("The installer does not contain a recognized Device Deck application.") }
     _ = try ReleaseVersion(version)
     return metadata

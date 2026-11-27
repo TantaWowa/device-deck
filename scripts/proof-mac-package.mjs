@@ -7,6 +7,7 @@ import os from "node:os";
 import { parseArgs } from "node:util";
 import { digest, preinstall, validateMediaBundle, verifyMachOClosure, walk } from "./distribution/package-support.mjs";
 
+if (process.platform !== "darwin" || process.arch !== "arm64") throw new Error("Device Deck requires Apple silicon and native arm64 Node.");
 const { values } = parseArgs({ options: { app: { type: "string" }, package: { type: "string" } } });
 if (!values.app) throw new Error("Use --app PATH/Device Deck.app; this proof never installs into /Applications.");
 const app = await realpath(values.app), cli = path.join(app, "Contents/MacOS/devdeck");
@@ -19,6 +20,8 @@ const command = (args) => exec(cli, args, { env, timeout: 90000, maxBuffer: 4 * 
 let started = false, passed = false;
 try {
   const distribution = JSON.parse(await readFile(path.join(app, "Contents/Resources/distribution.json"), "utf8"));
+  assert.equal(distribution.arch, "arm64", "Device Deck package proofs require an arm64 app");
+  await verifyMachOClosure(await walk(app), "arm64");
   if (distribution.media === "bundled") await validateMediaBundle(path.join(app, "Contents/Resources/media"), process.arch);
   const servicePlan = JSON.parse((await exec(path.join(app, "Contents/MacOS/device-deck-service"), ["--plan", String(process.getuid())])).stdout);
   assert.equal(servicePlan.host.uid, process.getuid());
@@ -43,7 +46,6 @@ try {
     }
     assert.equal(await readFile(path.join(expanded, "component.pkg/Scripts/preinstall"), "utf8"), preinstall);
   }
-  await verifyMachOClosure(await walk(app), process.arch);
   const help = await command(["--help"]);
   assert.match(help.stdout, /Device Deck/);
   await command(["init"]);

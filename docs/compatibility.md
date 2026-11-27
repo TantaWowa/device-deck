@@ -1,6 +1,6 @@
 # Device compatibility
 
-Device Deck runs on macOS 14 or later. Apple silicon and Intel have separate Mac packages. Device support depends on the target, installed platform tools and permissions. Follow the [install guide](install.md) for the setup that matches your downloaded release.
+Device Deck requires an Apple silicon Mac running macOS 14 or later. Device support depends on the target, installed platform tools and permissions. Follow the [install guide](install.md) for the setup that matches your downloaded release.
 
 The table below describes implemented adapters. It is not a claim that every model, OS version or operation has been tested on the current release. Check a device's reported capabilities before using it in automation.
 
