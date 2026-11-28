@@ -92,11 +92,11 @@ Content-Type: application/json
         <nav className={menu ? "open" : ""}>
           {[
             ["#workspace", "Workspace"],
-            ["#capture", "Capture & evidence"],
+            ["#remote-access", "Remote access"],
+            ["#capture", "Capture"],
             ["#cli", "CLI & agents"],
             ["/docs/agent-setup/", "Agent setup"],
             ["/docs/", "Docs"],
-            ["/install", "Install"],
             ["https://github.com/TantaWowa/device-deck", "GitHub"],
           ].map(([href, label]) => (
             <a href={href} key={href} onClick={() => setMenu(false)}>
@@ -119,28 +119,30 @@ Content-Type: application/json
       <main id="top">
         <section className="hero wrap">
           <div className="release-label">
-            <span /> Open source · macOS · MIT
+            Apple silicon · macOS 14 or later
           </div>
           <h1>
-            A device workspace
+            An open-source workspace
             <br />
-            for you and your agents.
+            for your device lab.
           </h1>
           <p className="hero-copy">
-            Control TVs, phones and simulators. Reserve devices, capture bugs,
-            and use the same workspace from your browser, coding agents and CI.
+            Reserve TVs, phones and simulators from your Mac. Watch their screens,
+            send input and record a test run. Sign in with Google to control a
+            paired Mac’s devices from your phone or browser.
           </p>
           <div className="hero-actions">
             <a className="button primary" href="/install">
               Download for Mac <ArrowRight size={17} />
             </a>
-            <a className="button" href="/docs/agent-setup/">
-              Set up with an agent <ArrowRight size={17} />
+            <a className="button" href="/app/">
+              Open web portal
             </a>
           </div>
-          <p className="preview-note">
-            Browser demo uses the earlier UI; screenshots show the current Mac
-            beta.
+          <p className="source-note">
+            Free under the{" "}
+            <a href="https://github.com/TantaWowa/device-deck/blob/main/LICENSE">MIT license</a>.
+            {" "}<a href="https://github.com/TantaWowa/device-deck">View source on GitHub</a>.
           </p>
           <div className="hero-screenshot">
             <div className="window-bar">
@@ -184,18 +186,53 @@ Content-Type: application/json
           <strong>USB / HDMI inputs</strong>
           <a href="/docs/compatibility/">Check device support</a>
         </div>
+        <section id="remote-access" className="wrap section remote-section">
+          <h2>Control your devices from another screen.</h2>
+          <div className="connection-options">
+            <article>
+              <h3>Pair a Mac with the web portal</h3>
+              <p>
+                Sign in with Google or email and password on your phone or computer.
+                You can pair several Macs with one account and switch between them.
+              </p>
+              <ol>
+                <li>Set up a trusted HTTPS address for the Mac that your browser can reach over your LAN or VPN.</li>
+                <li>Run <code>devdeck pair</code> on that Mac for a single-use code.</li>
+                <li>Choose <strong>Add machine</strong> in the portal and enter the address and code.</li>
+              </ol>
+              <p>
+                Open a live feed, reserve the device and use its remote or touch
+                controls where supported. Your browser connects directly to the
+                Mac, where screenshots and recordings are saved.
+              </p>
+              <a href="/app/">Open the web portal</a>
+              <a href="/docs/remote-access/#pair-a-machine">Pairing guide</a>
+            </article>
+            <article>
+              <h3>Link two Decks</h3>
+              <p>
+                To use hardware attached to another Mac, grant access on that Mac
+                and add its Deck to yours. Choose it in the dashboard’s{" "}
+                <strong>Device host</strong> menu or select it by name in the CLI or MCP.
+              </p>
+              <p>
+                A Roku and its USB capture card can stay plugged into the lab Mac
+                while you test from your desk. The lab Mac manages the reservation
+                and keeps the recording. You can revoke the link there at any time.
+              </p>
+              <a href="/docs/deck-sharing/">Connect another Mac’s Deck</a>
+            </article>
+          </div>
+        </section>
         <section id="workspace" className="wrap section">
           <div className="section-intro">
             <div className="eyebrow">THE DEVICE TABLE</div>
             <h2>
-              Know what’s ready.
-              <br />
-              Know who’s using it.
+              Find an available device.
             </h2>
             <p>
-              A friendly name is the starting point. Connection health,
-              maintenance locks and reservations each have their own state, so a
-              disconnected device never looks like a busy one.
+              The device table shows which devices are online, who holds each
+              reservation and which devices are locked for maintenance.
             </p>
           </div>
           <div className="feature-grid">
@@ -203,18 +240,16 @@ Content-Type: application/json
               <Monitor />
               <h3>Find the right device</h3>
               <p>
-                Use bright Apple, Roku, Android and USB-only buttons, plus Sim /
-                Real toggles. Search by name, save a view, or open More
-                filters for health, reservations and maintenance.
+                Filter by platform or device type, switch between physical and
+                virtual devices, or save a view of the hardware you use most.
               </p>
             </article>
             <article>
               <Usb />
               <h3>Pair the right input</h3>
               <p>
-                Discover devices and add several at once with Add selected or
-                Add all. Bind USB cards to their targets; supported native
-                simulator and emulator screens need no capture card.
+                Bind a USB capture card to a TV, or view supported simulators and
+                Android devices through their native screen feeds.
               </p>
             </article>
             <article>
@@ -311,9 +346,8 @@ Content-Type: application/json
                 <LayoutGrid />
                 <h3>Respect the current session</h3>
                 <p>
-                  Occupied devices require an explicit takeover. Ending a
-                  session or taking it over finalizes its recording before
-                  another user takes control.
+                  See who reserved a device before you use it. Ending a session
+                  or taking it over finishes its recording on the host.
                 </p>
               </article>
             </div>
@@ -367,7 +401,7 @@ Content-Type: application/json
             <p>
               Web, CLI and agent outputs belong in the same configurable Mac
               folder. Name, tag and find evidence by device, type, time or
-              origin. Shared output does not mean cloud storage.
+              origin.
             </p>
           </div>
           <div className="local-layout">
@@ -430,8 +464,8 @@ Content-Type: application/json
                   devices with supported input.
                 </li>
                 <li>
-                  <Check /> Interactive device picker when no target is
-                  supplied, with platform, name and state filters.
+                  <Check /> Inspect supported UI trees, read device logs and
+                  launch the app under test during a reservation.
                 </li>
                 <li>
                   <Check /> Scriptable selectors and JSON. No match and
@@ -442,8 +476,8 @@ Content-Type: application/json
                   devices, and pass their identifiers to your existing test runner.
                 </li>
                 <li>
-                  <Check /> No account login. Human, agent and job names are
-                  owner labels; session credentials protect control.
+                  <Check /> Work locally without signing in. The reservation
+                  identifies its owner and supplies credentials for control.
                 </li>
               </ul>
               <p className="cli-note">
@@ -503,55 +537,36 @@ Content-Type: application/json
         </section>
         <section id="status" className="section wrap status-section">
           <div className="section-intro">
-            <div className="eyebrow">DEVELOPMENT STATUS</div>
-            <h2>
-              A working Mac beta.
-              <br />
-              Ready for team testing.
-            </h2>
+            <h2>Run a shared lab on your Mac.</h2>
             <p>
-              Download a free Mac installer from GitHub Releases. No Node installation, account, or license key is required for local use.
-              These screenshots show the current app with fictional demo data.
-              The earlier interactive prototype runs in your browser and never
-              connects to your local devices.
+              The signed, notarized installer includes the dashboard, CLI and
+              recording tools. Allow your teammates’ local Mac accounts and CI
+              runners to use the same service.
             </p>
           </div>
           <div className="status-grid">
             <article>
-              <span className="status-label">EARLIER BROWSER PROTOTYPE</span>
-              <h3>Explore with sample devices</h3>
+              <h3>Keep test devices ready</h3>
               <ul>
-                <li>Device table, combined filters and saved views</li>
-                <li>Add/edit, source validation and bulk action simulation</li>
-                <li>Focused viewer, multi-view and single-target input</li>
-                <li>Capture metadata, tags, removal and undo</li>
-                <li>Sample-image clipboard and download</li>
-                <li>Local settings, session history and seeded reports</li>
+                <li>Check device health across connected Decks.</li>
+                <li>Enable health monitoring to recover an idle, unresponsive Deck-launched Android emulator.</li>
+                <li>Enable app cleanup to remove newly installed test apps after a reservation on supported devices.</li>
               </ul>
+              <a className="text-link" href="/docs/simulator-controls/#fleet-health-and-reservation-app-cleanup">Configure health checks and cleanup</a>
             </article>
             <article>
-              <span className="status-label planned">
-                AVAILABLE IN THE MAC BETA
-              </span>
-              <h3>Work with real hardware</h3>
+              <h3>Run tests on a group of devices</h3>
               <ul>
-                <li>Device discovery with Add selected and Add all</li>
-                <li>Compact remotes with text and keyboard input</li>
-                <li>USB split screen, screenshots and silent recordings</li>
-                <li>Durable exclusive reservations across clients</li>
-                <li>Shared Mac folder and native clipboard helper</li>
-                <li>Mac installer, CLI, TUI and simulator launch/close</li>
+                <li>Reserve the full device set together for a CI run.</li>
+                <li>Pass Android serials or Apple simulator UDIDs to your test runner.</li>
+                <li>Keep virtual devices warm between jobs or shut them down after release.</li>
               </ul>
+              <a className="text-link" href="/docs/group-reservations/">Set up a CI device group</a>
             </article>
           </div>
           <p className="status-footnote">
-            Device Deck is free under MIT. Platform tools, pairing and capture
-            support depend on the device and release. Read the{" "}
-            <a href="/docs/install/">install guide</a> and{" "}
-            <a href="/docs/compatibility/">compatibility notes</a> before setting
-            up your hardware. You can{" "}
-            <a href="/docs/deck-sharing/">connect another Mac&apos;s Deck</a>;
-            each host owns its reservations and captures.
+            To try an earlier version of the interface with sample devices,
+            open the <a href="/demo/">interactive demo</a>.
           </p>
         </section>
         <section className="closing">
