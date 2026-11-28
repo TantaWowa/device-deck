@@ -26,6 +26,14 @@ export const isAndroidEmulator = (d: DeviceConfig) =>
   Boolean(d.connection.avdName || emulatorSerial.test(d.connection.serial));
 export const usesAndroidLowRamProfile = (d: DeviceConfig) =>
   isAndroidEmulator(d) && Boolean(d.tags?.includes("android-low-ram"));
+export const emulatorLaunchEnv = (
+  port: number,
+  env: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv => ({
+  ...env,
+  ANDROID_ADB_SERVER_PORT: String(port),
+  QEMU_AUDIO_DRV: env.QEMU_AUDIO_DRV || "none",
+});
 export class AndroidEmulators {
   private cleanupQueues = new Map<number, SerialQueue>();
   private readyBoots = new Map<string, string>();
@@ -37,7 +45,7 @@ export class AndroidEmulators {
       const child = spawn(binary, args, {
         detached: true,
         stdio: "ignore",
-        env: { ...process.env, ANDROID_ADB_SERVER_PORT: String(port) },
+        env: emulatorLaunchEnv(port),
       });
       let error: string | undefined;
       child.once("error", (e) => (error = e.message));
@@ -161,9 +169,57 @@ export class AndroidEmulators {
           if (bootName.length <= 256 && avdName.test(bootName)) name = bootName;
         } catch {}
       }
+      if (!name) {
+        name = await this.hostAvdName(serial, execute);
+      }
       result.push({ serial, state, ...(name ? { avdName: name } : {}) });
     }
     return result;
+  }
+  private processListArgs() {
+    const uid = process.getuid?.();
+    return uid !== undefined
+      ? ["-x", "-u", String(uid), "-o", "pid=,command="]
+      : ["-axo", "pid=,command="];
+  }
+  private async hostAvdName(serial: string, execute = this.execute) {
+    const consolePort = /^emulator-(\d+)$/.exec(serial)?.[1];
+    if (!consolePort) return undefined;
+    const uid = process.getuid?.();
+    const listeners = await execute(
+      "/usr/sbin/lsof",
+      [
+        "-nP",
+        ...(uid !== undefined ? ["-a", "-u", String(uid)] : []),
+        `-iTCP:${consolePort}`,
+        "-sTCP:LISTEN",
+        "-Fp",
+      ],
+      5000,
+    ).catch(() => undefined);
+    const pids = new Set(
+      (listeners?.stdout.toString() || "")
+        .split(/\r?\n/)
+        .map((line) => /^p(\d+)$/.exec(line)?.[1])
+        .filter((pid): pid is string => Boolean(pid))
+        .map(Number),
+    );
+    if (!pids.size) return undefined;
+    const listing = await execute("/bin/ps", this.processListArgs(), 5000).catch(
+      () => undefined,
+    );
+    if (!listing) return undefined;
+    const names = new Set<string>();
+    for (const line of listing.stdout.toString().split(/\r?\n/)) {
+      const match = /^\s*(\d+)\s+(.+)$/.exec(line);
+      if (!match || !pids.has(Number(match[1]))) continue;
+      const command = match[2];
+      if (!/(?:^|\/|\s)(?:qemu-system[^\s]*|emulator)(?:\s|$)/.test(command))
+        continue;
+      const avd = /(?:^|\s)-avd\s+([^\s]+)/.exec(command)?.[1];
+      if (avd && avd.length <= 256 && avdName.test(avd)) names.add(avd);
+    }
+    return names.size === 1 ? [...names][0] : undefined;
   }
   private async locate(d: DeviceConfig, execute = this.execute) {
     if (!isAndroidEmulator(d) || d.connection.type !== "adb")
@@ -355,6 +411,41 @@ export class AndroidEmulators {
   async hasOwnedProcess(device: DeviceConfig, ownership: SimulatorLaunchOwnership) {
     return Boolean(await this.ownedProcess(device, ownership));
   }
+  async findDeckOwnedLaunch(
+    d: DeviceConfig,
+    execute = this.execute,
+  ): Promise<SimulatorLaunchOwnership | undefined> {
+    if (!isAndroidEmulator(d) || d.connection.type !== "adb") return undefined;
+    const configuredName = d.connection.avdName;
+    if (!configuredName || !avdName.test(configuredName)) return undefined;
+    const listing = await execute("/bin/ps", this.processListArgs(), 5000).catch(
+      () => undefined,
+    );
+    if (!listing) return undefined;
+    const escapedName = configuredName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const namePattern = new RegExp(`(?:^|\\s)-avd\\s+${escapedName}(?:\\s|$)`);
+    const markerPattern = new RegExp(
+      `(?:^|\\s)-prop\\s+${launchProperty}=([a-f0-9]{32})(?:\\s|$)`,
+    );
+    const markers: string[] = [];
+    for (const line of listing.stdout.toString().split(/\r?\n/)) {
+      const match = /^\s*(\d+)\s+(.+)$/.exec(line);
+      if (
+        !match ||
+        !/(?:^|\/|\s)(?:qemu-system[^\s]*|emulator)(?:\s|$)/.test(match[2]) ||
+        !namePattern.test(match[2])
+      )
+        continue;
+      const marker = markerPattern.exec(match[2])?.[1];
+      if (marker) markers.push(marker);
+    }
+    if (markers.length !== 1) return undefined;
+    return {
+      type: "android-emulator",
+      avdName: configuredName,
+      marker: markers[0],
+    };
+  }
 
   private async ownsConsole(device: DeviceConfig, serial: string, ownership: SimulatorLaunchOwnership) {
     const port = /^emulator-(\d+)$/.exec(serial)?.[1];
@@ -508,7 +599,9 @@ export class AndroidEmulators {
           // Quick Boot snapshots contain the previous guest's RAM and hardware configuration.
           ...(launchOptions.wipeData || lowRam ? ["-no-snapshot"] : []),
           ...(lowRam ? ["-lowram", "-memory", String(lowRamMiB)] : []),
-          ...(d.tags?.includes("android-full-ram") && process.env.DEVICE_DECK_FULL_AVD_AUDIO === "coreaudio"
+          ...(d.tags?.includes("android-full-ram") &&
+          !launchOptions.headless &&
+          process.env.DEVICE_DECK_FULL_AVD_AUDIO === "coreaudio"
             ? ["-audio", "coreaudio"] : []),
           ...(launchOptions.headless || process.env.DEVICE_DECK_HEADLESS === "1"
             ? ["-no-window", "-gpu", "software", "-feature", "-Vulkan"] : []),

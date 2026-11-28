@@ -3935,3 +3935,244 @@ test("physical reservation cleanup preserves existing and store-installed apps a
     assert.ok(apps.has("installed-between-reservations"));
   } finally { await cleanup(); }
 });
+
+test("stuck Android reservation app cleanup stops an unresponsive Deck-owned emulator and retries cleanly", async () => {
+  const { deck, adapters, cleanup } = await setup();
+  const ownership: SimulatorLaunchOwnership = {
+    type: "android-emulator",
+    avdName: "Hope_TV",
+    marker: "a".repeat(32),
+  };
+  let wedged = true;
+  const closedOwnerships: (SimulatorLaunchOwnership | undefined)[] = [];
+  let cleanupCalls = 0;
+  adapters.verifyIdentity = async (d) => d;
+  adapters.reservationApps = async () => ({
+    list: async () => ["existing"],
+    remove: async () => {},
+  });
+  adapters.ownedAndroidLaunch = async (d) => (d.id === "one" && wedged ? ownership : undefined);
+  adapters.fleetProbe = async () => (
+    wedged
+      ? { state: "unresponsive", detail: "The Deck-owned emulator process is running but its guest is unavailable.", restartable: true }
+      : { state: "stopped", detail: "Android emulator stopped", restartable: false }
+  );
+  adapters.simulator = async (d, action, _beforeLaunch, owned) => {
+    if (action === "close") {
+      closedOwnerships.push(owned);
+      wedged = false;
+      return { deviceId: d.id, action, state: "shutdown", changed: true };
+    }
+    return { deviceId: d.id, action, state: "booted", changed: true };
+  };
+  adapters.cleanupDevice = async () => {
+    cleanupCalls++;
+    if (wedged)
+      throw new DeckError("emulator-identity-pending", "An emulator connection is present but its AVD identity is not available yet.", 409);
+    return { removedApps: 2, state: "shutdown" };
+  };
+  try {
+    const config = structuredClone(deck.config.config);
+    config.settings.reservationAppCleanup = true;
+    config.devices[0] = {
+      ...config.devices[0],
+      platform: "Android",
+      kind: "virtual",
+      connection: { type: "adb", serial: "emulator-5556", avdName: "Hope_TV", port: 5037 },
+    };
+    await deck.execute("config.save", { config, revision: deck.config.revision });
+    deck.store.putWarmDevice({ deviceId: "one", simulatorLaunch: ownership, lastUsedAt: Date.now() });
+    const held = await reserve(deck, "one");
+    const release = { sessionId: held.session.id, leaseToken: held.leaseToken };
+
+    // First failure stays closing without killing on a transient blip.
+    await assert.rejects(deck.execute("sessions.release", release), /AVD identity is not available/);
+    assert.equal(deck.store.session(held.session.id).state, "closing");
+    assert.equal(closedOwnerships.length, 0);
+
+    // Second failure confirms unresponsiveness, force-stops the Deck-owned emulator, and finishes cleanup.
+    await deck.execute("sessions.release", release);
+    assert.equal(deck.store.session(held.session.id).state, "closed");
+    assert.deepEqual(closedOwnerships, [ownership]);
+    assert.equal(cleanupCalls, 3);
+    assert.equal(deck.store.warmDevice("one"), undefined);
+    const history = deck.store.events();
+    assert.ok(history.some((event) => event.action === "reservation-app-cleanup-recovery"));
+    assert.ok(history.some((event) => event.action === "reservation-app-cleanup" && event.detail === "Removed 2 new apps"));
+  } finally { await cleanup(); }
+});
+
+test("Android reservation app cleanup never stops a healthy or externally-owned emulator", async () => {
+  const { deck, adapters, cleanup } = await setup();
+  const ownership: SimulatorLaunchOwnership = {
+    type: "android-emulator",
+    avdName: "Hope_TV",
+    marker: "b".repeat(32),
+  };
+  let closeAttempts = 0;
+  let probeState = "healthy";
+  let deckOwned = true;
+  adapters.verifyIdentity = async (d) => d;
+  adapters.reservationApps = async () => ({
+    list: async () => ["existing"],
+    remove: async () => {},
+  });
+  adapters.ownedAndroidLaunch = async () => (deckOwned ? ownership : undefined);
+  adapters.fleetProbe = async () => ({
+    state: probeState,
+    detail: probeState === "healthy" ? "Android emulator booted" : "unresponsive",
+    restartable: probeState === "unresponsive",
+  });
+  adapters.simulator = async (d, action) => {
+    if (action === "close") closeAttempts++;
+    return { deviceId: d.id, action, state: "shutdown", changed: true };
+  };
+  let allowCleanup = false;
+  adapters.cleanupDevice = async () => {
+    if (allowCleanup) return { removedApps: 0, state: "booted" };
+    throw new DeckError("device-cleanup-failed", "Removed 0 apps. 1 app could not be removed.", 502);
+  };
+  try {
+    const config = structuredClone(deck.config.config);
+    config.settings.reservationAppCleanup = true;
+    config.devices[0] = {
+      ...config.devices[0],
+      platform: "Android",
+      kind: "virtual",
+      connection: { type: "adb", serial: "emulator-5556", avdName: "Hope_TV", port: 5037 },
+    };
+    await deck.execute("config.save", { config, revision: deck.config.revision });
+    const held = await reserve(deck, "one");
+    const release = { sessionId: held.session.id, leaseToken: held.leaseToken };
+
+    // Healthy emulator with uninstall error is never stopped.
+    await assert.rejects(deck.execute("sessions.release", release), /could not be removed/);
+    await assert.rejects(deck.execute("sessions.release", release), /could not be removed/);
+    assert.equal(closeAttempts, 0);
+
+    // Unresponsive emulator without Deck ownership is also never stopped.
+    probeState = "unresponsive";
+    deckOwned = false;
+    await assert.rejects(deck.execute("sessions.release", release), /could not be removed/);
+    assert.equal(closeAttempts, 0);
+    allowCleanup = true;
+    await deck.execute("sessions.release", release);
+  } finally { await cleanup(); }
+});
+
+test("fleet health restarts an orphaned Deck-owned Android emulator without a warm record", async (t) => {
+  const { deck, adapters, cleanup } = await setup();
+  let now = Date.now();
+  t.mock.method(Date, "now", () => now);
+  const orphanOwnership: SimulatorLaunchOwnership = {
+    type: "android-emulator",
+    avdName: "Hope_TV",
+    marker: "c".repeat(32),
+  };
+  const actions: { action: string; ownership?: SimulatorLaunchOwnership }[] = [];
+  adapters.ownedAndroidLaunch = async (d) => (d.id === "one" ? orphanOwnership : undefined);
+  adapters.fleetProbe = async (d) => (
+    d.id === "one"
+      ? { state: "unresponsive", detail: "The Deck-owned emulator process is running but its guest is unavailable.", restartable: true }
+      : { state: "healthy", detail: "ok", restartable: false }
+  );
+  adapters.simulator = async (d, action, beforeLaunch, ownership) => {
+    actions.push({ action, ownership });
+    if (action === "launch") {
+      await beforeLaunch?.({ type: "android-emulator", avdName: "Hope_TV", marker: "d".repeat(32) });
+      return { deviceId: d.id, action, state: "booted", changed: true };
+    }
+    return { deviceId: d.id, action, state: "shutdown", changed: true };
+  };
+  try {
+    const config = structuredClone(deck.config.config);
+    config.settings.fleetHealthChecks = true;
+    config.devices[0] = {
+      ...config.devices[0],
+      platform: "Android",
+      kind: "virtual",
+      connection: { type: "adb", serial: "emulator-5556", avdName: "Hope_TV", port: 5037 },
+    };
+    await deck.execute("config.save", { config, revision: deck.config.revision });
+    assert.equal(deck.store.warmDevice("one"), undefined);
+    for (let scan = 0; scan < 3; scan++) {
+      await deck.execute("fleet.health", {});
+      now += 60_000;
+    }
+    assert.deepEqual(actions, [
+      { action: "close", ownership: orphanOwnership },
+      { action: "launch", ownership: undefined },
+    ]);
+    assert.equal(deck.store.warmDevice("one")?.simulatorLaunch?.marker, "d".repeat(32));
+  } finally { await cleanup(); }
+});
+
+test("expired Android reservation group recovers from a wedged Deck-owned emulator and unlocks the device", async (t) => {
+  const { deck, adapters, cleanup } = await setup();
+  let now = Date.now();
+  t.mock.method(Date, "now", () => now);
+  const ownership: SimulatorLaunchOwnership = {
+    type: "android-emulator",
+    avdName: "Hope_TV",
+    marker: "f".repeat(32),
+  };
+  let wedged = true;
+  const closed: (SimulatorLaunchOwnership | undefined)[] = [];
+  adapters.verifyIdentity = async (d) => d;
+  adapters.reservationApps = async () => ({
+    list: async () => ["existing"],
+    remove: async () => {},
+  });
+  adapters.ownedAndroidLaunch = async (d) => (d.id === "one" && wedged ? ownership : undefined);
+  adapters.fleetProbe = async () => (
+    wedged
+      ? { state: "unresponsive", detail: "The Deck-owned emulator process is running but its guest is unavailable.", restartable: true }
+      : { state: "stopped", detail: "Android emulator stopped", restartable: false }
+  );
+  adapters.simulator = async (d, action, _beforeLaunch, owned) => {
+    if (action === "close") {
+      closed.push(owned);
+      wedged = false;
+      return { deviceId: d.id, action, state: "shutdown", changed: true };
+    }
+    return { deviceId: d.id, action, state: "booted", changed: true };
+  };
+  adapters.cleanupDevice = async () => {
+    if (wedged)
+      throw new DeckError("emulator-identity-pending", "An emulator connection is present but its AVD identity is not available yet.", 409);
+    return { removedApps: 1, state: "shutdown" };
+  };
+  try {
+    const config = structuredClone(deck.config.config);
+    config.settings.reservationAppCleanup = true;
+    config.devices[0] = {
+      ...config.devices[0],
+      platform: "Android",
+      kind: "virtual",
+      connection: { type: "adb", serial: "emulator-5556", avdName: "Hope_TV", port: 5037 },
+    };
+    await deck.execute("config.save", { config, revision: deck.config.revision });
+    const group = await deck.execute("sessions.reserveGroup", {
+      version: 1,
+      groupId: "group-wedged-tv",
+      leaseToken: "lease-token-wedged-tv-0123456789abcd",
+      owner: "ci-tv",
+      reason: "test wedged cleanup",
+      ttlMinutes: 1,
+      requests: { tv: { selector: { device: "one" } } },
+    }) as { groupId: string; leaseToken: string };
+    // Expire the group: first cleanup fails and keeps the group locked in closing.
+    now += 120_000;
+    await assert.rejects(deck.expire(), /AVD identity is not available/);
+    assert.equal(deck.store.group(group.groupId).state, "closing");
+    assert.ok(deck.store.lockReason("one"));
+    assert.equal(closed.length, 0);
+
+    // Next retry window (60s later) confirms unresponsiveness, kills the wedged emulator, finishes cleanup and unlocks.
+    now += 61_000;
+    await deck.expire();
+    assert.equal(deck.store.group(group.groupId).state, "closed");
+    assert.equal(deck.store.lockReason("one"), undefined);
+    assert.deepEqual(closed, [ownership]);
+  } finally { await cleanup(); }
+});

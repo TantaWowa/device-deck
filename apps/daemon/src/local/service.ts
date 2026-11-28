@@ -14,7 +14,7 @@ import {
   deviceIdentity,
   atomicWrite,
 } from "../../../../packages/config/src";
-import { Adapters, usesAndroidLowRamProfile } from "../../../../packages/adapters/src";
+import { Adapters, isAndroidEmulator, usesAndroidLowRamProfile } from "../../../../packages/adapters/src";
 import { supportsWake } from "../../../../packages/core/src/remote";
 import {
   run,
@@ -137,6 +137,8 @@ export class DeckService {
   private reaping?: Promise<void>;
   private dailyCleanup?: Promise<void>;
   private appCleanupRetry = new Map<string, number>();
+  private appCleanupFailures = new Map<string, number>();
+  private appCleanupRecoveryAt = new Map<string, number>();
   private fleetHealthWork?: Promise<void>;
   private fleetHealth = new Map<string, { deviceId: string; name: string; checkedAt: number; state: string; detail: string; failures: number; lastRestart?: number }>();
   readonly maintenance = { updating: false, active: 0 };
@@ -221,6 +223,41 @@ export class DeckService {
       this.store.event({ deviceId: device.id, sessionId: session.id, owner: session.owner,
         action: "reservation-app-cleanup", detail: `Removed ${removed} new apps` });
     });
+  }
+  private async recoverStuckAndroidAppCleanup(session: Session): Promise<boolean> {
+    if (this.shuttingDown) return false;
+    const device = this.device(session.deviceId);
+    if (!isAndroidEmulator(device)) return false;
+    const lastRecovery = this.appCleanupRecoveryAt.get(session.id) ?? 0;
+    if (Date.now() - lastRecovery < 5 * 60_000) return false;
+    const groupMember = session.groupId
+      ? this.store.groups().find((group) => group.id === session.groupId)
+          ?.members.find((member) => member.sessionId === session.id)
+      : undefined;
+    const candidate = this.store.warmDevice(device.id)?.simulatorLaunch ?? groupMember?.simulatorLaunch;
+    const ownership = await this.adapters.ownedAndroidLaunch(device, candidate);
+    if (!ownership) return false;
+    const probe = await this.adapters.fleetProbe(device, ownership);
+    if (probe.state !== "unresponsive" || !probe.restartable) return false;
+    this.appCleanupRecoveryAt.set(session.id, Date.now());
+    this.simulatorActions.set(device.id, "close");
+    try {
+      const source = this.config.config.sources.find((s) => s.id === device.captureSourceId);
+      if (source?.kind === "native") await this.capture.closeSource(source);
+      await this.adapters.simulator(device, "close", undefined, ownership);
+      this.store.dropWarmDevice(device.id);
+      this.store.event({
+        deviceId: device.id,
+        sessionId: session.id,
+        owner: session.owner,
+        action: "reservation-app-cleanup-recovery",
+        detail: `Stopped unresponsive Deck-owned Android emulator (${probe.detail}) before retrying app cleanup`,
+      });
+      return true;
+    } finally {
+      this.simulatorActions.delete(device.id);
+      this.invalidateInventory(device.id);
+    }
   }
   private async checkSimulatorPreferences(device?: DeviceConfig) {
     if (!this.repairSimulatorPreferences || (device && device.connection.type !== "simulator")) return;
@@ -2464,11 +2501,31 @@ export class DeckService {
         try {
           await this.removeReservationApps(s);
           this.appCleanupRetry.delete(s.id);
+          this.appCleanupFailures.delete(s.id);
+          this.appCleanupRecoveryAt.delete(s.id);
         } catch (error) {
-          this.appCleanupRetry.set(s.id, Date.now() + 60_000);
-          this.store.event({ deviceId: s.deviceId, sessionId: s.id, owner: s.owner,
-            action: "reservation-app-cleanup-failed", detail: (error as Error).message });
-          throw error;
+          const failures = (this.appCleanupFailures.get(s.id) ?? 0) + 1;
+          this.appCleanupFailures.set(s.id, failures);
+          let finalError: unknown = error;
+          if (failures >= 2) {
+            try {
+              if (await this.recoverStuckAndroidAppCleanup(s)) {
+                await this.removeReservationApps(s);
+                this.appCleanupRetry.delete(s.id);
+                this.appCleanupFailures.delete(s.id);
+                this.appCleanupRecoveryAt.delete(s.id);
+                finalError = undefined;
+              }
+            } catch (retryError) {
+              finalError = retryError;
+            }
+          }
+          if (finalError !== undefined) {
+            this.appCleanupRetry.set(s.id, Date.now() + 60_000);
+            this.store.event({ deviceId: s.deviceId, sessionId: s.id, owner: s.owner,
+              action: "reservation-app-cleanup-failed", detail: (finalError as Error).message });
+            throw finalError;
+          }
         }
         s.state = "closed";
         s.endedAt = Date.now();
@@ -2718,7 +2775,10 @@ export class DeckService {
           });
         }
         if ((device.connection.type === "roku" ? lease : !this.store.lockReason(device.id)) && !this.shuttingDown) {
-          const owned = this.store.warmDevice(device.id)?.simulatorLaunch;
+          const warmLaunch = this.store.warmDevice(device.id)?.simulatorLaunch;
+          const owned = isAndroidEmulator(device)
+            ? await this.adapters.ownedAndroidLaunch(device, warmLaunch)
+            : warmLaunch;
           const probe = await this.adapters.fleetProbe(device, owned);
           state = probe.state;
           detail = probe.detail;
@@ -2736,7 +2796,10 @@ export class DeckService {
               });
               if (!claimed) return;
               try {
-                const ownership = this.store.warmDevice(device.id)?.simulatorLaunch;
+                const currentWarm = this.store.warmDevice(device.id)?.simulatorLaunch;
+                const ownership = isAndroidEmulator(device)
+                  ? await this.adapters.ownedAndroidLaunch(device, currentWarm)
+                  : currentWarm;
                 const confirm = await this.adapters.fleetProbe(device, ownership);
                 if (confirm.state !== "unresponsive" || !confirm.restartable) {
                   state = confirm.state; detail = confirm.detail; failures = 0; return;
@@ -2744,6 +2807,7 @@ export class DeckService {
                 lastRestart = Date.now();
                 if (ownership) {
                   await this.adapters.simulator(device, "close", undefined, ownership);
+                  this.store.dropWarmDevice(device.id);
                   await this.adapters.simulator(device, "launch", async simulatorLaunch => {
                     this.store.putWarmDevice({ deviceId: device.id, simulatorLaunch, lastUsedAt: Date.now() });
                   });
