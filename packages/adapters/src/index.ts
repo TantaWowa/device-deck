@@ -10,7 +10,7 @@ import type { InteractiveSource, VideoProfile } from "../../core/src/live";
 import { androidKeys, rokuKeys, hidKeys, iosHardwareKeys, deviceInputMode } from "../../core/src/remote";
 import { userInstalledSimulatorApps, cleanupSimulator, controlSimulator, simulatorState, SimulatorInventory, verifySimulatorMemoryProfile, wakeSimulator, SIMULATOR_UNAVAILABLE_MESSAGE } from "./simulator";
 import { AndroidEmulators, isAndroidEmulator, usesAndroidLowRamProfile } from "./android-emulator";
-export { usesAndroidLowRamProfile } from "./android-emulator";
+export { isAndroidEmulator, usesAndroidLowRamProfile } from "./android-emulator";
 import { idbInput as sharedIdbInput, IdbInput } from "./idb-input";
 import {
   mergeCaptureCards,
@@ -714,10 +714,22 @@ export class Adapters {
     if (isAndroidEmulator(d)) return this.emulators.prepare(d);
     return d;
   }
+  async ownedAndroidLaunch(
+    device: DeviceConfig,
+    ownership?: SimulatorLaunchOwnership,
+  ): Promise<SimulatorLaunchOwnership | undefined> {
+    if (!isAndroidEmulator(device)) return undefined;
+    if (
+      ownership?.type === "android-emulator" &&
+      (await this.emulators.hasOwnedProcess(device, ownership))
+    )
+      return ownership;
+    return this.emulators.findDeckOwnedLaunch(device);
+  }
   async fleetProbe(device: DeviceConfig, ownership?: SimulatorLaunchOwnership) {
     const observed = await this.inspect(device);
     if (!observed.online) {
-      if (ownership && isAndroidEmulator(device) && await this.emulators.hasOwnedProcess(device, ownership))
+      if (isAndroidEmulator(device) && (await this.ownedAndroidLaunch(device, ownership)))
         return { state: "unresponsive", detail: "The Deck-owned emulator process is running but its guest is unavailable.", restartable: true };
       if (observed.connection.type === "simulator" && observed.simulatorState === "starting" &&
           await simulatorState(device, this.execute, false) === "booted")

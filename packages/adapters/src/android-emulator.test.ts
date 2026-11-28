@@ -6,7 +6,7 @@ import {
   type DeviceConfig,
   type SimulatorLaunchOwnership,
 } from "../../core/src/local/types";
-import { AndroidEmulators } from "./android-emulator";
+import { AndroidEmulators, emulatorLaunchEnv } from "./android-emulator";
 import { Adapters } from "./index";
 import type { run } from "./process";
 
@@ -46,6 +46,7 @@ function fixture(initial: Entry[] = []) {
     deferLaunchIdentity: false,
     sleeps: 0,
     processes: [] as { pid: number; command: string }[],
+    listeningPorts: new Map<string, number[]>(),
     onSignal: undefined as
       | ((pid: number, signal: NodeJS.Signals) => void)
       | undefined,
@@ -78,7 +79,14 @@ function fixture(initial: Entry[] = []) {
       output = state.processes
         .map((process) => `${process.pid} ${process.command}`)
         .join("\n");
-    else if (args[0] === "-list-avds") output = state.names.join("\n") + "\n";
+    else if (command === "/usr/sbin/lsof") {
+      const tcpArg = args.find((arg) => arg.startsWith("-iTCP:"));
+      const port = tcpArg?.slice("-iTCP:".length) || "";
+      const pids = state.listeningPorts.get(port) || [];
+      output = args.includes("-Fp")
+        ? pids.map((pid) => `p${pid}`).join("\n")
+        : pids.map((pid) => `p${pid}\nn127.0.0.1:${port}`).join("\n");
+    } else if (args[0] === "-list-avds") output = state.names.join("\n") + "\n";
     else if (args[2] === "devices")
       output =
         "List of devices attached\nphysical-usb\tdevice\n" +
@@ -958,4 +966,95 @@ test("Android cleanup stops its marked temporary process when launch fails", asy
   await assert.rejects(f.emulator.cleanup(device, "reset"), /Reset did not finish.*System image failed to boot/);
   assert.deepEqual(f.signals, [{ pid: 4123, signal: "SIGTERM" }]);
   assert.equal(f.state.processes.length, 0);
+});
+
+test("Android emulator launch env defaults QEMU_AUDIO_DRV to none while preserving explicit overrides", () => {
+  const defaulted = emulatorLaunchEnv(5038, { PATH: "/usr/bin" });
+  assert.equal(defaulted.ANDROID_ADB_SERVER_PORT, "5038");
+  assert.equal(defaulted.QEMU_AUDIO_DRV, "none");
+  const overridden = emulatorLaunchEnv(5037, { PATH: "/usr/bin", QEMU_AUDIO_DRV: "coreaudio" });
+  assert.equal(overridden.ANDROID_ADB_SERVER_PORT, "5037");
+  assert.equal(overridden.QEMU_AUDIO_DRV, "coreaudio");
+});
+
+test("headless cleanup launches never enable CoreAudio even on android-full-ram AVDs", async (t) => {
+  const variable = "DEVICE_DECK_FULL_AVD_AUDIO";
+  const previous = process.env[variable];
+  process.env[variable] = "coreaudio";
+  t.after(() => {
+    if (previous === undefined) delete process.env[variable];
+    else process.env[variable] = previous;
+  });
+  const f = fixture();
+  await f.emulator.control({ ...device, tags: ["android-full-ram"] }, "launch", undefined, undefined, { headless: true });
+  assert.ok(!f.launches[0].args.includes("-audio"));
+});
+
+test("host console-port fallback identifies a hung emulator so sibling AVDs stay unblocked", async () => {
+  const f = fixture([
+    { serial: "emulator-5556", state: "offline" },
+  ]);
+  f.state.listeningPorts.set("5556", [59759]);
+  f.state.processes.push({
+    pid: 59759,
+    command: "/sdk/emulator/qemu/darwin-aarch64/qemu-system-aarch64 -avd TV_API_35 -no-snapshot -prop qemu.devdeck_launch=" + "a".repeat(32),
+  });
+  const sibling: DeviceConfig = {
+    ...device,
+    id: "android-phone",
+    name: "Android Phone",
+    connection: { type: "adb", serial: "avd-pixel", avdName: "Pixel_35", port: 5038 },
+  };
+  assert.equal((await f.emulator.inspect(sibling)).state, "shutdown");
+  assert.equal((await f.emulator.inspect(device)).state, "starting");
+  const uid = process.getuid?.();
+  if (uid !== undefined) {
+    const lsofCall = f.calls.find((call) => call.command === "/usr/sbin/lsof");
+    assert.ok(lsofCall && lsofCall.args.includes("-u") && lsofCall.args.includes(String(uid)));
+    const psCall = f.calls.find((call) => call.command === "/bin/ps");
+    assert.ok(psCall && psCall.args.includes("-u") && psCall.args.includes(String(uid)));
+  }
+  const launchedSibling = await f.emulator.control(sibling, "launch");
+  assert.equal(launchedSibling.state, "booted");
+  assert.equal(launchedSibling.changed, true);
+});
+
+test("findDeckOwnedLaunch and fleetProbe recover orphaned Deck-launched emulators without touching unmarked ones", async () => {
+  const marker = "e".repeat(32);
+  const f = fixture([
+    { serial: "emulator-5556", state: "offline" },
+  ]);
+  f.state.listeningPorts.set("5556", [59759]);
+  f.state.processes.push({
+    pid: 59759,
+    command: `/sdk/emulator/qemu-system-aarch64 -avd TV_API_35 -prop qemu.devdeck_launch=${marker}`,
+  });
+  assert.deepEqual(await f.emulator.findDeckOwnedLaunch(device), {
+    type: "android-emulator",
+    avdName: "TV_API_35",
+    marker,
+  });
+
+  const adapters = new Adapters(() => f.config, f.execute);
+  try {
+    const probe = await adapters.fleetProbe(device);
+    assert.equal(probe.state, "unresponsive");
+    assert.equal(probe.restartable, true);
+  } finally {
+    await adapters.close();
+  }
+
+  // Duplicate Deck markers are ambiguous and ignored.
+  f.state.processes.push({
+    pid: 59760,
+    command: `/sdk/emulator/qemu-system-aarch64 -avd TV_API_35 -prop qemu.devdeck_launch=${"d".repeat(32)}`,
+  });
+  assert.equal(await f.emulator.findDeckOwnedLaunch(device), undefined);
+
+  // Unmarked (Android Studio) processes are never treated as Deck-owned.
+  f.state.processes = [{
+    pid: 60001,
+    command: "/sdk/emulator/qemu-system-aarch64 -avd TV_API_35",
+  }];
+  assert.equal(await f.emulator.findDeckOwnedLaunch(device), undefined);
 });

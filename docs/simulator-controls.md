@@ -12,9 +12,9 @@ For Apple, Xcode and the selected iOS/tvOS runtime must already be installed. Us
 
 If a runner stores its CoreSimulator device set on a mounted volume, host bootstrap owns that storage lifecycle: mount it before CoreSimulator and Device Deck start, restart any CoreSimulator service that started before the mount, and validate the configured simulator data directories. Device Deck does not mount storage or restart CoreSimulator. It treats a `simctl` entry whose `dataPath` is omitted, non-absolute, nonexistent, or not a directory as unavailable and will not claim lifecycle ownership or attempt to boot it.
 
-For Android, create the AVD in Android Studio first. **Discover** lists both running emulators and installed AVDs that are stopped. Select multiple or **Add all** to register them. Device Deck uses the existing SDK emulator executable from **Settings → Adapter executables → emulator**, Android SDK environment variables, standard SDK paths, or `PATH`. It does not install an SDK or system images. The AVD name comes from `emulator -list-avds` or a running emulator's exact `adb -s SERIAL emu avd name` response. When that console response is empty or unavailable, Device Deck reads `ro.boot.qemu.avd_name` from the same exact ADB serial. Empty or invalid identities remain blocked. These commands use the Android SDK's [launch](https://developer.android.com/studio/run/emulator-commandline) and [console](https://developer.android.com/studio/run/emulator-console) interfaces.
+For Android, create the AVD in Android Studio first. **Discover** lists both running emulators and installed AVDs that are stopped. Select multiple or **Add all** to register them. Device Deck uses the existing SDK emulator executable from **Settings → Adapter executables → emulator**, Android SDK environment variables, standard SDK paths, or `PATH`. It does not install an SDK or system images. The AVD name comes from `emulator -list-avds` or a running emulator's exact `adb -s SERIAL emu avd name` response. When that console response is empty or unavailable, Device Deck reads `ro.boot.qemu.avd_name` from the same exact ADB serial and, if ADB itself is unresponsive, matches the local emulator process listening on that console port via its `-avd` flag so one hung emulator does not block unrelated AVDs on the same ADB server. Empty or invalid identities remain blocked. These commands use the Android SDK's [launch](https://developer.android.com/studio/run/emulator-commandline) and [console](https://developer.android.com/studio/run/emulator-console) interfaces.
 
-On a shared Mac that sets `QEMU_AUDIO_DRV=none` for unattended CI, set `DEVICE_DECK_FULL_AVD_AUDIO=coreaudio` in the daemon environment to enable host audio on its designated full-memory AVD. Device Deck passes `-audio coreaudio` when it starts that AVD. Other launches inherit the service’s normal audio configuration.
+Device Deck launches Android emulators with `QEMU_AUDIO_DRV=none` by default (unless `QEMU_AUDIO_DRV` is already set in the daemon environment) to avoid macOS CoreAudio deadlocks during unattended runs. Set `DEVICE_DECK_FULL_AVD_AUDIO=coreaudio` in the daemon environment to enable host audio on a designated `android-full-ram` AVD during interactive launches; Device Deck passes `-audio coreaudio` for that launch while keeping headless cleanup launches muted.
 
 To default future Android registrations on this Deck to 1,536 MiB, set `settings.defaultAndroidAvdMemoryProfile` to `"low-ram"`. Run these commands on the Deck host with `jq` installed to preserve the current configuration and revision.
 
@@ -233,9 +233,10 @@ can freeze while its OS still answers. A stopped simulator is a normal state.
 The monitor takes a short lease to check an idle Roku and skips an occupied
 Roku. History records health transitions. After three consecutive unresponsive
 samples, the monitor rechecks an idle, restart-capable device under a lock.
-It attempts at most one restart per device per 30 minutes. For a warm Android
-emulator with a hung ADB connection, it can stop the exact process it launched
-and boot that AVD again. A Roku software reboot requires the developer installer
+It attempts at most one restart per device per 30 minutes. For a Deck-launched Android
+emulator with a hung ADB connection (including an orphaned Deck process whose warm
+record was cleared), it can stop the unique process carrying its AVD name and
+`qemu.devdeck_launch` marker and boot that AVD again. A Roku software reboot requires the developer installer
 credentials described below and a responsive management interface. An offline device
 or a device without a restart transport requires operator attention.
 
@@ -243,7 +244,10 @@ Enable **Remove apps installed during reservations** or set
 `settings.reservationAppCleanup` to true. Device Deck saves the installed app
 IDs before handing out a single or group reservation. At release or expiry it
 removes newly added user apps. A failed cleanup keeps the device reserved
-while Device Deck retries. The app records survive service restarts. Virtual
+while Device Deck retries. If cleanup fails repeatedly on an unresponsive
+Deck-owned Android emulator, Device Deck verifies the process is unresponsive,
+stops that marked emulator process, and retries app removal on a fresh headless
+boot so the device does not stay locked in `closing`. The app records survive service restarts. Virtual
 devices also clear additions since the last baseline before the next handoff.
 A replacement build with an existing app ID counts as the same app.
 
