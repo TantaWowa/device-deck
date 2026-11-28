@@ -39,6 +39,8 @@ try {
   await check(
     "marketing assets, flat images, client tabs and internal links",
     async () => {
+      assert.match(await page.getByRole("heading", { level: 1 }).innerText(), /open-source/i);
+      assert.equal(await page.getByRole("link", { name: "View source on GitHub" }).getAttribute("href"), "https://github.com/TantaWowa/device-deck");
       await page.evaluate(() =>
         document.querySelectorAll("img").forEach((i) => (i.loading = "eager")),
       );
@@ -668,9 +670,12 @@ try {
   await check("mobile marketing menu and app navigation work", async () => {
     await page.getByRole("button", { name: "Open menu" }).click();
     await page
-      .getByRole("link", { name: "Development status", exact: true })
+      .getByRole("link", { name: "Remote access", exact: true })
       .click();
-    assert.match(page.url(), /#status$/);
+    assert.match(page.url(), /#remote-access$/);
+    const remoteAccess = page.locator("#remote-access");
+    assert.match(await remoteAccess.innerText(), /Sign in with Google/);
+    assert.equal(await remoteAccess.getByRole("link", { name: "Open the web portal" }).getAttribute("href"), "/app/");
     await page.goto(base + "/demo/");
     await nav("Settings");
     assert.equal(

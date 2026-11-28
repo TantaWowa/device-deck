@@ -1,5 +1,11 @@
 # Remote machines and the Device Deck portal
 
+Use the [Device Deck web portal](https://tantawowa-device-deck.firebaseapp.com/app/)
+to sign in with Google or email and password. [Pair your Mac](#pair-a-machine)
+to view feeds, reserve a device and open its controls from a phone or computer.
+To use another Mac's devices from your own dashboard, CLI or MCP client,
+follow [Connect another Deck](deck-sharing.md).
+
 Device Deck can listen on an ordinary IP address and port. Your network supplies
 the route: a LAN, Tailscale, WireGuard, a VPN, or a public address all work. Device
 Deck does not create tunnels, relay feeds, or connect your networks together.
@@ -58,8 +64,8 @@ remote changes, and credentials are never replayed as queued offline actions.
 
 ### Pair a machine
 
-After deploying the portal, configure its origin on the machine. The default
-deployment origin is `https://tantawowa-device-deck.firebaseapp.com`:
+Configure the portal origin on the Mac that hosts the devices. The public
+portal uses `https://tantawowa-device-deck.firebaseapp.com`. For example:
 
 ```sh
 devdeck network enable --host 0.0.0.0 --port 47831 \
